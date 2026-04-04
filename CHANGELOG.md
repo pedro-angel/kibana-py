@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.9] - 2026-04-05
+
+### Changed
+
+- Updated `.github/workflows/release.yml` release automation to improve publishing robustness:
+  - switched GitHub Actions `uses:` references to major-version tags (for example `@v4`, `@v5`, `@v2`),
+  - added cleanup of non-package artifacts (`dist/*.json`) before the PyPI publish step,
+  - published from `packages-dir: dist/` with `pypa/gh-action-pypi-publish@release/v1`.
+
 ## [0.1.8] - 2026-04-04
 
 ### Fixed
@@ -142,7 +151,8 @@ Initial release of kibana-py, a Python client library for the Kibana REST API.
 
 ---
 
-[Unreleased]: https://github.com/pedro-angel/kibana-py/compare/v0.1.8...HEAD
+[Unreleased]: https://github.com/pedro-angel/kibana-py/compare/v0.1.9...HEAD
+[0.1.9]: https://github.com/pedro-angel/kibana-py/releases/tag/v0.1.9
 [0.1.8]: https://github.com/pedro-angel/kibana-py/releases/tag/v0.1.8
 [0.1.7]: https://github.com/pedro-angel/kibana-py/releases/tag/v0.1.7
 [0.1.6]: https://github.com/pedro-angel/kibana-py/releases/tag/v0.1.6
