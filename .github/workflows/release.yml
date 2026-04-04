@@ -114,7 +114,7 @@ jobs:
     environment: release
     permissions:
       contents: read
-      id-token: write    # Required for PyPI trusted publishing (OIDC)
+      # id-token: write    # Required for PyPI trusted publishing (OIDC)
       attestations: write # Required for build provenance attestations
 
     steps:
@@ -129,5 +129,8 @@ jobs:
         with:
           subject-path: 'dist/*.tar.gz,dist/*.whl'
 
-      - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e # v1.13.0
+      - name: Publish to PyPI (API token)
+        uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e
+        with:
+          user: __token__
+          password: ${{ secrets.PYPI_API_TOKEN }}
