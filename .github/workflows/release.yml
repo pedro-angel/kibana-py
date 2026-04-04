@@ -66,7 +66,7 @@ jobs:
 
       - name: Validate distribution metadata
         run: |
-          python -m twine check dist/{*.whl,*.tar.gz}
+          python -m twine check dist/*.whl dist/*.tar.gz
 
       - name: Verify wheel content sanity
         run: |

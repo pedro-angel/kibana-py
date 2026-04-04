@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.8] - 2026-04-04
+
+### Fixed
+
+- Updated `.github/workflows/release.yml` to run `twine check` with explicit distribution globs (`dist/*.whl dist/*.tar.gz`) instead of brace expansion, avoiding shell-dependent behavior during release validation.
+
 ## [0.1.7] - 2026-04-04
 
 ### Fixed
@@ -136,7 +142,8 @@ Initial release of kibana-py, a Python client library for the Kibana REST API.
 
 ---
 
-[Unreleased]: https://github.com/pedro-angel/kibana-py/compare/v0.1.7...HEAD
+[Unreleased]: https://github.com/pedro-angel/kibana-py/compare/v0.1.8...HEAD
+[0.1.8]: https://github.com/pedro-angel/kibana-py/releases/tag/v0.1.8
 [0.1.7]: https://github.com/pedro-angel/kibana-py/releases/tag/v0.1.7
 [0.1.6]: https://github.com/pedro-angel/kibana-py/releases/tag/v0.1.6
 [0.1.5]: https://github.com/pedro-angel/kibana-py/releases/tag/v0.1.5
