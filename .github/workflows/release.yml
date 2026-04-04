@@ -1,0 +1,116 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions: {}  # Deny all at workflow level; grant per-job below
+
+jobs:
+  validate-release:
+    name: Validate release tag and changelog
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Validate tag matches package version
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          VERSION=$(grep '__versionstr__' kibana/_version.py | cut -d'"' -f2)
+          if [ "$TAG" != "v$VERSION" ]; then
+            echo "Tag $TAG does not match kibana/_version.py ($VERSION)"
+            exit 1
+          fi
+
+      - name: Validate changelog entry exists
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          VERSION="${TAG#v}"
+          grep -q "## \[$VERSION\]" CHANGELOG.md
+
+  build:
+    name: Build distribution
+    needs: validate-release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.13"
+
+      - name: Install build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install build twine cyclonedx-bom
+
+      - name: Build package
+        run: |
+          python -m build
+
+      - name: Validate distribution metadata
+        run: |
+          python -m twine check dist/*
+
+      - name: Generate SBOM
+        run: |
+          cyclonedx-py environment -o dist/sbom.cdx.json
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: dist
+          path: dist/
+
+  publish-github-release:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: dist
+          path: dist/
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@153bb8e04406b158c6c84fc1615b65b24149a1fe # v2.6.1
+        with:
+          generate_release_notes: true
+          files: dist/*
+
+  publish-pypi:
+    name: Publish to PyPI
+    needs: [build, publish-github-release]
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: read
+      id-token: write    # Required for PyPI trusted publishing (OIDC)
+      attestations: write # Required for build provenance attestations
+
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: dist
+          path: dist/
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        with:
+          subject-path: 'dist/*.tar.gz,dist/*.whl'
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e # v1.13.0

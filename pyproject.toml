@@ -1,0 +1,171 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "kibana-py"
+description = "Python client for Kibana"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.10"
+keywords = ["kibana", "elastic", "api-client", "observability", "python"]
+authors = [
+    { name = "Kibana Python Client Contributors" },
+]
+maintainers = [
+    { name = "pedro-angel" },
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: System :: Monitoring",
+]
+dynamic = ["version"]
+dependencies = [
+    "elastic-transport>=9.1.0,<10",
+    "python-dateutil>=2.8",
+    "typing-extensions>=4.0",
+]
+
+[project.optional-dependencies]
+async = ["aiohttp>=3,<4"]
+orjson = ["orjson>=3"]
+observability = [
+    "opentelemetry-api>=1.20.0",
+    "opentelemetry-sdk>=1.20.0",
+    "opentelemetry-exporter-otlp-proto-grpc>=1.20.0",
+    "opentelemetry-exporter-otlp-proto-http>=1.20.0",
+    "opentelemetry-instrumentation>=0.40b0",
+]
+docs = [
+    "sphinx>=7.0.0",
+    "furo>=2024.1.0",
+    "myst-parser>=2.0.0",
+    "sphinx-copybutton>=0.5.0",
+    "sphinx-design>=0.5.0",
+    "sphinx-autobuild>=2024.0.0",
+]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov",
+    "pytest-mock",
+    "pytest-asyncio",
+    "black>=24.0",
+    "isort>=5.0",
+    "ruff>=0.1.0",
+    "mypy>=1.0",
+    "pyright",
+    "nox",
+    "types-python-dateutil",
+    "psutil>=5.0",
+    "build",
+    "sphinx>=7.0.0",
+    "furo>=2024.1.0",
+    "myst-parser>=2.0.0",
+    "sphinx-copybutton>=0.5.0",
+    "sphinx-design>=0.5.0",
+    "sphinx-autobuild>=2024.0.0",
+]
+all = [
+    "aiohttp>=3,<4",
+    "orjson>=3",
+    "opentelemetry-api>=1.20.0",
+    "opentelemetry-sdk>=1.20.0",
+    "opentelemetry-exporter-otlp-proto-grpc>=1.20.0",
+    "opentelemetry-exporter-otlp-proto-http>=1.20.0",
+    "opentelemetry-instrumentation>=0.40b0",
+]
+
+[project.urls]
+Homepage = "https://github.com/pedro-angel/kibana-py"
+Repository = "https://github.com/pedro-angel/kibana-py"
+Documentation = "https://kibana-py.readthedocs.io/"
+Changelog = "https://github.com/pedro-angel/kibana-py/blob/main/CHANGELOG.md"
+Issues = "https://github.com/pedro-angel/kibana-py/issues"
+
+[tool.hatch.version]
+path = "kibana/_version.py"
+pattern = "__versionstr__ = \"(?P<version>[^']+)\""
+
+[tool.hatch.build.targets.wheel]
+packages = ["kibana"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/kibana/**/*.py",
+    "/kibana/py.typed",
+    "/README.md",
+    "/LICENSE",
+    "/NOTICE",
+    "/CHANGELOG.md",
+]
+exclude = [
+    "/tests",
+    "/scripts",
+    "/docs/build",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "--cov=kibana --cov-report=term-missing --cov-report=html"
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+markers = [
+    "benchmark: performance and resource usage benchmarks (deselect with '-m \"not benchmark\"')",
+]
+
+[tool.coverage.run]
+source = ["kibana"]
+omit = ["tests/*", "kibana/_version.py"]
+
+[tool.coverage.xml]
+output = "coverage.xml"
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+]
+
+[tool.isort]
+profile = "black"
+line_length = 88
+
+[tool.black]
+line-length = 88
+target-version = ["py310"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = false
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true
+
+[tool.ruff]
+line-length = 88
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP"]
+ignore = [
+    "E501",  # Line too long (handled by black)
+    "N818",  # Exception naming (intentional: KibanaException, AuthenticationException, etc.)
+    "E402",  # Module level import not at top (needed for conditional imports)
+]

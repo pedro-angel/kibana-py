@@ -1,0 +1,16 @@
+services:
+  apm-server:
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    image: docker.elastic.co/apm/apm-server:${ES_LOCAL_VERSION}
+    container_name: ${APM_LOCAL_CONTAINER_NAME}
+    ports:
+      - 127.0.0.1:${APM_LOCAL_PORT}:8200
+    command: >
+      -e
+      -E apm-server.host=0.0.0.0:8200
+      -E apm-server.secret_token=${ELASTIC_APM_SECRET_TOKEN}
+      -E output.elasticsearch.hosts=[http://elasticsearch:9200]
+      -E output.elasticsearch.username=elastic
+      -E output.elasticsearch.password=${ES_LOCAL_PASSWORD}

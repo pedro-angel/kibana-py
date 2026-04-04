@@ -1,0 +1,46 @@
+# OpenTelemetry Configuration for Kibana Python Client
+#
+# This file shows example configurations for OpenTelemetry observability.
+# Copy this file to kibana.otel.yaml and customize as needed.
+
+# Enable/disable OpenTelemetry instrumentation
+enabled: true
+
+# Service name for traces
+service_name: kibana-py
+
+# Exporter configuration
+exporter:
+  # Type: otlp, console, or none
+  type: otlp
+
+  # OTLP endpoint (for type: otlp)
+  endpoint: http://localhost:4317
+
+  # Also export to console for debugging
+  console: false
+
+# Span configuration
+spans:
+  # Include request body in spans (may contain sensitive data)
+  include_body: false
+
+  # Include response body in spans (may contain sensitive data)
+  include_response: false
+
+  # Maximum body size to include (bytes)
+  max_body_size: 1024
+
+# Sampling configuration
+sampling:
+  # Sampling rate (0.0 to 1.0)
+  # 1.0 = sample all requests
+  # 0.1 = sample 10% of requests
+  rate: 1.0
+
+# Resource attributes
+resource:
+  # Additional attributes to add to all spans
+  attributes:
+    deployment.environment: development
+    service.version: 0.1.0

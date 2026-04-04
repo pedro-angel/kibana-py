@@ -1,0 +1,108 @@
+name: Documentation
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'docs/**'
+      - 'kibana/**'
+      - '.github/workflows/docs.yml'
+      - 'pyproject.toml'
+  pull_request:
+    paths:
+      - 'docs/**'
+      - 'kibana/**'
+      - '.github/workflows/docs.yml'
+      - 'pyproject.toml'
+
+permissions: {}  # Deny all at workflow level; grant per-job below
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  build-docs:
+    name: Build Documentation
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: '3.13'
+          cache: 'pip'
+          cache-dependency-path: |
+            pyproject.toml
+            docs/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          pip install -r docs/requirements.txt
+
+      - name: Build documentation
+        run: |
+          cd docs
+          make html
+        env:
+          SPHINXOPTS: "-W --keep-going"
+
+      - name: Upload documentation artifact
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: documentation-html
+          path: docs/build/html/
+          retention-days: 30
+
+      - name: Check links
+        run: |
+          cd docs
+          make linkcheck
+
+  quality-checks:
+    name: Documentation Quality Checks
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: '3.13'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          pip install interrogate
+
+      - name: Check docstring coverage
+        run: |
+          interrogate -v \
+            --ignore-init-method \
+            --ignore-init-module \
+            --ignore-magic \
+            --ignore-module \
+            --ignore-nested-functions \
+            --ignore-private \
+            --ignore-property-decorators \
+            --ignore-semiprivate \
+            --fail-under 90 \
+            --exclude tests \
+            --exclude .venv \
+            --exclude build \
+            --exclude dist \
+            kibana/

@@ -1,0 +1,14 @@
+# Default ownership
+* @pedro-angel
+
+# CI and release configuration
+/.github/workflows/ @pedro-angel
+/pyproject.toml @pedro-angel
+
+# Core package code
+/kibana/ @pedro-angel
+
+# Documentation
+/docs/ @pedro-angel
+/README.md @pedro-angel
+/CHANGELOG.md @pedro-angel

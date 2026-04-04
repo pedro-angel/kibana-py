@@ -1,0 +1,39 @@
+"""Nox automation for kibana-py project."""
+
+import nox
+
+# Use the .venv environment
+nox.options.default_venv_backend = "none"
+
+
+@nox.session(python=["3.10", "3.11", "3.12", "3.13"])
+def test(session):
+    """Run unit and integration tests with pytest."""
+    session.run("pytest", *session.posargs)
+
+
+@nox.session
+def format(session):
+    """Format code with black and isort."""
+    session.run("isort", "kibana/", "tests/", "examples/")
+    session.run("black", "kibana/", "tests/", "examples/")
+
+
+@nox.session
+def lint(session):
+    """Lint code with ruff and type check with mypy."""
+    session.run("ruff", "check", "kibana/", "tests/")
+    session.run("mypy", "kibana/")
+
+
+@nox.session
+def format_check(session):
+    """Check code formatting without making changes."""
+    session.run("isort", "--check-only", "kibana/", "tests/", "examples/")
+    session.run("black", "--check", "kibana/", "tests/", "examples/")
+
+
+@nox.session
+def lint_fix(session):
+    """Lint code with ruff and automatically fix issues."""
+    session.run("ruff", "check", "--fix", "kibana/", "tests/")
