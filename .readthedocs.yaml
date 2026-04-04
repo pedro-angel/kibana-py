@@ -6,7 +6,7 @@ version: 2
 
 # Set the OS, Python version and other tools you might need
 build:
-  os: ubuntu-26.04 
+  os: ubuntu-latest 
   tools:
     python: "3.14"
   jobs:

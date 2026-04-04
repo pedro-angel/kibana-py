@@ -10,7 +10,7 @@ permissions: {}  # Deny all at workflow level; grant per-job below
 jobs:
   validate-release:
     name: Validate release tag and changelog
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-latest
     permissions:
       contents: read
 
@@ -43,7 +43,7 @@ jobs:
   build:
     name: Build distribution
     needs: validate-release
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-latest
     permissions:
       contents: read
 
@@ -90,7 +90,7 @@ jobs:
   publish-github-release:
     name: Publish GitHub Release
     needs: build
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-latest
     permissions:
       contents: write
 
@@ -110,7 +110,7 @@ jobs:
   publish-pypi:
     name: Publish to PyPI
     needs: [build, publish-github-release]
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-latest
     environment: release
     permissions:
       contents: read
