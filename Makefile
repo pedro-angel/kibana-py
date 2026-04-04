@@ -111,8 +111,9 @@ build: ## Build wheel and sdist into dist/, then validate artifacts with twine
 	$(VENV_BIN)/python -m twine check dist/*
 
 .PHONY: docs
-docs: ## Build Sphinx documentation
-	$(VENV_BIN)/sphinx-build docs/source docs/build
+docs: ## Build and link-check Sphinx documentation (matches CI)
+	$(VENV_BIN)/sphinx-build -W --keep-going -b html docs/source docs/build/html
+	$(VENV_BIN)/sphinx-build -b linkcheck docs/source docs/build/linkcheck
 
 # ---------------------------------------------------------------------------
 # Cleanup

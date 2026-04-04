@@ -106,3 +106,13 @@ source_suffix = {
     ".rst": "restructuredtext",
     ".md": "markdown",
 }
+
+# Linkcheck configuration
+# Local development endpoints are intentionally documented as examples and are
+# not expected to be reachable in CI.
+linkcheck_ignore = [
+    r"http://localhost(:\d+)?(/.*)?$",
+    r"https://localhost(:\d+)?(/.*)?$",
+    r"http://127\.0\.0\.1(:\d+)?(/.*)?$",
+    r"https://127\.0\.0\.1(:\d+)?(/.*)?$",
+]
