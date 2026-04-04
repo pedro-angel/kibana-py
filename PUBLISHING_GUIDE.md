@@ -121,8 +121,11 @@ This triggers the release workflow.
 
 Go to **Actions** → **Release** in the GitHub repository. The workflow will:
 
-1. **Validate** — checks that the tag matches `kibana/_version.py` and that `CHANGELOG.md` has an entry for this version
-2. **Build** — runs `python -m build`, `twine check`, and generates an SBOM
+1. **Validate** — checks that:
+   - the tagged commit is reachable from `origin/main`
+   - the tag matches `kibana/_version.py`
+   - `CHANGELOG.md` has an entry for this version
+2. **Build** — runs `python -m build`, `twine check`, verifies wheel contents (`kibana/py.typed` present and no `tests/`, `docs/`, or `examples/` paths), and generates an SBOM
 3. **GitHub Release** — creates a GitHub Release with auto-generated notes and attaches the wheel, sdist, and SBOM
 4. **Publish to PyPI** — uploads to PyPI via trusted publishing
 
@@ -162,6 +165,23 @@ Also check:
 ### "Tag does not match kibana/_version.py"
 The tag you pushed (e.g., `v0.2.0`) must exactly match the version in `kibana/_version.py` (e.g., `"0.2.0"`). Fix the version file or delete and recreate the tag.
 
+### "Tagged commit is not reachable from origin/main"
+Releases must be tagged from commits that are in `main` history.
+
+If you tagged the wrong commit:
+```bash
+git tag -d v0.2.0
+git push origin --delete v0.2.0
+```
+
+Then create the tag from the correct commit on `main`:
+```bash
+git checkout main
+git pull --ff-only
+git tag -a v0.2.0 -m "Release v0.2.0"
+git push origin v0.2.0
+```
+
 ### "Changelog entry not found"
 The workflow greps for `## [0.2.0]` in `CHANGELOG.md`. Make sure the version header exists exactly as `## [X.Y.Z]`.
 
@@ -194,5 +214,5 @@ You'll need a [TestPyPI account](https://test.pypi.org/) and API token for this.
 
 ---
 
-**Last Updated**: 2026-03-17
+**Last Updated**: 2026-04-04
 **Release Line**: 0.x

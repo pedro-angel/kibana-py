@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-04-04
+
+### Changed
+
+- Hardened release workflow validation in `.github/workflows/release.yml`:
+	- Tagged commit must be reachable from `origin/main`.
+	- Build now verifies wheel content sanity (`kibana/py.typed` is present).
+	- Build now fails if `tests/`, `docs/`, or `examples/` paths are present in the wheel.
+
+### Documentation
+
+- Updated `PUBLISHING_GUIDE.md` to reflect enforced release workflow checks and added troubleshooting guidance for tags created from non-main commits.
+
 ## [0.1.0] - 2026-03-17
 
 Initial release of kibana-py, a Python client library for the Kibana REST API.
@@ -82,5 +95,6 @@ Initial release of kibana-py, a Python client library for the Kibana REST API.
 
 ---
 
-[Unreleased]: https://github.com/pedro-angel/kibana-py/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/pedro-angel/kibana-py/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/pedro-angel/kibana-py/releases/tag/v0.1.1
 [0.1.0]: https://github.com/pedro-angel/kibana-py/releases/tag/v0.1.0

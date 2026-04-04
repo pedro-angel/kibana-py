@@ -17,6 +17,14 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
+      - name: Validate tagged commit is reachable from main
+        run: |
+          git fetch --no-tags origin main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" "origin/main"; then
+            echo "Tagged commit $GITHUB_SHA is not reachable from origin/main"
+            exit 1
+          fi
+
       - name: Validate tag matches package version
         run: |
           TAG="${GITHUB_REF#refs/tags/}"
@@ -59,6 +67,15 @@ jobs:
       - name: Validate distribution metadata
         run: |
           python -m twine check dist/*
+
+      - name: Verify wheel content sanity
+        run: |
+          python -m zipfile -l dist/kibana_py-*.whl | grep -q "kibana/py.typed"
+
+          if python -m zipfile -l dist/kibana_py-*.whl | grep -E "tests/|docs/|examples/"; then
+            echo "Wheel contains disallowed paths (tests/docs/examples)."
+            exit 1
+          fi
 
       - name: Generate SBOM
         run: |
