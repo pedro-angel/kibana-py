@@ -10,7 +10,7 @@ permissions: {}  # Deny all at workflow level; grant per-job below
 jobs:
   validate-release:
     name: Validate release tag and changelog
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     permissions:
       contents: read
 
@@ -43,7 +43,7 @@ jobs:
   build:
     name: Build distribution
     needs: validate-release
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     permissions:
       contents: read
 
@@ -53,7 +53,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
-          python-version: "3.13"
+          python-version: "3.14"
 
       - name: Install build dependencies
         run: |
@@ -90,7 +90,7 @@ jobs:
   publish-github-release:
     name: Publish GitHub Release
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     permissions:
       contents: write
 
@@ -110,7 +110,7 @@ jobs:
   publish-pypi:
     name: Publish to PyPI
     needs: [build, publish-github-release]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     environment: release
     permissions:
       contents: read
