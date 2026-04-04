@@ -226,9 +226,7 @@ def execute_connector_with_sample_data(client, connector_id, space_id):
         if result.get("status") == "ok":
             print("  ✓ Connector execution completed successfully")
         else:
-            print(
-                f"  ⚠️  Connector execution status: {result.get('status', 'unknown')}"
-            )
+            print(f"  ⚠️  Connector execution status: {result.get('status', 'unknown')}")
 
     except Exception as e:
         print(f"❌ Failed to execute connector: {e}")

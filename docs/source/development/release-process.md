@@ -36,10 +36,10 @@ For pre-releases, use:
 Use this checklist for every release:
 
 ### Pre-Release
-- [ ] All tests pass locally and in CI
-- [ ] Code quality checks pass (lint, type checking)
+- [ ] `make check` passes locally (pre-commit, lint, dependency audit, SAST, unit tests)
+- [ ] `make test-python-matrix` passes locally (multi-Python unit test matrix via nox; missing local interpreters are skipped)
 - [ ] Documentation is up to date
-- [ ] Examples are tested and working
+- [ ] Integration tests pass if client logic changed (`make test-integration`)
 - [ ] CHANGELOG.md is updated with release notes
 - [ ] Version number is updated in `kibana/_version.py`
 
@@ -96,21 +96,25 @@ Add release notes for the new version:
 #### Run All Tests
 
 ```bash
-# Activate virtual environment
-source .venv/bin/activate
+# Set up or refresh local environment
+make setup
 
-# Run unit tests
-pytest tests/unit/ --cov=kibana
+# Optional quick feedback while iterating
+make pre-commit
 
-# Run integration tests (requires running Kibana)
-pytest tests/integration/
+# Run local CI-equivalent checks
+make check
 
-# Check code quality
-nox -s lint
+# Run required multi-Python matrix before release
+make test-python-matrix
+```
 
-# Verify type hints
-mypy kibana/
-pyright kibana/
+If some Python versions are not installed locally, nox skips them. The CI matrix remains the source of truth for full version coverage.
+
+Optionally run integration tests when API/client behavior changed:
+
+```bash
+make test-integration
 ```
 
 #### Verify Documentation
@@ -147,8 +151,8 @@ rm -rf dist/ build/ *.egg-info
 #### Build Distribution Packages
 
 ```bash
-# Build source distribution and wheel
-python -m build
+# Build and validate source distribution and wheel
+make build
 ```
 
 **Expected Output**:
@@ -346,7 +350,7 @@ Consider announcing through:
 
 PyPI does not allow re-uploading the same version. You must:
 1. Increment the version number in `kibana/_version.py`
-2. Rebuild the package: `python -m build`
+2. Rebuild the package: `make build`
 3. Upload the new version
 
 ### Authentication Errors
@@ -407,7 +411,7 @@ Enable 2FA on your PyPI account for additional security.
 ```bash
 # Clean and build
 rm -rf dist/ build/ *.egg-info
-python -m build
+make build
 
 # Upload to TestPyPI
 twine upload --repository testpypi dist/*
@@ -426,40 +430,41 @@ python -c "from kibana import Kibana; print('✓ Success')"
 
 ## Automation Considerations
 
-For future automation of the release process:
+### GitHub Actions Workflow (already configured)
 
-### GitHub Actions Workflow
-
-Consider creating a release workflow:
+Releases are automated via the repository's release workflow:
 
 ```yaml
-name: Publish to PyPI
+name: Release
 
 on:
-  release:
-    types: [published]
+  push:
+    tags:
+      - v*.*.*
 
 jobs:
-  publish:
-    runs-on: ubuntu-latest
+  validate:
+    runs-on: ubuntu-26.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.13'
+      - checks tag/version/changelog consistency
 
-      - name: Install dependencies
-        run: |
-          pip install build twine
+  build:
+    runs-on: ubuntu-26.04
+    steps:
+      - builds wheel + sdist
+      - runs twine check
 
-      - name: Build package
-        run: python -m build
+  release:
+    runs-on: ubuntu-26.04
+    steps:
+      - creates GitHub Release and uploads artifacts
 
-      - name: Publish to PyPI
-        env:
-          TWINE_USERNAME: __token__
-          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
-        run: twine upload dist/*
+  publish:
+    runs-on: ubuntu-26.04
+    permissions:
+      id-token: write
+    steps:
+      - publishes to PyPI via trusted publishing (OIDC)
 ```
 
 ### Version Bumping
@@ -486,4 +491,4 @@ If you encounter issues during the release process:
 
 ---
 
-**Last Updated**: January 2025
+**Last Updated**: April 2026

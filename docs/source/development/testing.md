@@ -219,6 +219,11 @@ pytest tests/unit/  # Only run unit tests
 
 Integration tests are automatically skipped if `KIBANA_URL` is not set.
 
+### CI Behavior
+
+The default GitHub Actions test workflow runs unit/lint/type checks only.
+Integration tests are intended for local and dedicated environment runs.
+
 ### Configuration
 
 Integration tests support multiple configuration sources (in order of preference):
@@ -448,24 +453,28 @@ def test_space_validation_performance(kibana_client, benchmark):
 ### CI Test Execution
 
 Tests run automatically on:
-- Every push to a branch
-- Every pull request
-- Scheduled nightly builds
+- Pushes to `main`
+- Pull requests (opened, synchronize, reopened)
 
 ### CI Configuration
 
 ```yaml
 # .github/workflows/test.yml
-name: Tests
+name: Test
 
-on: [push, pull_request]
+on:
+    push:
+        branches:
+            - main
+    pull_request:
+        types: [opened, synchronize, reopened]
 
 jobs:
-  test:
+    unit-lint-type:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.14"]
+                python-version: ["3.10", "3.11", "3.12", "3.13"]
 
     steps:
       - uses: actions/checkout@v4
@@ -475,15 +484,35 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install -e ".[dev]"
+                    python -m pip install --upgrade pip
+                    pip install -e ".[dev,async,orjson,observability]"
+
+            - name: Run pre-commit hooks
+                run: |
+                    pre-commit run --all-files
+
+            - name: Lint with ruff
+                run: |
+                    ruff check .
+
+            - name: Type check with mypy
+                run: |
+                    mypy kibana/
+
+            - name: Security audit dependencies
+                run: |
+                    pip-audit
+
+            - name: SAST scan
+                run: |
+                    bandit -r kibana/ -ll -q
 
       - name: Run unit tests
         run: |
-          pytest tests/unit/ --cov=kibana --cov-report=xml
-
-      - name: Upload coverage
-        uses: codecov/codecov-action@v3
+                    pytest tests/unit/ --cov=kibana --cov-fail-under=75
 ```
+
+Integration tests are intentionally excluded from this CI workflow and are run on demand using `make test-integration`.
 
 ## Troubleshooting
 

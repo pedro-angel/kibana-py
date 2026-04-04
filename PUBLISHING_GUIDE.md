@@ -69,17 +69,24 @@ Update the links at the bottom of the file:
 ### Step 4: Run local checks
 
 ```bash
-# Unit tests with coverage
-make test
+# One-time / refresh local environment
+make setup
 
-# Lint and type check
-make lint
+# Optional quick feedback while iterating
+make pre-commit
 
-# Build the package and check it
-rm -rf dist/ build/ *.egg-info
-python -m build
-python -m twine check dist/*
+# Full local CI-equivalent checks (pre-commit + lint + audit + sast + unit tests)
+make check
+
+# Required before release: run unit tests across all supported Python versions
+make test-python-matrix
+
+# Build and validate release artifacts
+make build
 ```
+
+Note: `make audit` (included in `make check`) audits dependency vulnerabilities. `make sast` scans this repository's source code.
+Note: if some local Python interpreters are not installed, `make test-python-matrix` can skip those versions locally. CI runs the full matrix.
 
 Optionally, run integration tests if you changed client logic:
 ```bash
@@ -200,7 +207,7 @@ Fix the issue, then re-tag and push.
 ### "Can I test with TestPyPI first?"
 Yes. Build locally and upload manually:
 ```bash
-python -m build
+make build
 python -m twine upload --repository testpypi dist/*
 pip install --index-url https://test.pypi.org/simple/ kibana-py
 ```

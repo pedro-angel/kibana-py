@@ -147,7 +147,7 @@ class OTelLogHandler(logging.Handler):
                 "message",
             }:
                 try:
-                    if isinstance(value, (str, int, float, bool)):
+                    if isinstance(value, str | int | float | bool):
                         attributes[f"custom.{key}"] = value
                     elif value is not None:
                         attributes[f"custom.{key}"] = str(value)

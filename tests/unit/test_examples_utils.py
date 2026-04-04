@@ -8,7 +8,7 @@ from unittest.mock import Mock, patch
 
 # Load examples/utils.py explicitly by file path so that the integration
 # tests' own utils.py (tests/integration/utils.py) does not shadow it when
-# the full test suite is collected together (e.g. via ``nox`` / ``make test-all``).
+# the full test suite is collected together (e.g. via ``nox`` / ``make test-python-matrix``).
 _examples_utils_path = str(
     Path(__file__).parent.parent.parent / "examples" / "utils.py"
 )

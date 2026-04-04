@@ -35,14 +35,16 @@ def examples_dir():
 def temp_env_with_telemetry():
     """Create temporary environment with telemetry enabled."""
     with tempfile.NamedTemporaryFile(mode="w", suffix=".env", delete=False) as f:
-        f.write("""# Test environment file for telemetry
+        f.write(
+            """# Test environment file for telemetry
 KIBANA_OTEL_ENABLED=true
 OTEL_SERVICE_NAME=kibana-py-e2e-test
 OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:8200
 OTEL_EXPORTER_OTLP_PROTOCOL=grpc
 ELASTIC_APM_SECRET_TOKEN=test-token-e2e
 OTEL_EXPORTER_OTLP_HEADERS=authorization=Bearer ${ELASTIC_APM_SECRET_TOKEN}
-""")
+"""
+        )
         temp_path = f.name
 
     yield temp_path
@@ -55,9 +57,11 @@ OTEL_EXPORTER_OTLP_HEADERS=authorization=Bearer ${ELASTIC_APM_SECRET_TOKEN}
 def temp_env_without_telemetry():
     """Create temporary environment with telemetry disabled."""
     with tempfile.NamedTemporaryFile(mode="w", suffix=".env", delete=False) as f:
-        f.write("""# Test environment file without telemetry
+        f.write(
+            """# Test environment file without telemetry
 KIBANA_OTEL_ENABLED=false
-""")
+"""
+        )
         temp_path = f.name
 
     yield temp_path

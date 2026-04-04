@@ -482,7 +482,7 @@ class TestUnmappedStatusCodes:
             client.perform_request("GET", "/api/status")
 
         assert exc_info.value.status_code == 429
-        assert not isinstance(exc_info.value, (BadRequestError, NotFoundError))
+        assert not isinstance(exc_info.value, BadRequestError | NotFoundError)
 
     def test_502_raises_api_error(self, mock_transport, mock_response):
         """Test that 502 Bad Gateway raises generic ApiError."""

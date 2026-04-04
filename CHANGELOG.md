@@ -17,12 +17,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Added workflow support for Python 3.14 across CI, documentation, and release pipelines.
+- Added workflow support for Python 3.13 across CI, documentation, and release pipelines.
 - Updated GitHub Actions runners to Ubuntu 26.04 for test, docs, and release workflows.
 
 ### Documentation
 
-- Added Read the Docs build configuration in `.readthedocs.yaml` with Python 3.14 and Ubuntu 26.04.
+- Added Read the Docs build configuration in `.readthedocs.yaml` with Python 3.13 and Ubuntu 26.04.
 
 ## [0.1.1] - 2026-04-04
 
@@ -92,7 +92,7 @@ Initial release of kibana-py, a Python client library for the Kibana REST API.
 - Makefile with targets: `setup`, `test`, `test-integration`, `benchmark`, `lint`, `format`, `build`, `docs`, `clean`, `stack-start`, `stack-stop`.
 - Nox sessions for cross-Python-version testing.
 - Pre-commit hooks (black, isort, ruff).
-- CI workflows for testing (Python 3.10–3.14), release (PyPI trusted publishing), and documentation.
+- CI workflows for testing (Python 3.10–3.13), release (PyPI trusted publishing), and documentation.
 
 #### Documentation
 - README with quickstart, authentication, and API examples.

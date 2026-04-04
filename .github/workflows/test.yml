@@ -40,7 +40,6 @@ jobs:
 
       - name: Run pre-commit hooks
         run: |
-          pip install pre-commit
           pre-commit run --all-files
 
       - name: Lint with ruff
@@ -53,49 +52,12 @@ jobs:
 
       - name: Security audit dependencies
         run: |
-          pip install pip-audit
           pip-audit
 
       - name: SAST scan
         run: |
-          pip install bandit
           bandit -r kibana/ -ll -q
 
       - name: Run unit tests
         run: |
           pytest tests/unit/ --cov=kibana --cov-fail-under=75
-
-  integration:
-    name: Integration Tests
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-
-      - name: Set up Python
-        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
-        with:
-          python-version: "3.14"
-          cache: 'pip'
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[dev,async,orjson,observability]"
-
-      - name: Start Elastic/Kibana stack
-        run: |
-          sh ./local-stack.sh -o start
-
-      - name: Run integration tests
-        env:
-          KIBANA_URL: http://localhost:5601
-        run: |
-          pytest tests/integration/ -q
-
-      - name: Stop Elastic/Kibana stack
-        if: always()
-        run: |
-          sh ./local-stack.sh -o stop

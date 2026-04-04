@@ -51,21 +51,45 @@ test-integration: stack-start ## Run integration tests (starts stack if needed)
 benchmark: stack-start ## Run performance benchmarks
 	$(VENV_BIN)/pytest tests/benchmark/
 
-.PHONY: test-all
-test-all: ## Run tests across Python versions via nox
-	PATH=$(VENV_BIN):$$PATH $(VENV_BIN)/nox -s test
+.PHONY: test-python-matrix
+test-python-matrix: ## Run unit tests across all supported Python versions via nox (required before release)
+	@if command -v pyenv >/dev/null 2>&1; then \
+		PYENV_VERSIONS="$$(pyenv versions --bare | awk '/^3\.(10|11|12|13)(\.|$$)/ {print $$1}' | paste -sd: -)"; \
+		if [ -n "$$PYENV_VERSIONS" ]; then \
+			PYENV_VERSION="$$PYENV_VERSIONS" \
+			PATH="$(VENV_BIN):$$(pyenv root)/bin:$$(pyenv root)/shims:$$PATH" \
+			$(VENV_BIN)/nox -s test; \
+		else \
+			PATH="$(VENV_BIN):$$PATH" $(VENV_BIN)/nox -s test; \
+		fi; \
+	else \
+		PATH="$(VENV_BIN):$$PATH" $(VENV_BIN)/nox -s test; \
+	fi
 
 # ---------------------------------------------------------------------------
 # Code quality
 # ---------------------------------------------------------------------------
 
 .PHONY: check
-check: lint test ## Run all CI checks locally (lint + type check + unit tests)
+check: pre-commit lint audit sast test ## Run all CI checks locally (matches GitHub Actions: hooks + lint + security + unit tests)
+	@echo "\n✓ All checks passed. Note: run 'make test-python-matrix' to verify across all supported Python versions."
+
+.PHONY: pre-commit
+pre-commit: ## Run pre-commit hooks on all files
+	$(VENV_BIN)/pre-commit run --all-files
 
 .PHONY: lint
-lint: ## Run ruff linter and mypy type checker
-	$(VENV_BIN)/ruff check kibana/ tests/
+lint: ## Run ruff linter (full repo) and mypy type checker
+	$(VENV_BIN)/ruff check .
 	$(VENV_BIN)/mypy kibana/
+
+.PHONY: audit
+audit: ## Audit dependencies for known vulnerabilities
+	$(VENV_BIN)/pip-audit
+
+.PHONY: sast
+sast: ## Run SAST scan with bandit
+	$(VENV_BIN)/bandit -r kibana/ -ll -q
 
 .PHONY: format
 format: ## Auto-format code with isort and black
@@ -82,8 +106,9 @@ format-check: ## Check code formatting without making changes
 # ---------------------------------------------------------------------------
 
 .PHONY: build
-build: ## Build wheel and sdist into dist/
+build: ## Build wheel and sdist into dist/, then validate artifacts with twine
 	$(VENV_BIN)/python -m build
+	$(VENV_BIN)/python -m twine check dist/*
 
 .PHONY: docs
 docs: ## Build Sphinx documentation

@@ -2,14 +2,12 @@
 
 import nox
 
-# Use the .venv environment
-nox.options.default_venv_backend = "none"
-
 
 @nox.session(python=["3.10", "3.11", "3.12", "3.13"])
 def test(session):
-    """Run unit and integration tests with pytest."""
-    session.run("pytest", *session.posargs)
+    """Run unit tests with pytest across all supported Python versions."""
+    session.install(".[dev,all]")
+    session.run("pytest", "tests/unit/", *session.posargs)
 
 
 @nox.session
