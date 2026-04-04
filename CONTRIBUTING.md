@@ -118,21 +118,24 @@ pytest tests/unit/test_base_client.py
 pytest --cov=kibana --cov-report=term-missing
 ```
 
-### 4. Format and Lint
+### 4. Run Required Local Checks
 
 ```bash
-# Format code
-black kibana tests
-isort kibana tests
+# Mandatory before opening a PR
+make pre-commit
 
-# Lint code
-ruff check kibana tests
-
-# Type check
-mypy kibana
+# Strongly recommended before opening a PR (CI parity)
+make check
 ```
 
-Or use nox for all quality checks:
+What each target does:
+
+- `make pre-commit`: required. Runs all pre-commit hooks on all files (includes formatting and Ruff fixes/checks).
+- `make fix`: optional convenience target. Applies auto-fixes via pinned pre-commit formatter/lint hooks (isort, black, ruff --fix).
+- `make lint`: mypy type-check only.
+- `make check`: full local CI gate (pre-commit + mypy + pip-audit + bandit + unit tests).
+
+If you use nox, these are still valid alternatives for broader local workflows:
 
 ```bash
 nox -s format
@@ -274,25 +277,20 @@ class TestActionsClient:
 ### Running Quality Checks
 
 ```bash
-# Format code
-black kibana tests
-isort kibana tests
+# Mandatory
+make pre-commit
 
-# Lint
-ruff check kibana tests
+# Optional convenience
+make fix
+make lint
 
-# Type check
-mypy kibana
-pyright kibana
-
-# Or use nox
-nox -s format
-nox -s lint
+# Full CI parity
+make check
 ```
 
-### Pre-commit Hooks (Optional)
+### Pre-commit Hooks
 
-You can set up pre-commit hooks to automatically run checks:
+Installing hooks is strongly recommended so required checks run before each commit:
 
 ```bash
 pip install pre-commit

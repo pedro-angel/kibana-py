@@ -1,6 +1,8 @@
 # Pre-commit hooks for kibana-py
 # Install with: pip install pre-commit && pre-commit install
 
+exclude: '^(\.venv/|venv/|env/|docs/build/|build/|dist/|htmlcov/)'
+
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v4.6.0

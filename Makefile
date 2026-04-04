@@ -13,7 +13,9 @@ setup: ## Create virtual environment and install all dependencies
 	$(PYTHON) -m venv $(VENV_DIR)
 	$(VENV_BIN)/pip install --upgrade pip
 	$(VENV_BIN)/pip install -e ".[dev,all]"
+	$(VENV_BIN)/pre-commit install --install-hooks --hook-type pre-commit --hook-type pre-push
 	@echo "\n✓ Dev environment ready. Activate with: source $(VENV_DIR)/bin/activate"
+	@echo "✓ Pre-commit hooks installed (pre-commit + pre-push)."
 
 # ---------------------------------------------------------------------------
 # Local Elastic Stack
@@ -79,8 +81,7 @@ pre-commit: ## Run pre-commit hooks on all files
 	$(VENV_BIN)/pre-commit run --all-files
 
 .PHONY: lint
-lint: ## Run ruff linter (full repo) and mypy type checker
-	$(VENV_BIN)/ruff check .
+lint: ## Run mypy type checker
 	$(VENV_BIN)/mypy kibana/
 
 .PHONY: audit
@@ -91,15 +92,11 @@ audit: ## Audit dependencies for known vulnerabilities
 sast: ## Run SAST scan with bandit
 	$(VENV_BIN)/bandit -r kibana/ -ll -q
 
-.PHONY: format
-format: ## Auto-format code with isort and black
-	$(VENV_BIN)/isort kibana/ tests/ examples/
-	$(VENV_BIN)/black kibana/ tests/ examples/
-
-.PHONY: format-check
-format-check: ## Check code formatting without making changes
-	$(VENV_BIN)/isort --check-only kibana/ tests/ examples/
-	$(VENV_BIN)/black --check kibana/ tests/ examples/
+.PHONY: fix
+fix: ## Apply auto-fixes via pinned pre-commit hooks (isort, black, ruff --fix)
+	$(VENV_BIN)/pre-commit run isort --all-files
+	$(VENV_BIN)/pre-commit run black --all-files
+	$(VENV_BIN)/pre-commit run ruff --all-files
 
 # ---------------------------------------------------------------------------
 # Build & docs
