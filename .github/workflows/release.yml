@@ -66,7 +66,7 @@ jobs:
 
       - name: Validate distribution metadata
         run: |
-          python -m twine check dist/*
+          python -m twine check dist/{*.whl,*.tar.gz}
 
       - name: Verify wheel content sanity
         run: |
@@ -115,7 +115,7 @@ jobs:
     permissions:
       contents: read
       id-token: write    # Required for PyPI trusted publishing (OIDC)
-      attestations: write # Required for build provenance attestations
+      # attestations: write # Required for build provenance attestations
 
     steps:
       - name: Download artifact
