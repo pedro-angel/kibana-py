@@ -1,18 +1,49 @@
-"""Integration tests for SpacesClient."""
+"""Integration tests for SpacesClient / AsyncSpacesClient against a live Kibana.
+
+Every resource created here is prefixed ``kbnpy-spaces-`` and cleaned up in
+fixture finalizers or try/finally blocks so parallel test runs on the shared
+stack do not interfere with each other.
+"""
 
 import uuid
 
 import pytest
 
-from kibana.exceptions import ConflictError, NotFoundError
+from kibana.exceptions import BadRequestError, ConflictError, NotFoundError
 
-from .utils import create_test_kibana_client, is_kibana_available
+from .utils import (
+    create_test_async_kibana_client,
+    create_test_kibana_client,
+    is_kibana_available,
+)
 
 # Skip all integration tests if Kibana is not available
 pytestmark = pytest.mark.skipif(
     not is_kibana_available(),
     reason="Kibana not available. Set KIBANA_URL or start elastic-start-local stack.",
 )
+
+
+def _unique_id(suffix: str = "") -> str:
+    """Generate a unique, namespaced resource id."""
+    base = f"kbnpy-spaces-{uuid.uuid4().hex[:8]}"
+    return f"{base}-{suffix}" if suffix else base
+
+
+def _safe_delete_space(client, space_id: str) -> None:
+    """Delete a space, ignoring errors (used in cleanup paths)."""
+    try:
+        client.spaces.delete(id=space_id)
+    except Exception:
+        pass
+
+
+def _safe_delete_saved_object(client, type: str, id: str) -> None:
+    """Delete a saved object (with force for shared objects), ignoring errors."""
+    try:
+        client.saved_objects.delete(type=type, id=id, force=True)
+    except Exception:
+        pass
 
 
 @pytest.fixture
@@ -23,397 +54,288 @@ def kibana_client():
     client.close()
 
 
-@pytest.fixture
-def created_spaces():
-    """Track spaces created during tests for automatic cleanup."""
-    space_ids: list[str] = []
-    yield space_ids
+class TestSpacesLifecycleIntegration:
+    """Live CRUD lifecycle for the /api/spaces/space endpoints."""
 
-    # Cleanup: Delete all created spaces
-    if space_ids:
-        client = create_test_kibana_client()
+    def test_space_full_lifecycle_with_solution(self, kibana_client):
+        """Create, get, list, update, and delete a space with a solution view."""
+        space_id = _unique_id()
         try:
-            for space_id in space_ids:
-                try:
-                    safe_delete_space(client, space_id)
-                except Exception as e:
-                    # Log but don't fail the test due to cleanup issues
-                    print(f"Warning: Failed to cleanup space {space_id}: {e}")
+            # Create with the full 9.4.3 body surface
+            created = kibana_client.spaces.create(
+                id=space_id,
+                name="kbnpy spaces lifecycle",
+                description="kibana-py spaces integration test",
+                color="#2E7D32",
+                initials="KS",
+                disabled_features=["ml"],
+                solution="oblt",
+            )
+            assert created.body["id"] == space_id
+            assert created.body["name"] == "kbnpy spaces lifecycle"
+            assert created.body["color"] == "#2E7D32"
+            assert created.body["solution"] == "oblt"
+
+            # Get it back
+            fetched = kibana_client.spaces.get(id=space_id)
+            assert fetched.body["id"] == space_id
+            assert fetched.body["solution"] == "oblt"
+            assert fetched.body["description"] == "kibana-py spaces integration test"
+
+            # It shows up in the full listing
+            all_spaces = kibana_client.spaces.get_all()
+            assert space_id in [s["id"] for s in all_spaces.body]
+
+            # Update (PUT): name is mandatory, solution can be switched
+            updated = kibana_client.spaces.update(
+                id=space_id,
+                name="kbnpy spaces lifecycle v2",
+                color="#AD1457",
+                solution="classic",
+            )
+            assert updated.body["name"] == "kbnpy spaces lifecycle v2"
+            assert updated.body["solution"] == "classic"
+
+            refetched = kibana_client.spaces.get(id=space_id)
+            assert refetched.body["name"] == "kbnpy spaces lifecycle v2"
+            assert refetched.body["color"] == "#AD1457"
+            assert refetched.body["solution"] == "classic"
+            # Live 9.4.3: omitted description is preserved (partial-merge),
+            # while omitted disabledFeatures resets to its schema default [].
+            assert refetched.body["description"] == "kibana-py spaces integration test"
+            assert refetched.body.get("disabledFeatures") == []
+
+            # Delete and verify it is gone
+            kibana_client.spaces.delete(id=space_id)
+            with pytest.raises(NotFoundError):
+                kibana_client.spaces.get(id=space_id)
         finally:
-            client.close()
+            _safe_delete_space(kibana_client, space_id)
 
-
-@pytest.fixture
-def unique_space_id():
-    """Generate a unique space ID for testing."""
-    return f"test-space-{uuid.uuid4().hex[:8]}"
-
-
-def safe_delete_space(client, space_id: str) -> None:
-    """
-    Safely delete a space, handling errors.
-
-    :param client: Kibana client
-    :param space_id: ID of space to delete
-    """
-    try:
-        client.spaces.delete(id=space_id)
-    except NotFoundError:
-        # Space already deleted or doesn't exist
-        pass
-    except Exception:
-        # DELETE may return empty response, verify deletion by trying to get
+    def test_create_duplicate_space_conflict(self, kibana_client):
+        """Creating the same space twice raises ConflictError."""
+        space_id = _unique_id("dup")
         try:
-            client.spaces.get(id=space_id)
-            # If get succeeds, deletion failed
-            raise AssertionError(f"Space {space_id} was not deleted")
-        except NotFoundError:
-            # Expected - space was deleted successfully
-            pass
-
-
-def create_test_space(client, created_spaces, space_id, name, **kwargs):
-    """
-    Create a test space and track it for cleanup.
-
-    :param client: Kibana client
-    :param created_spaces: List to track created spaces
-    :param space_id: Space ID
-    :param name: Space name
-    :param kwargs: Additional space parameters
-    :return: Created space data
-    """
-    response = client.spaces.create(id=space_id, name=name, **kwargs)
-    space = response.body
-    created_spaces.append(space["id"])
-    return space
-
-
-class TestSpacesClientCRUD:
-    """Test basic CRUD operations for spaces."""
-
-    def test_create_space_minimal(self, kibana_client, created_spaces, unique_space_id):
-        """Test creating a space with minimal parameters."""
-        space = create_test_space(
-            kibana_client,
-            created_spaces,
-            space_id=unique_space_id,
-            name="Test Space",
-        )
-
-        assert space["id"] == unique_space_id
-        assert space["name"] == "Test Space"
-        assert "disabledFeatures" in space
-
-    def test_create_space_with_all_parameters(
-        self, kibana_client, created_spaces, unique_space_id
-    ):
-        """Test creating a space with all optional parameters."""
-        space = create_test_space(
-            kibana_client,
-            created_spaces,
-            space_id=unique_space_id,
-            name="Marketing Team",
-            description="Space for marketing department",
-            color="#FF0000",
-            initials="MK",
-            disabled_features=["dev_tools", "advancedSettings"],
-        )
-
-        assert space["id"] == unique_space_id
-        assert space["name"] == "Marketing Team"
-        assert space["description"] == "Space for marketing department"
-        assert space["color"] == "#FF0000"
-        assert space["initials"] == "MK"
-        assert "dev_tools" in space["disabledFeatures"]
-        assert "advancedSettings" in space["disabledFeatures"]
-
-    def test_create_duplicate_space_raises_conflict(
-        self, kibana_client, created_spaces, unique_space_id
-    ):
-        """Test that creating a duplicate space raises ConflictError."""
-        # Create first space
-        create_test_space(
-            kibana_client,
-            created_spaces,
-            space_id=unique_space_id,
-            name="Test Space",
-        )
-
-        # Try to create duplicate
-        with pytest.raises(ConflictError):
-            kibana_client.spaces.create(id=unique_space_id, name="Duplicate Space")
-
-    def test_get_space(self, kibana_client, created_spaces, unique_space_id):
-        """Test getting a space by ID."""
-        # Create space
-        created = create_test_space(
-            kibana_client,
-            created_spaces,
-            space_id=unique_space_id,
-            name="Test Space",
-            description="Test description",
-        )
-
-        # Get space
-        response = kibana_client.spaces.get(id=unique_space_id)
-        space = response.body
-
-        assert space["id"] == created["id"]
-        assert space["name"] == created["name"]
-        assert space["description"] == created["description"]
+            kibana_client.spaces.create(id=space_id, name="kbnpy dup space")
+            with pytest.raises(ConflictError):
+                kibana_client.spaces.create(id=space_id, name="kbnpy dup space")
+        finally:
+            _safe_delete_space(kibana_client, space_id)
 
     def test_get_nonexistent_space_raises_not_found(self, kibana_client):
-        """Test that getting a non-existent space raises NotFoundError."""
+        """Getting a space that does not exist raises NotFoundError."""
         with pytest.raises(NotFoundError):
-            kibana_client.spaces.get(id="nonexistent-space-id")
+            kibana_client.spaces.get(id=_unique_id("missing"))
 
-    def test_get_all_spaces(self, kibana_client, created_spaces, unique_space_id):
-        """Test getting all spaces."""
-        # Create a test space
-        create_test_space(
-            kibana_client,
-            created_spaces,
-            space_id=unique_space_id,
-            name="Test Space",
-        )
+    def test_get_all_purpose_and_authorized_purposes(self, kibana_client):
+        """Exercise the purpose / include_authorized_purposes query params."""
+        # authorizedPurposes map is returned when requested
+        with_purposes = kibana_client.spaces.get_all(include_authorized_purposes=True)
+        default_space = next(s for s in with_purposes.body if s["id"] == "default")
+        assert "authorizedPurposes" in default_space
+        assert isinstance(default_space["authorizedPurposes"], dict)
 
-        # Get all spaces
-        response = kibana_client.spaces.get_all()
-        spaces = response.body
+        # purpose filter is accepted on its own
+        copyable = kibana_client.spaces.get_all(purpose="copySavedObjectsIntoSpace")
+        assert isinstance(copyable.body, list)
+        assert "default" in [s["id"] for s in copyable.body]
 
-        assert isinstance(spaces, list)
-        assert len(spaces) > 0
-
-        # Verify our test space is in the list
-        space_ids = [space["id"] for space in spaces]
-        assert unique_space_id in space_ids
-
-        # Verify default space exists
-        assert "default" in space_ids
-
-    def test_update_space_name(self, kibana_client, created_spaces, unique_space_id):
-        """Test updating a space's name."""
-        # Create space
-        create_test_space(
-            kibana_client,
-            created_spaces,
-            space_id=unique_space_id,
-            name="Original Name",
-        )
-
-        # Update name
-        response = kibana_client.spaces.update(
-            id=unique_space_id,
-            name="Updated Name",
-        )
-        updated = response.body
-
-        assert updated["id"] == unique_space_id
-        assert updated["name"] == "Updated Name"
-
-        # Verify update persisted
-        response = kibana_client.spaces.get(id=unique_space_id)
-        space = response.body
-        assert space["name"] == "Updated Name"
-
-    def test_update_space_all_fields(
-        self, kibana_client, created_spaces, unique_space_id
-    ):
-        """Test updating all fields of a space."""
-        # Create space
-        create_test_space(
-            kibana_client,
-            created_spaces,
-            space_id=unique_space_id,
-            name="Original Name",
-            description="Original description",
-            color="#FF0000",
-        )
-
-        # Update all fields
-        response = kibana_client.spaces.update(
-            id=unique_space_id,
-            name="Updated Name",
-            description="Updated description",
-            color="#00FF00",
-            initials="UP",
-            disabled_features=["dev_tools"],
-        )
-        updated = response.body
-
-        assert updated["name"] == "Updated Name"
-        assert updated["description"] == "Updated description"
-        assert updated["color"] == "#00FF00"
-        assert updated["initials"] == "UP"
-        assert "dev_tools" in updated["disabledFeatures"]
-
-    def test_update_nonexistent_space_raises_not_found(self, kibana_client):
-        """Test that updating a non-existent space raises NotFoundError."""
-        with pytest.raises(NotFoundError):
-            kibana_client.spaces.update(
-                id="nonexistent-space-id",
-                name="New Name",
+        # Live 9.4.3 rejects combining purpose with
+        # include_authorized_purposes=true
+        with pytest.raises(BadRequestError):
+            kibana_client.spaces.get_all(
+                purpose="copySavedObjectsIntoSpace",
+                include_authorized_purposes=True,
             )
 
-    def test_delete_space(self, kibana_client, unique_space_id):
-        """Test deleting a space."""
-        # Create space (don't track for cleanup since we're testing deletion)
-        kibana_client.spaces.create(id=unique_space_id, name="Test Space")
 
-        # Delete space
-        response = kibana_client.spaces.delete(id=unique_space_id)
+class TestSpacesCopyIntegration:
+    """Live tests for the saved-object copy/share endpoints."""
 
-        # Verify deletion (status code should be 204 or similar)
-        assert response.meta.status in [200, 204]
-
-        # Verify space no longer exists
-        with pytest.raises(NotFoundError):
-            kibana_client.spaces.get(id=unique_space_id)
-
-    def test_delete_nonexistent_space_raises_not_found(self, kibana_client):
-        """Test that deleting a non-existent space raises NotFoundError."""
-        with pytest.raises(NotFoundError):
-            kibana_client.spaces.delete(id="nonexistent-space-id")
-
-
-class TestSpacesClientValidation:
-    """Test parameter validation for SpacesClient."""
-
-    def test_create_without_id_raises_error(self, kibana_client):
-        """Test that creating a space without ID raises ValueError."""
-        with pytest.raises(ValueError, match="Parameter 'id' is required"):
-            kibana_client.spaces.create(id="", name="Test Space")
-
-    def test_create_without_name_raises_error(self, kibana_client):
-        """Test that creating a space without name raises ValueError."""
-        with pytest.raises(ValueError, match="Parameter 'name' is required"):
-            kibana_client.spaces.create(id="test-space", name="")
-
-    def test_get_without_id_raises_error(self, kibana_client):
-        """Test that getting a space without ID raises ValueError."""
-        with pytest.raises(ValueError, match="Parameter 'id' is required"):
-            kibana_client.spaces.get(id="")
-
-    def test_update_without_id_raises_error(self, kibana_client):
-        """Test that updating a space without ID raises ValueError."""
-        with pytest.raises(ValueError, match="Parameter 'id' is required"):
-            kibana_client.spaces.update(id="", name="Test")
-
-    def test_delete_without_id_raises_error(self, kibana_client):
-        """Test that deleting a space without ID raises ValueError."""
-        with pytest.raises(ValueError, match="Parameter 'id' is required"):
-            kibana_client.spaces.delete(id="")
-
-
-class TestSpacesClientComplexScenarios:
-    """Test complex scenarios and edge cases."""
-
-    def test_create_update_delete_workflow(
-        self, kibana_client, created_spaces, unique_space_id
-    ):
-        """Test complete workflow: create, update, delete."""
-        # Create
-        space = create_test_space(
-            kibana_client,
-            created_spaces,
-            space_id=unique_space_id,
-            name="Initial Name",
-            description="Initial description",
-        )
-        assert space["name"] == "Initial Name"
-
-        # Update
-        response = kibana_client.spaces.update(
-            id=unique_space_id,
-            name="Updated Name",
-            description="Updated description",
-        )
-        updated = response.body
-        assert updated["name"] == "Updated Name"
-
-        # Delete
-        kibana_client.spaces.delete(id=unique_space_id)
-        created_spaces.remove(unique_space_id)  # Remove from cleanup list
-
-        # Verify deletion
-        with pytest.raises(NotFoundError):
-            kibana_client.spaces.get(id=unique_space_id)
-
-    def test_multiple_spaces_creation(self, kibana_client, created_spaces):
-        """Test creating multiple spaces."""
-        space_ids = [f"test-space-{uuid.uuid4().hex[:8]}" for _ in range(3)]
-
-        # Create multiple spaces
-        for i, space_id in enumerate(space_ids):
-            create_test_space(
-                kibana_client,
-                created_spaces,
-                space_id=space_id,
-                name=f"Test Space {i + 1}",
+    def test_copy_saved_objects_and_resolve_conflicts(self, kibana_client):
+        """Copy a dashboard from default into a space, then resolve a conflict."""
+        space_id = _unique_id("copy")
+        dash_id = _unique_id("dash")
+        try:
+            kibana_client.spaces.create(id=space_id, name="kbnpy copy target")
+            kibana_client.saved_objects.create(
+                type="dashboard",
+                id=dash_id,
+                attributes={"title": f"kbnpy spaces copy test {dash_id}"},
             )
 
-        # Verify all spaces exist
-        response = kibana_client.spaces.get_all()
-        all_spaces = response.body
-        all_space_ids = [space["id"] for space in all_spaces]
+            # First copy succeeds
+            copied = kibana_client.spaces.copy_saved_objects(
+                spaces=[space_id],
+                objects=[{"type": "dashboard", "id": dash_id}],
+                create_new_copies=False,
+            )
+            result = copied.body[space_id]
+            assert result["success"] is True
+            assert result["successCount"] == 1
+            destination_id = result["successResults"][0].get("destinationId", dash_id)
 
-        for space_id in space_ids:
-            assert space_id in all_space_ids
+            # Copying again without overwrite reports a conflict
+            conflicted = kibana_client.spaces.copy_saved_objects(
+                spaces=[space_id],
+                objects=[{"type": "dashboard", "id": dash_id}],
+                create_new_copies=False,
+            )
+            result = conflicted.body[space_id]
+            assert result["success"] is False
+            assert result["errors"][0]["error"]["type"] == "conflict"
 
-    def test_space_with_special_characters_in_name(
-        self, kibana_client, created_spaces, unique_space_id
+            # Resolve the conflict by overwriting the destination object
+            resolved = kibana_client.spaces.resolve_copy_saved_objects_errors(
+                objects=[{"type": "dashboard", "id": dash_id}],
+                retries={
+                    space_id: [
+                        {
+                            "type": "dashboard",
+                            "id": dash_id,
+                            "destinationId": destination_id,
+                            "overwrite": True,
+                        }
+                    ]
+                },
+                create_new_copies=False,
+            )
+            result = resolved.body[space_id]
+            assert result["success"] is True
+            assert result["successCount"] == 1
+        finally:
+            _safe_delete_saved_object(kibana_client, "dashboard", dash_id)
+            # Deleting the space also removes the copies inside it
+            _safe_delete_space(kibana_client, space_id)
+
+    def test_shareable_references_and_update_objects_spaces_roundtrip(
+        self, kibana_client
     ):
-        """Test creating a space with special characters in name."""
-        space = create_test_space(
-            kibana_client,
-            created_spaces,
-            space_id=unique_space_id,
-            name="Test Space: Marketing & Sales (2024)",
-            description="Space with special chars: @#$%",
-        )
+        """Share an index-pattern into a space and back via the spaces APIs."""
+        space_id = _unique_id("share")
+        ip_id = _unique_id("ip")
+        try:
+            kibana_client.spaces.create(id=space_id, name="kbnpy share target")
+            # index-pattern is a share-capable saved object type
+            kibana_client.saved_objects.create(
+                type="index-pattern",
+                id=ip_id,
+                attributes={"title": f"{ip_id}-*"},
+            )
 
-        assert space["name"] == "Test Space: Marketing & Sales (2024)"
-        assert space["description"] == "Space with special chars: @#$%"
+            refs = kibana_client.spaces.get_shareable_references(
+                objects=[{"type": "index-pattern", "id": ip_id}]
+            )
+            ref = refs.body["objects"][0]
+            assert ref["type"] == "index-pattern"
+            assert ref["id"] == ip_id
+            assert ref["spaces"] == ["default"]
 
-    def test_space_with_long_description(
-        self, kibana_client, created_spaces, unique_space_id
-    ):
-        """Test creating a space with a long description."""
-        long_description = "A" * 500  # 500 character description
+            # Share into the target space
+            shared = kibana_client.spaces.update_objects_spaces(
+                objects=[{"type": "index-pattern", "id": ip_id}],
+                spaces_to_add=[space_id],
+                spaces_to_remove=[],
+            )
+            assert set(shared.body["objects"][0]["spaces"]) == {"default", space_id}
 
-        space = create_test_space(
-            kibana_client,
-            created_spaces,
-            space_id=unique_space_id,
-            name="Test Space",
-            description=long_description,
-        )
+            refs = kibana_client.spaces.get_shareable_references(
+                objects=[{"type": "index-pattern", "id": ip_id}]
+            )
+            assert set(refs.body["objects"][0]["spaces"]) == {"default", space_id}
 
-        assert space["description"] == long_description
+            # Unshare again
+            unshared = kibana_client.spaces.update_objects_spaces(
+                objects=[{"type": "index-pattern", "id": ip_id}],
+                spaces_to_add=[],
+                spaces_to_remove=[space_id],
+            )
+            assert unshared.body["objects"][0]["spaces"] == ["default"]
+        finally:
+            _safe_delete_saved_object(kibana_client, "index-pattern", ip_id)
+            _safe_delete_space(kibana_client, space_id)
 
-    def test_update_space_partial_fields(
-        self, kibana_client, created_spaces, unique_space_id
-    ):
-        """Test updating only some fields of a space."""
-        # Create space with multiple fields
-        create_test_space(
-            kibana_client,
-            created_spaces,
-            space_id=unique_space_id,
-            name="Original Name",
-            description="Original description",
-            color="#FF0000",
-        )
+    def test_disable_legacy_url_aliases(self, kibana_client):
+        """Disabling a (nonexistent) legacy URL alias returns 204 No Content."""
+        space_id = _unique_id("alias")
+        try:
+            kibana_client.spaces.create(id=space_id, name="kbnpy alias target")
+            response = kibana_client.spaces.disable_legacy_url_aliases(
+                aliases=[
+                    {
+                        "targetSpace": space_id,
+                        "targetType": "dashboard",
+                        "sourceId": _unique_id("no-such-alias"),
+                    }
+                ]
+            )
+            assert response.meta.status == 204
+        finally:
+            _safe_delete_space(kibana_client, space_id)
 
-        # Update only name
-        response = kibana_client.spaces.update(
-            id=unique_space_id,
-            name="Updated Name",
-        )
-        updated = response.body
 
-        assert updated["name"] == "Updated Name"
-        # Other fields should remain unchanged
-        assert updated["description"] == "Original description"
-        assert updated["color"] == "#FF0000"
+class TestAsyncSpacesIntegration:
+    """Async round-trips against the live stack."""
+
+    @pytest.mark.asyncio
+    async def test_async_space_lifecycle(self):
+        """Create, get, update, list, and delete a space with the async client."""
+        client = create_test_async_kibana_client(auth_method="auto")
+        space_id = _unique_id("async")
+        try:
+            created = await client.spaces.create(
+                id=space_id,
+                name="kbnpy async space",
+                description="async integration test",
+                solution="es",
+            )
+            assert created.body["id"] == space_id
+            assert created.body["solution"] == "es"
+
+            fetched = await client.spaces.get(id=space_id)
+            assert fetched.body["name"] == "kbnpy async space"
+
+            updated = await client.spaces.update(
+                id=space_id,
+                name="kbnpy async space v2",
+                solution="es",
+            )
+            assert updated.body["name"] == "kbnpy async space v2"
+
+            all_spaces = await client.spaces.get_all(include_authorized_purposes=True)
+            match = next(s for s in all_spaces.body if s["id"] == space_id)
+            assert "authorizedPurposes" in match
+
+            await client.spaces.delete(id=space_id)
+            with pytest.raises(NotFoundError):
+                await client.spaces.get(id=space_id)
+        finally:
+            try:
+                await client.spaces.delete(id=space_id)
+            except Exception:
+                pass
+            await client.close()
+
+    @pytest.mark.asyncio
+    async def test_async_get_shareable_references(self):
+        """Async round-trip of the _get_shareable_references endpoint."""
+        client = create_test_async_kibana_client(auth_method="auto")
+        ip_id = _unique_id("aio-ip")
+        try:
+            await client.saved_objects.create(
+                type="index-pattern",
+                id=ip_id,
+                attributes={"title": f"{ip_id}-*"},
+            )
+            refs = await client.spaces.get_shareable_references(
+                objects=[{"type": "index-pattern", "id": ip_id}]
+            )
+            assert refs.body["objects"][0]["spaces"] == ["default"]
+        finally:
+            try:
+                await client.saved_objects.delete(
+                    type="index-pattern", id=ip_id, force=True
+                )
+            except Exception:
+                pass
+            await client.close()

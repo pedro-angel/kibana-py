@@ -17,7 +17,7 @@ Example::
 import json
 import logging
 import traceback
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 
@@ -100,9 +100,7 @@ class JSONFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         """Format a log record as a JSON string."""
         log_entry: dict[str, Any] = {
-            "timestamp": datetime.fromtimestamp(
-                record.created, tz=timezone.utc
-            ).isoformat(),
+            "timestamp": datetime.fromtimestamp(record.created, tz=UTC).isoformat(),
             "level": record.levelname,
             "logger": record.name,
             "message": record.getMessage(),
@@ -142,7 +140,7 @@ class JSONFormatter(logging.Formatter):
                     try:
                         json.dumps(value)  # Test serializability
                         log_entry[key] = value
-                    except (TypeError, ValueError):
+                    except TypeError, ValueError:
                         log_entry[key] = str(value)
 
         return json.dumps(log_entry, default=str, ensure_ascii=False)

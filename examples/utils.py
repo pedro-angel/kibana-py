@@ -326,19 +326,19 @@ def _get_opentelemetry_version() -> str:
             import importlib.metadata
 
             return importlib.metadata.version("opentelemetry-sdk")
-        except (ImportError, Exception):
+        except ImportError, Exception:
             # Fallback: try to get from opentelemetry-api
             try:
                 import importlib.metadata
 
                 return importlib.metadata.version("opentelemetry-api")
-            except (ImportError, Exception):
+            except ImportError, Exception:
                 # Last resort: try to get from the module itself
                 try:
                     from opentelemetry import __version__
 
                     return __version__
-                except (ImportError, AttributeError):
+                except ImportError, AttributeError:
                     return "unknown"
     except Exception:
         return "unknown"

@@ -1,7 +1,7 @@
 """Unit tests for serializer classes."""
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -55,7 +55,7 @@ class TestJSONSerializer:
     def test_dumps_datetime_iso8601(self):
         """Test datetime serialization to ISO 8601 format."""
         serializer = JSONSerializer()
-        dt = datetime(2024, 1, 15, 10, 30, 45, 123456, tzinfo=timezone.utc)
+        dt = datetime(2024, 1, 15, 10, 30, 45, 123456, tzinfo=UTC)
         data = {"timestamp": dt}
         result = serializer.dumps(data)
 
@@ -78,8 +78,8 @@ class TestJSONSerializer:
     def test_dumps_list_with_datetimes(self):
         """Test serializing list containing datetime objects."""
         serializer = JSONSerializer()
-        dt1 = datetime(2024, 1, 15, tzinfo=timezone.utc)
-        dt2 = datetime(2024, 2, 20, tzinfo=timezone.utc)
+        dt1 = datetime(2024, 1, 15, tzinfo=UTC)
+        dt2 = datetime(2024, 2, 20, tzinfo=UTC)
         data = {"dates": [dt1, dt2]}
         result = serializer.dumps(data)
 
@@ -220,7 +220,7 @@ class TestOrjsonSerializer:
             pytest.skip("orjson not installed")
 
         serializer = OrjsonSerializer()
-        dt = datetime(2024, 1, 15, 10, 30, 45, 123456, tzinfo=timezone.utc)
+        dt = datetime(2024, 1, 15, 10, 30, 45, 123456, tzinfo=UTC)
         data = {"timestamp": dt}
         result = serializer.dumps(data)
 

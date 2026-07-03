@@ -556,7 +556,7 @@ class TestAsyncSavedObjectsClientSpaceSupport:
         )
 
         # Create space-scoped client
-        space_client = async_kibana_client.space(unique_space_id)
+        space_client = await async_kibana_client.space(unique_space_id)
 
         # Create saved object using space-scoped client
         attributes = {"title": "Test Async Space Scoped Object", "buildNum": 54321}

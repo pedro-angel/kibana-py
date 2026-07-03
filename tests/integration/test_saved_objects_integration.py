@@ -1,18 +1,30 @@
-"""Integration tests for SavedObjectsClient."""
+"""Integration tests for SavedObjectsClient against a live Kibana instance.
+
+Covers CRUD, find (list/dict query params), resolve, bulk lifecycle,
+export -> import NDJSON round trip, resolve_import_errors and the
+encrypted-saved-objects key rotation endpoint. All created resources are
+prefixed with ``kbnpy-savedobj-`` and cleaned up.
+"""
 
 import uuid
 
 import pytest
 
-from kibana.exceptions import ConflictError, NotFoundError
+from kibana.exceptions import BadRequestError, ConflictError, NotFoundError
 
-from .utils import create_test_kibana_client, is_kibana_available
+from .utils import (
+    create_test_async_kibana_client,
+    create_test_kibana_client,
+    is_kibana_available,
+)
 
 # Skip all integration tests if Kibana is not available
 pytestmark = pytest.mark.skipif(
     not is_kibana_available(),
     reason="Kibana not available. Set KIBANA_URL or start elastic-start-local stack.",
 )
+
+PREFIX = "kbnpy-savedobj"
 
 
 @pytest.fixture
@@ -24,325 +36,447 @@ def kibana_client():
 
 
 @pytest.fixture
-def created_saved_objects():
+def created_saved_objects(kibana_client):
     """Track saved objects created during tests for automatic cleanup."""
     saved_objects: list[tuple[str, str]] = []  # List of (type, id) tuples
     yield saved_objects
 
-    # Cleanup: Delete all created saved objects
-    if saved_objects:
-        client = create_test_kibana_client()
+    for obj_type, obj_id in saved_objects:
         try:
-            for obj_type, obj_id in saved_objects:
-                try:
-                    client.saved_objects.delete(type=obj_type, id=obj_id)
-                    print(f"Cleaned up saved object: {obj_type}/{obj_id}")
-                except NotFoundError:
-                    # Object already deleted, that's fine
-                    pass
-                except Exception as e:
-                    # Log but don't fail the test due to cleanup issues
-                    print(
-                        f"Warning: Failed to cleanup saved object {obj_type}/{obj_id}: {e}"
-                    )
-        finally:
-            client.close()
+            kibana_client.saved_objects.delete(type=obj_type, id=obj_id, force=True)
+        except NotFoundError:
+            pass  # Already deleted by the test itself
+        except Exception as e:  # pragma: no cover - cleanup best effort
+            print(f"Warning: failed to clean up {obj_type}/{obj_id}: {e}")
 
 
 @pytest.fixture
-def unique_object_id():
-    """Generate a unique object ID for testing."""
-    return f"test-obj-{uuid.uuid4().hex[:8]}"
+def unique_suffix():
+    """Generate a unique suffix for resource IDs."""
+    return uuid.uuid4().hex[:8]
 
 
-def get_test_visualization_attributes(title="Test Visualization"):
-    """Get standard attributes for a test visualization."""
+def tag_attributes(name: str) -> dict:
+    """Minimal valid attributes for a tag saved object."""
     return {
-        "title": title,
-        "visState": "{}",
-        "uiStateJSON": "{}",
-        "description": "",
-        "version": 1,
-        "kibanaSavedObjectMeta": {"searchSourceJSON": "{}"},
+        "name": name,
+        "description": "kibana-py integration test",
+        "color": "#00bfb3",
     }
 
 
-class TestSavedObjectsClientCRUD:
-    """Test basic CRUD operations for saved objects."""
+class TestSavedObjectsCRUD:
+    """Test basic CRUD + resolve operations for saved objects."""
 
-    def test_create_and_get_saved_object(
-        self, kibana_client, created_saved_objects, unique_object_id
+    def test_create_get_update_delete_lifecycle(
+        self, kibana_client, created_saved_objects, unique_suffix
     ):
-        """Test creating and retrieving a saved object."""
-        # Create a visualization saved object
-        response = kibana_client.saved_objects.create(
-            type="visualization",
-            attributes=get_test_visualization_attributes("Test Viz"),
-            id=unique_object_id,
+        """Full single-object lifecycle with explicit ID."""
+        obj_id = f"{PREFIX}-crud-{unique_suffix}"
+
+        created = kibana_client.saved_objects.create(
+            type="tag",
+            id=obj_id,
+            attributes=tag_attributes(f"{PREFIX}-crud-{unique_suffix}"),
         )
-        created = response.body
-        created_saved_objects.append((created["type"], created["id"]))
+        created_saved_objects.append(("tag", obj_id))
 
-        # Verify creation
-        assert created["id"] == unique_object_id
-        assert created["type"] == "visualization"
-        assert created["attributes"]["title"] == "Test Viz"
-        assert "version" in created
+        assert created["id"] == obj_id
+        assert created["type"] == "tag"
+        assert "version" in created.body
 
-        # Get the saved object
-        response = kibana_client.saved_objects.get(
-            type="visualization",
-            id=unique_object_id,
+        retrieved = kibana_client.saved_objects.get(type="tag", id=obj_id)
+        assert retrieved["id"] == obj_id
+        assert retrieved["attributes"]["name"] == f"{PREFIX}-crud-{unique_suffix}"
+
+        updated = kibana_client.saved_objects.update(
+            type="tag",
+            id=obj_id,
+            attributes={"description": "updated by kibana-py"},
         )
-        retrieved = response.body
+        assert updated["id"] == obj_id
 
-        # Verify retrieval
-        assert retrieved["id"] == created["id"]
-        assert retrieved["type"] == created["type"]
-        assert retrieved["attributes"]["title"] == "Test Viz"
+        after_update = kibana_client.saved_objects.get(type="tag", id=obj_id)
+        assert after_update["attributes"]["description"] == "updated by kibana-py"
+        # Partial update must not clobber other attributes
+        assert after_update["attributes"]["name"] == f"{PREFIX}-crud-{unique_suffix}"
 
-    def test_create_saved_object_auto_id(self, kibana_client, created_saved_objects):
-        """Test creating a saved object with auto-generated ID."""
-        # Create without specifying ID
-        response = kibana_client.saved_objects.create(
-            type="visualization",
-            attributes=get_test_visualization_attributes("Auto ID Test"),
-        )
-        saved_object = response.body
-        created_saved_objects.append((saved_object["type"], saved_object["id"]))
+        delete_resp = kibana_client.saved_objects.delete(type="tag", id=obj_id)
+        assert delete_resp.meta.status == 200
 
-        # Verify the response has an auto-generated ID
-        assert "id" in saved_object
-        assert saved_object["type"] == "visualization"
-        assert saved_object["attributes"]["title"] == "Auto ID Test"
+        with pytest.raises(NotFoundError):
+            kibana_client.saved_objects.get(type="tag", id=obj_id)
 
-    def test_create_with_overwrite(
-        self, kibana_client, created_saved_objects, unique_object_id
+    def test_create_conflict_and_overwrite(
+        self, kibana_client, created_saved_objects, unique_suffix
     ):
-        """Test creating a saved object with overwrite."""
-        # Create initial object
-        response1 = kibana_client.saved_objects.create(
-            type="visualization",
-            attributes=get_test_visualization_attributes("Initial"),
-            id=unique_object_id,
+        """Creating twice conflicts; overwrite=True succeeds."""
+        obj_id = f"{PREFIX}-conflict-{unique_suffix}"
+
+        kibana_client.saved_objects.create(
+            type="tag", id=obj_id, attributes=tag_attributes(f"{PREFIX}-a")
         )
-        obj1 = response1.body
-        created_saved_objects.append((obj1["type"], obj1["id"]))
+        created_saved_objects.append(("tag", obj_id))
 
-        # Create again with overwrite=True (should succeed)
-        response2 = kibana_client.saved_objects.create(
-            type="visualization",
-            attributes=get_test_visualization_attributes("Overwritten"),
-            id=unique_object_id,
-            overwrite=True,
-        )
-        obj2 = response2.body
-
-        # Verify overwrite
-        assert obj2["id"] == unique_object_id
-        assert obj2["attributes"]["title"] == "Overwritten"
-        assert obj2["version"] != obj1["version"]
-
-    def test_create_conflict(
-        self, kibana_client, created_saved_objects, unique_object_id
-    ):
-        """Test that creating a duplicate raises ConflictError."""
-        # Create initial object
-        response = kibana_client.saved_objects.create(
-            type="visualization",
-            attributes=get_test_visualization_attributes("Initial"),
-            id=unique_object_id,
-        )
-        obj = response.body
-        created_saved_objects.append((obj["type"], obj["id"]))
-
-        # Try to create again without overwrite (should fail)
         with pytest.raises(ConflictError):
             kibana_client.saved_objects.create(
-                type="visualization",
-                attributes=get_test_visualization_attributes("Duplicate"),
-                id=unique_object_id,
-                overwrite=False,
+                type="tag", id=obj_id, attributes=tag_attributes(f"{PREFIX}-b")
             )
 
-    def test_update_saved_object(
-        self, kibana_client, created_saved_objects, unique_object_id
+        overwritten = kibana_client.saved_objects.create(
+            type="tag",
+            id=obj_id,
+            attributes=tag_attributes(f"{PREFIX}-c"),
+            overwrite=True,
+        )
+        assert overwritten["id"] == obj_id
+
+    def test_resolve_saved_object(
+        self, kibana_client, created_saved_objects, unique_suffix
     ):
-        """Test updating a saved object."""
-        # Create object
-        response = kibana_client.saved_objects.create(
-            type="visualization",
-            attributes=get_test_visualization_attributes("Original"),
-            id=unique_object_id,
+        """resolve() returns the object with an exactMatch outcome."""
+        obj_id = f"{PREFIX}-resolve-{unique_suffix}"
+
+        kibana_client.saved_objects.create(
+            type="tag", id=obj_id, attributes=tag_attributes(f"{PREFIX}-resolve")
         )
-        created = response.body
-        created_saved_objects.append((created["type"], created["id"]))
+        created_saved_objects.append(("tag", obj_id))
 
-        # Update the object
-        response = kibana_client.saved_objects.update(
-            type="visualization",
-            id=unique_object_id,
-            attributes=get_test_visualization_attributes("Updated"),
-        )
-        updated = response.body
+        resolved = kibana_client.saved_objects.resolve(type="tag", id=obj_id)
+        assert resolved["outcome"] == "exactMatch"
+        assert resolved["saved_object"]["id"] == obj_id
 
-        # Verify update
-        assert updated["id"] == created["id"]
-        assert updated["attributes"]["title"] == "Updated"
-        assert updated["version"] != created["version"]
 
-    def test_update_with_version(
-        self, kibana_client, created_saved_objects, unique_object_id
+class TestSavedObjectsFind:
+    """Test find() query parameter serialization against the live server."""
+
+    def test_find_with_search_and_search_fields_list(
+        self, kibana_client, created_saved_objects, unique_suffix
     ):
-        """Test updating with version for optimistic concurrency."""
-        # Create object
-        response = kibana_client.saved_objects.create(
-            type="visualization",
-            attributes=get_test_visualization_attributes("Original"),
-            id=unique_object_id,
+        """search_fields lists are sent as repeated keys and actually match."""
+        name = f"{PREFIX}-find-{unique_suffix}"
+        created = kibana_client.saved_objects.create(
+            type="tag", attributes=tag_attributes(name)
         )
-        created = response.body
-        created_saved_objects.append((created["type"], created["id"]))
+        created_saved_objects.append(("tag", created["id"]))
 
-        # Update with correct version (should succeed)
-        response = kibana_client.saved_objects.update(
-            type="visualization",
-            id=unique_object_id,
-            attributes=get_test_visualization_attributes("Updated"),
-            version=created["version"],
+        results = kibana_client.saved_objects.find(
+            type="tag",
+            search=f"{name}*",
+            search_fields=["name", "description"],
+            per_page=10,
         )
-        updated = response.body
-        assert updated["attributes"]["title"] == "Updated"
+        found_ids = [obj["id"] for obj in results["saved_objects"]]
+        assert created["id"] in found_ids
 
-        # Try to update with old version (should fail)
-        with pytest.raises(ConflictError):
-            kibana_client.saved_objects.update(
-                type="visualization",
-                id=unique_object_id,
-                attributes=get_test_visualization_attributes("Failed Update"),
-                version=created["version"],  # Old version
-            )
-
-    def test_delete_saved_object(
-        self, kibana_client, created_saved_objects, unique_object_id
+    def test_find_with_type_list(
+        self, kibana_client, created_saved_objects, unique_suffix
     ):
-        """Test deleting a saved object."""
-        # Create object
-        response = kibana_client.saved_objects.create(
-            type="visualization",
-            attributes=get_test_visualization_attributes("To Delete"),
-            id=unique_object_id,
+        """Multiple types are sent as repeated keys, not a Python repr."""
+        name = f"{PREFIX}-multitype-{unique_suffix}"
+        created = kibana_client.saved_objects.create(
+            type="tag", attributes=tag_attributes(name)
         )
-        created = response.body
-        created_saved_objects.append((created["type"], created["id"]))
+        created_saved_objects.append(("tag", created["id"]))
 
-        # Delete the object
-        kibana_client.saved_objects.delete(
-            type="visualization",
-            id=unique_object_id,
+        results = kibana_client.saved_objects.find(
+            type=["tag", "dashboard"],
+            search=f"{name}*",
+            search_fields=["name"],
+        )
+        found = [(o["type"], o["id"]) for o in results["saved_objects"]]
+        assert ("tag", created["id"]) in found
+
+    def test_find_with_fields_list_strips_attributes(
+        self, kibana_client, created_saved_objects, unique_suffix
+    ):
+        """fields lists are sent as repeated keys and limit returned attributes."""
+        name = f"{PREFIX}-fields-{unique_suffix}"
+        created = kibana_client.saved_objects.create(
+            type="tag", attributes=tag_attributes(name)
+        )
+        created_saved_objects.append(("tag", created["id"]))
+
+        results = kibana_client.saved_objects.find(
+            type="tag",
+            search=f"{name}*",
+            search_fields=["name"],
+            fields=["name", "color"],
+        )
+        matching = [o for o in results["saved_objects"] if o["id"] == created["id"]]
+        assert matching, "created tag not returned by find with fields filter"
+        attrs = matching[0]["attributes"]
+        assert attrs["name"] == name
+        assert "description" not in attrs  # excluded by the fields filter
+
+    def test_find_with_has_reference_dict(
+        self, kibana_client, created_saved_objects, unique_suffix
+    ):
+        """has_reference dicts are JSON-encoded and filter by reference."""
+        tag = kibana_client.saved_objects.create(
+            type="tag", attributes=tag_attributes(f"{PREFIX}-ref-{unique_suffix}")
+        )
+        created_saved_objects.append(("tag", tag["id"]))
+
+        dash_id = f"{PREFIX}-refdash-{unique_suffix}"
+        kibana_client.saved_objects.create(
+            type="dashboard",
+            id=dash_id,
+            attributes={"title": f"{PREFIX}-refdash-{unique_suffix}"},
+            references=[{"type": "tag", "id": tag["id"], "name": "tag-ref"}],
+        )
+        created_saved_objects.append(("dashboard", dash_id))
+
+        results = kibana_client.saved_objects.find(
+            type="dashboard",
+            has_reference={"type": "tag", "id": tag["id"]},
+        )
+        found_ids = [obj["id"] for obj in results["saved_objects"]]
+        assert found_ids == [dash_id]
+
+
+class TestSavedObjectsBulk:
+    """Test the bulk_* lifecycle against the live server."""
+
+    def test_bulk_lifecycle(self, kibana_client, created_saved_objects, unique_suffix):
+        """bulk_create -> bulk_get -> bulk_update -> bulk_resolve -> bulk_delete."""
+        ids = [f"{PREFIX}-bulk-{unique_suffix}-{i}" for i in range(2)]
+        for obj_id in ids:
+            created_saved_objects.append(("tag", obj_id))
+
+        # bulk_create
+        created = kibana_client.saved_objects.bulk_create(
+            objects=[
+                {
+                    "type": "tag",
+                    "id": obj_id,
+                    "attributes": tag_attributes(obj_id),
+                }
+                for obj_id in ids
+            ]
+        )
+        assert [o["id"] for o in created["saved_objects"]] == ids
+        assert all("error" not in o for o in created["saved_objects"])
+
+        # bulk_create without overwrite reports per-object conflicts
+        conflicted = kibana_client.saved_objects.bulk_create(
+            objects=[
+                {"type": "tag", "id": ids[0], "attributes": tag_attributes(ids[0])}
+            ]
+        )
+        assert conflicted["saved_objects"][0]["error"]["statusCode"] == 409
+
+        # bulk_get
+        fetched = kibana_client.saved_objects.bulk_get(
+            objects=[{"type": "tag", "id": obj_id} for obj_id in ids]
+        )
+        assert [o["id"] for o in fetched["saved_objects"]] == ids
+        assert fetched["saved_objects"][0]["attributes"]["name"] == ids[0]
+
+        # bulk_resolve
+        resolved = kibana_client.saved_objects.bulk_resolve(
+            objects=[{"type": "tag", "id": obj_id} for obj_id in ids]
+        )
+        outcomes = [r["outcome"] for r in resolved["resolved_objects"]]
+        assert outcomes == ["exactMatch", "exactMatch"]
+
+        # bulk_delete
+        deleted = kibana_client.saved_objects.bulk_delete(
+            objects=[{"type": "tag", "id": obj_id} for obj_id in ids]
+        )
+        assert all(status["success"] for status in deleted["statuses"])
+
+        with pytest.raises(NotFoundError):
+            kibana_client.saved_objects.get(type="tag", id=ids[0])
+
+    def test_bulk_update_route_removed_on_9_4_3(
+        self, kibana_client, created_saved_objects, unique_suffix
+    ):
+        """Spec/live discrepancy: _bulk_update is in the 9.4.3 OAS but the
+        route is not registered on the live server; the request falls through
+        to the create-saved-object route and fails with 400."""
+        obj_id = f"{PREFIX}-bulkupd-{unique_suffix}"
+        kibana_client.saved_objects.create(
+            type="tag", id=obj_id, attributes=tag_attributes(obj_id)
+        )
+        created_saved_objects.append(("tag", obj_id))
+
+        with pytest.raises(BadRequestError, match="plain object value"):
+            kibana_client.saved_objects.bulk_update(
+                objects=[
+                    {
+                        "type": "tag",
+                        "id": obj_id,
+                        "attributes": {"description": "bulk updated"},
+                    }
+                ]
+            )
+
+
+class TestSavedObjectsExportImport:
+    """Test export -> import NDJSON round trip and error resolution."""
+
+    def test_export_import_round_trip(
+        self, kibana_client, created_saved_objects, unique_suffix
+    ):
+        """Create a dashboard, export it, delete it, re-import, verify restored."""
+        dash_id = f"{PREFIX}-roundtrip-{unique_suffix}"
+        title = f"{PREFIX}-roundtrip-{unique_suffix}"
+
+        kibana_client.saved_objects.create(
+            type="dashboard", id=dash_id, attributes={"title": title}
+        )
+        created_saved_objects.append(("dashboard", dash_id))
+
+        # Export as NDJSON (parsed to a list of dicts by the client)
+        exported = kibana_client.saved_objects.export(
+            objects=[{"type": "dashboard", "id": dash_id}]
+        )
+        lines = list(exported)
+        assert lines[-1]["exportedCount"] == 1
+        exported_objects = lines[:-1]
+        assert exported_objects[0]["id"] == dash_id
+        assert exported_objects[0]["attributes"]["title"] == title
+
+        # Delete the dashboard
+        kibana_client.saved_objects.delete(type="dashboard", id=dash_id)
+        with pytest.raises(NotFoundError):
+            kibana_client.saved_objects.get(type="dashboard", id=dash_id)
+
+        # Re-import from the exported payload
+        result = kibana_client.saved_objects.import_objects(file=lines)
+        assert result["success"] is True
+        assert result["successCount"] == 1
+
+        # Verify the dashboard is restored with the same content
+        restored = kibana_client.saved_objects.get(type="dashboard", id=dash_id)
+        assert restored["attributes"]["title"] == title
+
+    def test_export_by_type_with_exclude_details(
+        self, kibana_client, created_saved_objects, unique_suffix
+    ):
+        """Exporting by type honors excludeExportDetails."""
+        tag = kibana_client.saved_objects.create(
+            type="tag", attributes=tag_attributes(f"{PREFIX}-exp-{unique_suffix}")
+        )
+        created_saved_objects.append(("tag", tag["id"]))
+
+        exported = kibana_client.saved_objects.export(
+            type="tag", exclude_export_details=True
+        )
+        lines = list(exported)
+        assert lines, "expected at least the created tag in the export"
+        # No export-details line when excluded
+        assert all("exportedCount" not in line for line in lines)
+        assert any(line["id"] == tag["id"] for line in lines)
+
+    def test_import_conflict_and_resolve_import_errors(
+        self, kibana_client, created_saved_objects, unique_suffix
+    ):
+        """An import conflict is reported, then fixed via resolve_import_errors."""
+        tag_id = f"{PREFIX}-imperr-{unique_suffix}"
+        kibana_client.saved_objects.create(
+            type="tag", id=tag_id, attributes=tag_attributes(tag_id)
+        )
+        created_saved_objects.append(("tag", tag_id))
+
+        exported = kibana_client.saved_objects.export(
+            objects=[{"type": "tag", "id": tag_id}], exclude_export_details=True
+        )
+        ndjson_lines = list(exported)
+
+        # Importing over the existing object without overwrite reports a conflict
+        result = kibana_client.saved_objects.import_objects(file=ndjson_lines)
+        assert result["success"] is False
+        assert result["errors"][0]["id"] == tag_id
+        assert result["errors"][0]["error"]["type"] == "conflict"
+
+        # Resolve by retrying with overwrite
+        resolved = kibana_client.saved_objects.resolve_import_errors(
+            file=ndjson_lines,
+            retries=[{"type": "tag", "id": tag_id, "overwrite": True}],
+        )
+        assert resolved["success"] is True
+        assert resolved["successCount"] == 1
+
+    def test_import_create_new_copies(
+        self, kibana_client, created_saved_objects, unique_suffix
+    ):
+        """createNewCopies imports the object under a fresh ID."""
+        tag_id = f"{PREFIX}-copy-{unique_suffix}"
+        kibana_client.saved_objects.create(
+            type="tag", id=tag_id, attributes=tag_attributes(tag_id)
+        )
+        created_saved_objects.append(("tag", tag_id))
+
+        exported = kibana_client.saved_objects.export(
+            objects=[{"type": "tag", "id": tag_id}], exclude_export_details=True
         )
 
-        # Verify deletion
-        with pytest.raises(NotFoundError):
-            kibana_client.saved_objects.get(
-                type="visualization",
-                id=unique_object_id,
-            )
-
-        # Remove from cleanup list
-        created_saved_objects.remove(("visualization", unique_object_id))
-
-    def test_get_not_found(self, kibana_client):
-        """Test that getting a non-existent object raises NotFoundError."""
-        with pytest.raises(NotFoundError):
-            kibana_client.saved_objects.get(
-                type="visualization",
-                id="nonexistent-id",
-            )
-
-    def test_update_not_found(self, kibana_client):
-        """Test that updating a non-existent object raises NotFoundError."""
-        with pytest.raises(NotFoundError):
-            kibana_client.saved_objects.update(
-                type="visualization",
-                id="nonexistent-id",
-                attributes=get_test_visualization_attributes("Update"),
-            )
-
-    def test_delete_not_found(self, kibana_client):
-        """Test that deleting a non-existent object raises NotFoundError."""
-        with pytest.raises(NotFoundError):
-            kibana_client.saved_objects.delete(
-                type="visualization",
-                id="nonexistent-id",
-            )
-
-
-class TestSavedObjectsClientSpaceScoped:
-    """Test space-scoped saved object operations."""
-
-    @pytest.fixture
-    def test_space_id(self):
-        """Generate a unique space ID for testing."""
-        return f"test-space-{uuid.uuid4().hex[:8]}"
-
-    @pytest.fixture
-    def test_space(self, kibana_client, test_space_id):
-        """Create a test space for space-scoped operations."""
-        # Create the space
-        response = kibana_client.spaces.create(
-            id=test_space_id,
-            name=f"Test Space {test_space_id}",
-            description="Space for saved objects integration tests",
+        result = kibana_client.saved_objects.import_objects(
+            file=list(exported), create_new_copies=True
         )
-        space = response.body
+        assert result["success"] is True
+        new_id = result["successResults"][0]["destinationId"]
+        created_saved_objects.append(("tag", new_id))
+        assert new_id != tag_id
 
-        yield space
+        copy = kibana_client.saved_objects.get(type="tag", id=new_id)
+        assert copy["attributes"]["name"] == tag_id
 
-        # Cleanup: Delete the space
+
+class TestRotateEncryptionKey:
+    """Test the encrypted saved objects key rotation endpoint."""
+
+    def test_rotate_encryption_key_endpoint_reachable(self, kibana_client):
+        """The endpoint responds; without decryptionOnlyKeys configured it 400s."""
         try:
-            kibana_client.spaces.delete(id=test_space_id)
-            print(f"Cleaned up test space: {test_space_id}")
-        except NotFoundError:
-            pass
-        except Exception as e:
-            print(f"Warning: Failed to cleanup space {test_space_id}: {e}")
+            result = kibana_client.saved_objects.rotate_encryption_key(batch_size=100)
+            # If the stack is configured for rotation, a summary is returned.
+            assert "successful" in result.body
+            assert "failed" in result.body
+        except BadRequestError as e:
+            # Expected on stacks without keyRotation.decryptionOnlyKeys configured
+            assert "not configured to support encryption key rotation" in str(e)
 
-    def test_create_in_space(self, kibana_client, test_space, unique_object_id):
-        """Test creating a saved object in a specific space."""
-        space_id = test_space["id"]
 
-        # Create object in the test space
-        response = kibana_client.saved_objects.create(
-            type="visualization",
-            attributes=get_test_visualization_attributes("Space Test"),
-            id=unique_object_id,
-            space_id=space_id,
-        )
-        created = response.body
+class TestAsyncSavedObjectsIntegration:
+    """Async client round trip against the live server."""
 
-        # Verify creation
-        assert created["id"] == unique_object_id
-
-        # Verify we can retrieve it from the same space
-        response = kibana_client.saved_objects.get(
-            type="visualization",
-            id=unique_object_id,
-            space_id=space_id,
-        )
-        retrieved = response.body
-        assert retrieved["id"] == unique_object_id
-
-        # Verify it's NOT in the default space
-        with pytest.raises(NotFoundError):
-            kibana_client.saved_objects.get(
-                type="visualization",
-                id=unique_object_id,
+    async def test_async_export_import_round_trip(self, unique_suffix):
+        """Async create -> find -> export -> delete -> import -> get lifecycle."""
+        client = create_test_async_kibana_client(auth_method="auto")
+        tag_id = f"{PREFIX}-async-{unique_suffix}"
+        try:
+            created = await client.saved_objects.create(
+                type="tag", id=tag_id, attributes=tag_attributes(tag_id)
             )
+            assert created["id"] == tag_id
 
-        # Cleanup
-        kibana_client.saved_objects.delete(
-            type="visualization",
-            id=unique_object_id,
-            space_id=space_id,
-        )
+            results = await client.saved_objects.find(
+                type="tag", search=f"{tag_id}*", search_fields=["name"]
+            )
+            assert tag_id in [o["id"] for o in results["saved_objects"]]
+
+            exported = await client.saved_objects.export(
+                objects=[{"type": "tag", "id": tag_id}]
+            )
+            lines = list(exported)
+            assert lines[-1]["exportedCount"] == 1
+
+            await client.saved_objects.delete(type="tag", id=tag_id)
+
+            imported = await client.saved_objects.import_objects(file=lines)
+            assert imported["success"] is True
+
+            restored = await client.saved_objects.get(type="tag", id=tag_id)
+            assert restored["attributes"]["name"] == tag_id
+
+            resolved = await client.saved_objects.resolve(type="tag", id=tag_id)
+            assert resolved["outcome"] == "exactMatch"
+        finally:
+            try:
+                await client.saved_objects.delete(type="tag", id=tag_id, force=True)
+            except NotFoundError:
+                pass
+            await client.close()
