@@ -2,22 +2,26 @@
 
 import logging
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, Self
 
 from elastic_transport import (
+    ApiResponse,
     AsyncTransport,
     HttpHeaders,
     ObjectApiResponse,
     TransportApiResponse,
 )
 
-# Import resolve_auth_headers and redaction from sync version (they're not async)
+# Import shared helpers from the sync version (they're not async)
 from kibana._sync.client._base import (
     DEFAULT,
     DefaultType,
     _redact_body_secrets,
     _redact_sensitive_headers,
+    encode_query_params,
+    extract_error_message,
     resolve_auth_headers,
+    wrap_api_response,
 )
 from kibana.exceptions import HTTP_EXCEPTIONS, ApiError
 from kibana.observability import KibanaInstrumentor, span_context
@@ -59,7 +63,7 @@ class AsyncBaseClient:
         bearer_auth: DefaultType | str = DEFAULT,
         headers: DefaultType | Mapping[str, str] = DEFAULT,
         request_timeout: DefaultType | float = DEFAULT,
-    ) -> "AsyncBaseClient":
+    ) -> Self:
         """
         Create a new client instance with modified options.
 
@@ -104,7 +108,7 @@ class AsyncBaseClient:
         *,
         params: dict[str, Any] | None = None,
         headers: dict[str, str] | None = None,
-        body: dict[str, Any] | None = None,
+        body: Any | None = None,
     ) -> ObjectApiResponse[Any]:
         """
         Perform an async HTTP request to Kibana.
@@ -151,10 +155,7 @@ class AsyncBaseClient:
         # Build target URL with query parameters
         target = path
         if params:
-            from urllib.parse import urlencode
-
-            query_string = urlencode(params)
-            target = f"{path}?{query_string}"
+            target = f"{path}?{encode_query_params(params)}"
 
         # Log request details at DEBUG level with redacted headers
         if logger.isEnabledFor(logging.DEBUG):
@@ -165,8 +166,10 @@ class AsyncBaseClient:
                 target,
                 redacted_headers,
             )
-            if body is not None:
+            if isinstance(body, dict):
                 logger.debug("Request body: %s", _redact_body_secrets(body))
+            elif body is not None:
+                logger.debug("Request body: <%d raw bytes>", len(body))
 
         # Build span attributes using OTel semantic conventions
         instrumentor = KibanaInstrumentor.get_instance()
@@ -208,12 +211,11 @@ class AsyncBaseClient:
                     response.meta.status,
                 )
 
-            # Process the response (check for errors)
-            return self._process_response(response)  # type: ignore[arg-type]
+            # Wrap the raw transport response in a typed ApiResponse and
+            # check for errors
+            return self._process_response(wrap_api_response(response))  # type: ignore[return-value]
 
-    def _process_response(
-        self, response: ObjectApiResponse[Any]
-    ) -> ObjectApiResponse[Any]:
+    def _process_response(self, response: ApiResponse[Any]) -> ApiResponse[Any]:
         """
         Process API response and raise exceptions for error status codes.
 
@@ -266,20 +268,4 @@ class AsyncBaseClient:
         :param body: Response body
         :return: Error message string
         """
-        if isinstance(body, dict):
-            # Try common error message fields
-            if "error" in body:
-                error = body["error"]
-                if isinstance(error, str):
-                    return error
-                elif isinstance(error, dict):
-                    # Kibana often returns error as an object
-                    if "message" in error:
-                        return str(error["message"])
-                    elif "reason" in error:
-                        return str(error["reason"])
-            elif "message" in body:
-                return str(body["message"])
-
-        # Fallback to generic message
-        return f"API error occurred: {body}"
+        return extract_error_message(body)

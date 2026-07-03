@@ -459,10 +459,14 @@ class TestExtractErrorMessage:
         result = self._extract({})
         assert result == "API error occurred: {}"
 
-    def test_error_field_takes_precedence_over_message(self):
-        """Test that 'error' field is checked before 'message' field."""
-        body = {"error": "Error wins", "message": "Message loses"}
-        assert self._extract(body) == "Error wins"
+    def test_message_field_takes_precedence_over_error(self):
+        """Kibana boom errors carry the detail in 'message'; 'error' is just
+        the HTTP reason phrase, so 'message' must win."""
+        body = {
+            "error": "Bad Request",
+            "message": "[request body.name]: expected string",
+        }
+        assert self._extract(body) == "[request body.name]: expected string"
 
 
 class TestUnmappedStatusCodes:

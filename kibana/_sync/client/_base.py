@@ -1,13 +1,19 @@
 """Base client implementation for Kibana."""
 
 import base64
+import json
 import logging
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, Self
+from urllib.parse import urlencode
 
 from elastic_transport import (
+    ApiResponse,
+    BinaryApiResponse,
     HttpHeaders,
+    ListApiResponse,
     ObjectApiResponse,
+    TextApiResponse,
     Transport,
     TransportApiResponse,
 )
@@ -86,6 +92,89 @@ def _redact_body_secrets(body: dict[str, Any]) -> dict[str, Any]:
         else:
             redacted[key] = value
     return redacted
+
+
+def encode_query_params(params: Mapping[str, Any]) -> str:
+    """Encode query parameters the way Kibana expects.
+
+    Kibana's HTTP layer (``@kbn/config-schema``) requires:
+
+    - booleans as lowercase ``true``/``false`` (Python's default ``str(True)``
+      produces ``True``, which fails schema validation),
+    - array-valued parameters as repeated keys (``type=a&type=b``),
+    - object-valued parameters as JSON strings (e.g. ``has_reference``).
+
+    :param params: Query parameters (values may be scalars, lists/tuples, or dicts)
+    :return: URL-encoded query string
+    """
+
+    def _normalize(value: Any) -> Any:
+        if isinstance(value, bool):
+            return "true" if value else "false"
+        if isinstance(value, Mapping):
+            return json.dumps(value, separators=(",", ":"))
+        return value
+
+    normalized: dict[str, Any] = {}
+    for key, value in params.items():
+        if isinstance(value, (list, tuple)):
+            normalized[key] = [_normalize(v) for v in value]
+        else:
+            normalized[key] = _normalize(value)
+
+    return urlencode(normalized, doseq=True)
+
+
+def wrap_api_response(response: TransportApiResponse) -> ApiResponse[Any]:
+    """Wrap a raw transport response into the right ``ApiResponse`` subclass.
+
+    ``Transport.perform_request`` returns a plain ``TransportApiResponse``
+    named tuple. Kibana client methods promise ``ObjectApiResponse``-style
+    objects that support ``resp["key"]``/iteration, so the body type picks
+    the matching wrapper (JSON object, JSON array, text, or raw bytes).
+
+    :param response: Raw response from elastic-transport
+    :return: Typed ApiResponse wrapper around the same body and metadata
+    """
+    body = response.body
+    if isinstance(body, list):
+        return ListApiResponse(body=body, meta=response.meta)
+    if isinstance(body, str):
+        return TextApiResponse(body=body, meta=response.meta)
+    if isinstance(body, bytes):
+        return BinaryApiResponse(body=body, meta=response.meta)
+    if body is None:
+        return ObjectApiResponse(body={}, meta=response.meta)
+    return ObjectApiResponse(body=body, meta=response.meta)
+
+
+def extract_error_message(body: Any) -> str:
+    """Extract the most useful error message from a Kibana error body.
+
+    Kibana errors are typically Boom-style objects like
+    ``{"statusCode": 400, "error": "Bad Request", "message": "<details>"}``
+    where ``error`` is just the generic HTTP reason phrase. The detailed
+    ``message`` field is preferred; ``error`` is only used as a fallback.
+
+    :param body: Response body
+    :return: Error message string
+    """
+    if isinstance(body, dict):
+        message = body.get("message")
+        if isinstance(message, str) and message:
+            return message
+
+        error = body.get("error")
+        if isinstance(error, dict):
+            # Elasticsearch-style nested error objects
+            nested_message = error.get("message") or error.get("reason")
+            if isinstance(nested_message, str) and nested_message:
+                return nested_message
+        elif isinstance(error, str) and error:
+            return error
+
+    # Fallback to generic message
+    return f"API error occurred: {body}"
 
 
 def resolve_auth_headers(
@@ -211,7 +300,7 @@ class BaseClient:
         bearer_auth: DefaultType | str = DEFAULT,
         headers: DefaultType | Mapping[str, str] = DEFAULT,
         request_timeout: DefaultType | float = DEFAULT,
-    ) -> "BaseClient":
+    ) -> Self:
         """Create a new client instance with modified options.
 
         This method allows per-request configuration without modifying the
@@ -286,7 +375,7 @@ class BaseClient:
         *,
         params: dict[str, Any] | None = None,
         headers: dict[str, str] | None = None,
-        body: dict[str, Any] | None = None,
+        body: Any | None = None,
     ) -> ObjectApiResponse[Any]:
         """Perform an HTTP request to Kibana.
 
@@ -301,11 +390,13 @@ class BaseClient:
             method: HTTP method to use (GET, POST, PUT, DELETE, PATCH, etc.).
             path: API endpoint path starting with / (e.g., "/api/status").
             params: Optional query parameters as a dictionary. Will be URL-encoded
-                and appended to the path.
+                and appended to the path (booleans become ``true``/``false``,
+                lists become repeated keys, dicts become JSON strings).
             headers: Optional HTTP headers to include in the request. These will
                 be merged with authentication and default headers.
-            body: Optional request body as a dictionary. Will be JSON-serialized
-                automatically.
+            body: Optional request body. Dicts and lists are JSON-serialized
+                automatically; ``str``/``bytes`` bodies are sent as-is (set an
+                explicit ``content-type`` header for NDJSON or multipart payloads).
 
         Returns:
             ObjectApiResponse containing the parsed JSON response body and
@@ -377,10 +468,7 @@ class BaseClient:
         # Build target URL with query parameters
         target = path
         if params:
-            from urllib.parse import urlencode
-
-            query_string = urlencode(params)
-            target = f"{path}?{query_string}"
+            target = f"{path}?{encode_query_params(params)}"
 
         # Log request details at DEBUG level with redacted headers
         if logger.isEnabledFor(logging.DEBUG):
@@ -391,8 +479,10 @@ class BaseClient:
                 target,
                 redacted_headers,
             )
-            if body is not None:
+            if isinstance(body, dict):
                 logger.debug("Request body: %s", _redact_body_secrets(body))
+            elif body is not None:
+                logger.debug("Request body: <%d raw bytes>", len(body))
 
         # Build span attributes using OTel semantic conventions
         instrumentor = KibanaInstrumentor.get_instance()
@@ -432,12 +522,11 @@ class BaseClient:
                     response.meta.status,
                 )
 
-            # Process the response (check for errors)
-            return self._process_response(response)  # type: ignore[arg-type]
+            # Wrap the raw transport response in a typed ApiResponse and
+            # check for errors
+            return self._process_response(wrap_api_response(response))  # type: ignore[return-value]
 
-    def _process_response(
-        self, response: ObjectApiResponse[Any]
-    ) -> ObjectApiResponse[Any]:
+    def _process_response(self, response: ApiResponse[Any]) -> ApiResponse[Any]:
         """
         Process API response and raise exceptions for error status codes.
 
@@ -490,20 +579,4 @@ class BaseClient:
         :param body: Response body
         :return: Error message string
         """
-        if isinstance(body, dict):
-            # Try common error message fields
-            if "error" in body:
-                error = body["error"]
-                if isinstance(error, str):
-                    return error
-                elif isinstance(error, dict):
-                    # Kibana often returns error as an object
-                    if "message" in error:
-                        return str(error["message"])
-                    elif "reason" in error:
-                        return str(error["reason"])
-            elif "message" in body:
-                return str(body["message"])
-
-        # Fallback to generic message
-        return f"API error occurred: {body}"
+        return extract_error_message(body)

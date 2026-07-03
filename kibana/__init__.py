@@ -16,7 +16,7 @@ def _parse_version(version_str: str) -> tuple[int, ...]:
     try:
         parts = version_str.split(".")
         return tuple(int(part) for part in parts)
-    except (ValueError, AttributeError):
+    except ValueError, AttributeError:
         return (0, 0, 0)
 
 
@@ -48,7 +48,7 @@ def _check_transport_compatibility() -> None:
                         UserWarning,
                         stacklevel=2,
                     )
-            except (ValueError, IndexError):
+            except ValueError, IndexError:
                 # If we can't parse the version, just log a debug message
                 logger.debug(
                     f"Could not parse elastic-transport version: {transport_version}"
@@ -68,7 +68,7 @@ def _check_transport_compatibility() -> None:
 # Perform compatibility check on import
 _check_transport_compatibility()
 
-from kibana._async.client import AsyncKibana
+from kibana._async.client import AsyncKibana, AsyncSpaceScopedKibana
 
 # Import main client classes
 from kibana._sync.client import Kibana, SpaceScopedKibana
@@ -122,6 +122,7 @@ __all__ = [
     "Kibana",
     "SpaceScopedKibana",
     "AsyncKibana",
+    "AsyncSpaceScopedKibana",
     # Namespace clients
     "ActionsClient",
     "SavedObjectsClient",

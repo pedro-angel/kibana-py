@@ -120,26 +120,45 @@ class TestAsyncTransportConfiguration:
         assert client is not None
 
     @pytest.mark.asyncio
-    async def test_init_with_ca_certs(self):
-        """Test initialization with ca_certs path."""
+    async def test_init_with_ca_certs(self, tls_files):
+        """Test initialization with ca_certs path.
+
+        SSL options are applied to the transport nodes, which load the file
+        eagerly, so a real certificate is required.
+        """
         from kibana import AsyncKibana
 
-        client = AsyncKibana(hosts="https://localhost:5601", ca_certs="/path/to/ca.crt")
+        ca, _ = tls_files
+        client = AsyncKibana(hosts="https://localhost:5601", ca_certs=ca)
 
         assert client is not None
+        node = client._transport.node_pool.get()
+        assert node.config.ca_certs == ca
 
     @pytest.mark.asyncio
-    async def test_init_with_client_cert_and_key(self):
+    async def test_init_with_ca_certs_missing_file_raises(self):
+        """A nonexistent ca_certs path is rejected instead of silently ignored."""
+        from kibana import AsyncKibana
+
+        with pytest.raises(ValueError):
+            AsyncKibana(hosts="https://localhost:5601", ca_certs="/path/to/ca.crt")
+
+    @pytest.mark.asyncio
+    async def test_init_with_client_cert_and_key(self, tls_files):
         """Test initialization with client certificate and key."""
         from kibana import AsyncKibana
 
+        cert, key = tls_files
         client = AsyncKibana(
             hosts="https://localhost:5601",
-            client_cert="/path/to/client.crt",
-            client_key="/path/to/client.key",
+            client_cert=cert,
+            client_key=key,
         )
 
         assert client is not None
+        node = client._transport.node_pool.get()
+        assert node.config.client_cert == cert
+        assert node.config.client_key == key
 
     @pytest.mark.asyncio
     async def test_init_with_request_timeout(self):
@@ -221,14 +240,15 @@ class TestAsyncTransportConfiguration:
         assert client is not None
 
     @pytest.mark.asyncio
-    async def test_init_with_multiple_transport_options(self):
+    async def test_init_with_multiple_transport_options(self, tls_files):
         """Test initialization with multiple transport options."""
         from kibana import AsyncKibana
 
+        ca, _ = tls_files
         client = AsyncKibana(
             hosts="https://localhost:5601",
             verify_certs=True,
-            ca_certs="/path/to/ca.crt",
+            ca_certs=ca,
             request_timeout=60.0,
             max_retries=3,
             retry_on_timeout=True,
@@ -237,6 +257,8 @@ class TestAsyncTransportConfiguration:
 
         assert client is not None
         assert client._request_timeout == 60.0
+        node = client._transport.node_pool.get()
+        assert node.config.connections_per_node == 5
 
 
 class TestAsyncCloseMethod:

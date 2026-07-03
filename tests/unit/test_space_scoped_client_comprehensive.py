@@ -21,7 +21,7 @@ class TestSpaceScopedKibanaCreation:
         mock_spaces_client.get.return_value = Mock(
             body={"id": "marketing", "name": "Marketing"}
         )
-        client._spaces_client = mock_spaces_client
+        client.spaces = mock_spaces_client
 
         # Create space-scoped client
         space_client = client.space("marketing")
@@ -43,7 +43,7 @@ class TestSpaceScopedKibanaCreation:
         # Mock spaces client to return not found error
         mock_spaces_client = Mock()
         mock_spaces_client.get.side_effect = Exception("Space not found")
-        client._spaces_client = mock_spaces_client
+        client.spaces = mock_spaces_client
 
         # Creating space-scoped client should raise SpaceNotFoundError
         with pytest.raises(SpaceNotFoundError) as exc_info:
@@ -60,7 +60,7 @@ class TestSpaceScopedKibanaCreation:
         # Mock spaces client to return 404 error
         mock_spaces_client = Mock()
         mock_spaces_client.get.side_effect = Exception("404 Not Found")
-        client._spaces_client = mock_spaces_client
+        client.spaces = mock_spaces_client
 
         # Creating space-scoped client should raise SpaceNotFoundError
         with pytest.raises(SpaceNotFoundError) as exc_info:
@@ -76,7 +76,7 @@ class TestSpaceScopedKibanaCreation:
         # Mock spaces client to return auth error
         mock_spaces_client = Mock()
         mock_spaces_client.get.side_effect = Exception("Authentication failed")
-        client._spaces_client = mock_spaces_client
+        client.spaces = mock_spaces_client
 
         # Creating space-scoped client should re-raise original error
         with pytest.raises(Exception) as exc_info:
@@ -92,7 +92,7 @@ class TestSpaceScopedKibanaCreation:
 
         # Mock spaces client (should not be called)
         mock_spaces_client = Mock()
-        client._spaces_client = mock_spaces_client
+        client.spaces = mock_spaces_client
 
         # Create space-scoped client without validation
         space_client = client.space("marketing", validate=False)
@@ -118,7 +118,7 @@ class TestSpaceScopedKibanaCreation:
         mock_spaces_client.get.return_value = Mock(
             body={"id": "marketing", "name": "Marketing"}
         )
-        client._spaces_client = mock_spaces_client
+        client.spaces = mock_spaces_client
 
         # Test with explicit True
         space_client = client.space("marketing", validate=True)
@@ -196,27 +196,22 @@ class TestSpaceScopedKibanaChildClients:
         # Verify it's the same as the main client's status client
         assert status_client is client.status
 
-    def test_child_client_lazy_initialization(self, mock_transport):
-        """Test that child clients are lazily initialized."""
+    def test_child_client_eager_initialization(self, mock_transport):
+        """Test that child clients are wired eagerly with the space context."""
         # Create main client
         client = Kibana(_transport=mock_transport)
 
         # Create space-scoped client
         space_client = client.space("marketing", validate=False)
 
-        # Verify child clients are not initialized yet
-        assert not hasattr(space_client, "_actions_client")
-        assert not hasattr(space_client, "_saved_objects_client")
+        # Child clients exist immediately and carry the space context
+        assert space_client.actions._default_space_id == "marketing"
+        assert space_client.saved_objects._default_space_id == "marketing"
+        assert space_client.dashboards._default_space_id == "marketing"
 
-        # Access actions client
-        actions_client = space_client.actions
-
-        # Verify actions client is now initialized but saved objects is not
-        assert hasattr(space_client, "_actions_client")
-        assert not hasattr(space_client, "_saved_objects_client")
-
-        # Verify subsequent access returns same instance
-        assert space_client.actions is actions_client
+        # Repeated access returns the same instances
+        assert space_client.actions is space_client.actions
+        assert space_client.saved_objects is space_client.saved_objects
 
     def test_multiple_child_clients_independent(self, mock_transport):
         """Test that multiple child clients are independent."""
@@ -255,7 +250,7 @@ class TestSpaceScopedKibanaValidationSettings:
         mock_spaces_client.get.return_value = Mock(
             body={"id": "marketing", "name": "Marketing"}
         )
-        client._spaces_client = mock_spaces_client
+        client.spaces = mock_spaces_client
 
         # Create space-scoped client with validation enabled
         space_client = client.space("marketing", validate=True)
@@ -301,7 +296,7 @@ class TestSpaceScopedKibanaValidationSettings:
         mock_spaces_client.get.return_value = mock_response(
             body={"id": "marketing", "name": "Marketing"}, status=200
         )
-        client._spaces_client = mock_spaces_client
+        client.spaces = mock_spaces_client
 
         # Create space-scoped client with validation disabled
         space_client = client.space("marketing", validate=False)
@@ -329,7 +324,7 @@ class TestSpaceScopedKibanaValidationSettings:
         # Mock spaces client
         mock_spaces_client = Mock()
         mock_spaces_client.get.return_value = Mock(body={"id": "test", "name": "Test"})
-        client._spaces_client = mock_spaces_client
+        client.spaces = mock_spaces_client
 
         # Create space-scoped clients with different validation settings
         space_client_validated = client.space("marketing", validate=True)
@@ -358,7 +353,7 @@ class TestSpaceScopedKibanaErrorHandling:
 
         # Mock spaces client to raise various errors
         mock_spaces_client = Mock()
-        client._spaces_client = mock_spaces_client
+        client.spaces = mock_spaces_client
 
         # Test network error
         mock_spaces_client.get.side_effect = Exception("Connection timeout")
@@ -476,7 +471,7 @@ class TestSpaceScopedKibanaEdgeCases:
         # Mock spaces client
         mock_spaces_client = Mock()
         mock_spaces_client.get.side_effect = Exception("Invalid space ID")
-        client._spaces_client = mock_spaces_client
+        client.spaces = mock_spaces_client
 
         # Creating space-scoped client with empty space ID should fail
         with pytest.raises(Exception):
@@ -533,18 +528,6 @@ class TestSpaceScopedKibanaEdgeCases:
         assert marketing_actions._client is client
         assert sales_actions._client is client
 
-    def test_space_scoped_client_validation_with_no_spaces_client(self, mock_transport):
-        """Test space-scoped client validation when main client has no spaces client."""
-        # Create main client
-        client = Kibana(_transport=mock_transport)
-
-        # Mock spaces client to not exist (return None)
-        client._spaces_client = None
-
-        # Creating space-scoped client should fail when trying to validate
-        with pytest.raises(AttributeError):
-            client.space("marketing", validate=True)
-
     def test_space_scoped_client_validation_with_spaces_client_none(
         self, mock_transport
     ):
@@ -552,8 +535,8 @@ class TestSpaceScopedKibanaEdgeCases:
         # Create main client
         client = Kibana(_transport=mock_transport)
 
-        # Set spaces client to None
-        client._spaces_client = None
+        # Set spaces client to None (namespaces are eager attributes now)
+        client.spaces = None
 
         # Creating space-scoped client should fail when trying to validate
         with pytest.raises(AttributeError):
