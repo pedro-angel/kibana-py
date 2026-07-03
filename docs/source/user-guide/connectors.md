@@ -1,6 +1,18 @@
-# Connectors (Actions)
+# Connectors
 
-Connectors, also known as Actions in Kibana, enable you to integrate with external systems for alerting, automation, and workflow orchestration. The Kibana Python client provides comprehensive support for creating, managing, and executing connectors.
+Connectors (formerly known as *Actions* in Kibana) enable you to integrate with external systems for alerting, automation, and workflow orchestration. The Kibana Python client provides comprehensive support for creating, managing, and executing connectors through `client.connectors`.
+
+:::{warning}
+**`client.actions` is deprecated.** Kibana renamed "actions" to "connectors". The canonical namespace is now **`client.connectors`**; `client.actions` remains as a thin backwards-compatible alias with identical methods, and will be removed in a future release.
+
+```python
+# Preferred
+client.connectors.list_types()
+
+# Deprecated, but still works
+client.actions.list_types()
+```
+:::
 
 ## Overview
 
@@ -34,7 +46,7 @@ from kibana import Kibana
 client = Kibana("http://localhost:5601", api_key="your_api_key")
 
 # Create an index connector
-connector = client.actions.create(
+connector = client.connectors.create(
     name="My Index Connector",
     connector_type_id=".index",
     config={
@@ -55,7 +67,7 @@ client.close()
 Write documents to an Elasticsearch index:
 
 ```python
-connector = client.actions.create(
+connector = client.connectors.create(
     name="Log Writer",
     connector_type_id=".index",
     config={
@@ -76,7 +88,7 @@ connector = client.actions.create(
 Send HTTP requests to external APIs:
 
 ```python
-connector = client.actions.create(
+connector = client.connectors.create(
     name="External API Webhook",
     connector_type_id=".webhook",
     config={
@@ -109,7 +121,7 @@ connector = client.actions.create(
 Send messages to Slack channels:
 
 ```python
-connector = client.actions.create(
+connector = client.connectors.create(
     name="Slack Notifications",
     connector_type_id=".slack",
     secrets={
@@ -126,7 +138,7 @@ connector = client.actions.create(
 Send email notifications:
 
 ```python
-connector = client.actions.create(
+connector = client.connectors.create(
     name="Email Notifications",
     connector_type_id=".email",
     config={
@@ -159,7 +171,7 @@ connector = client.actions.create(
 Write to Kibana server logs:
 
 ```python
-connector = client.actions.create(
+connector = client.connectors.create(
     name="Server Logger",
     connector_type_id=".server-log",
     config={}  # No configuration required
@@ -171,7 +183,7 @@ connector = client.actions.create(
 ### Get Connector by ID
 
 ```python
-connector = client.actions.get(id="connector-id")
+connector = client.connectors.get(id="connector-id")
 print(f"Connector name: {connector.body['name']}")
 print(f"Connector type: {connector.body['connector_type_id']}")
 ```
@@ -179,7 +191,7 @@ print(f"Connector type: {connector.body['connector_type_id']}")
 ### List All Connectors
 
 ```python
-connectors = client.actions.get_all()
+connectors = client.connectors.get_all()
 
 for connector in connectors.body:
     print(f"- {connector['name']} ({connector['connector_type_id']})")
@@ -188,7 +200,7 @@ for connector in connectors.body:
 ### List Available Connector Types
 
 ```python
-types = client.actions.list_types()
+types = client.connectors.list_types()
 
 for connector_type in types.body:
     print(f"- {connector_type['id']}: {connector_type['name']}")
@@ -198,7 +210,7 @@ for connector_type in types.body:
 ### Update Connector
 
 ```python
-updated = client.actions.update(
+updated = client.connectors.update(
     id="connector-id",
     name="Updated Connector Name",
     config={
@@ -208,10 +220,30 @@ updated = client.actions.update(
 )
 ```
 
+:::{warning}
+**`update()` is a full replace, not a partial update.** The underlying `PUT /api/actions/connector/{id}` replaces the connector's user-editable attributes: `name` is required, and any omitted `config` or `secrets` are **reset to `{}`** on the server. Connector types with required configuration fields (such as `.index` or `.webhook`) reject updates that omit `config` with a 400 error — verified against live Kibana 9.4.3.
+
+To make a targeted change, fetch the connector first and pass the complete desired configuration back:
+
+```python
+current = client.connectors.get(id="connector-id").body
+
+client.connectors.update(
+    id="connector-id",
+    name=current["name"],
+    config={**current["config"], "refresh": False},
+    # secrets are never returned by the API; supply them again
+    secrets={"user": "api_user", "password": "api_password"},
+)
+```
+
+The connector type itself (`connector_type_id`) cannot be changed.
+:::
+
 ### Delete Connector
 
 ```python
-client.actions.delete(id="connector-id")
+client.connectors.delete(id="connector-id")
 print("Connector deleted successfully")
 ```
 
@@ -223,7 +255,7 @@ Write documents to an index:
 
 ```python
 # Single document
-result = client.actions.execute(
+result = client.connectors.execute(
     id=connector_id,
     params={
         "documents": [
@@ -237,7 +269,7 @@ result = client.actions.execute(
 )
 
 # Multiple documents
-result = client.actions.execute(
+result = client.connectors.execute(
     id=connector_id,
     params={
         "documents": [
@@ -254,7 +286,7 @@ result = client.actions.execute(
 Send HTTP request:
 
 ```python
-result = client.actions.execute(
+result = client.connectors.execute(
     id=connector_id,
     params={
         "body": '{"alert": "High CPU usage", "severity": "warning"}'
@@ -267,7 +299,7 @@ result = client.actions.execute(
 Send Slack message:
 
 ```python
-result = client.actions.execute(
+result = client.connectors.execute(
     id=connector_id,
     params={
         "message": "🚨 Alert: High memory usage detected on server-01"
@@ -280,7 +312,7 @@ result = client.actions.execute(
 Send email:
 
 ```python
-result = client.actions.execute(
+result = client.connectors.execute(
     id=connector_id,
     params={
         "to": ["admin@example.com", "ops@example.com"],
@@ -295,7 +327,7 @@ result = client.actions.execute(
 Write to server log:
 
 ```python
-result = client.actions.execute(
+result = client.connectors.execute(
     id=connector_id,
     params={
         "message": "Custom log message from API",
@@ -312,7 +344,7 @@ Connectors can be created and managed within specific Kibana Spaces for multi-te
 
 ```python
 # Create connector in specific space
-connector = client.actions.create(
+connector = client.connectors.create(
     name="Marketing Webhook",
     connector_type_id=".webhook",
     config={"url": "https://marketing.example.com/webhook"},
@@ -320,13 +352,13 @@ connector = client.actions.create(
 )
 
 # Get connector from specific space
-connector = client.actions.get(
+connector = client.connectors.get(
     id=connector_id,
     space_id="marketing"
 )
 
 # Execute connector in specific space
-result = client.actions.execute(
+result = client.connectors.execute(
     id=connector_id,
     params={"body": '{"message": "Hello"}'},
     space_id="marketing"
@@ -340,13 +372,13 @@ result = client.actions.execute(
 marketing_client = client.space("marketing")
 
 # All operations automatically use marketing space
-connector = marketing_client.actions.create(
+connector = marketing_client.connectors.create(
     name="Marketing Webhook",
     connector_type_id=".webhook",
     config={"url": "https://marketing.example.com/webhook"}
 )
 
-result = marketing_client.actions.execute(
+result = marketing_client.connectors.execute(
     id=connector.body["id"],
     params={"body": '{"message": "Hello"}'}
 )
@@ -371,7 +403,7 @@ client = Kibana("http://localhost:5601", api_key="your_api_key")
 
 try:
     # Create connector
-    connector = client.actions.create(
+    connector = client.connectors.create(
         name="My Connector",
         connector_type_id=".index",
         config={"index": "my-index"},
@@ -379,7 +411,7 @@ try:
     )
 
     # Execute connector
-    result = client.actions.execute(
+    result = client.connectors.execute(
         id=connector.body["id"],
         params={"documents": [{"message": "test"}]},
         space_id="marketing"
@@ -403,14 +435,14 @@ finally:
 
 ```python
 # Good: Descriptive name
-connector = client.actions.create(
+connector = client.connectors.create(
     name="Production Alerts - Slack #ops-team",
     connector_type_id=".slack",
     secrets={"webhookUrl": "..."}
 )
 
 # Avoid: Generic name
-connector = client.actions.create(
+connector = client.connectors.create(
     name="Connector 1",
     connector_type_id=".slack",
     secrets={"webhookUrl": "..."}
@@ -423,7 +455,7 @@ connector = client.actions.create(
 import os
 
 # Good: Environment variables
-connector = client.actions.create(
+connector = client.connectors.create(
     name="Slack Notifications",
     connector_type_id=".slack",
     secrets={
@@ -432,7 +464,7 @@ connector = client.actions.create(
 )
 
 # Avoid: Hardcoded secrets
-connector = client.actions.create(
+connector = client.connectors.create(
     name="Slack Notifications",
     connector_type_id=".slack",
     secrets={
@@ -445,7 +477,7 @@ connector = client.actions.create(
 
 ```python
 try:
-    result = client.actions.execute(
+    result = client.connectors.execute(
         id=connector_id,
         params={"documents": [{"message": "test"}]}
     )
@@ -464,7 +496,7 @@ except Exception as e:
 
 ```python
 # Create connector for testing
-connector = client.actions.create(
+connector = client.connectors.create(
     name="Test Connector",
     connector_type_id=".index",
     config={"index": "test-index"}
@@ -472,13 +504,13 @@ connector = client.actions.create(
 
 try:
     # Use connector
-    result = client.actions.execute(
+    result = client.connectors.execute(
         id=connector.body["id"],
         params={"documents": [{"test": "data"}]}
     )
 finally:
     # Always clean up
-    client.actions.delete(id=connector.body["id"])
+    client.connectors.delete(id=connector.body["id"])
 ```
 
 ### 5. Use Space Isolation
@@ -489,14 +521,14 @@ dev_client = client.space("development")
 prod_client = client.space("production")
 
 # Development connector
-dev_connector = dev_client.actions.create(
+dev_connector = dev_client.connectors.create(
     name="Dev Webhook",
     connector_type_id=".webhook",
     config={"url": "https://dev.example.com/webhook"}
 )
 
 # Production connector (isolated from dev)
-prod_connector = prod_client.actions.create(
+prod_connector = prod_client.connectors.create(
     name="Prod Webhook",
     connector_type_id=".webhook",
     config={"url": "https://prod.example.com/webhook"}
@@ -513,7 +545,7 @@ class ConnectorFactory:
         self.client = client
 
     def create_index_connector(self, name, index):
-        return self.client.actions.create(
+        return self.client.connectors.create(
             name=name,
             connector_type_id=".index",
             config={
@@ -524,7 +556,7 @@ class ConnectorFactory:
         )
 
     def create_webhook_connector(self, name, url, headers=None):
-        return self.client.actions.create(
+        return self.client.connectors.create(
             name=name,
             connector_type_id=".webhook",
             config={
@@ -550,14 +582,14 @@ class ConnectorManager:
     def get_or_create(self, name, connector_type_id, config, secrets=None):
         """Get existing connector or create new one."""
         # Check if connector exists
-        all_connectors = self.client.actions.get_all()
+        all_connectors = self.client.connectors.get_all()
         for conn in all_connectors.body:
             if conn["name"] == name:
                 self.connectors[name] = conn["id"]
                 return conn
 
         # Create new connector
-        connector = self.client.actions.create(
+        connector = self.client.connectors.create(
             name=name,
             connector_type_id=connector_type_id,
             config=config,
@@ -571,7 +603,7 @@ class ConnectorManager:
         if name not in self.connectors:
             raise ValueError(f"Connector '{name}' not found")
 
-        return self.client.actions.execute(
+        return self.client.connectors.execute(
             id=self.connectors[name],
             params=params
         )
@@ -580,7 +612,7 @@ class ConnectorManager:
         """Delete all managed connectors."""
         for connector_id in self.connectors.values():
             try:
-                self.client.actions.delete(id=connector_id)
+                self.client.connectors.delete(id=connector_id)
             except NotFoundError:
                 pass
 
@@ -613,7 +645,7 @@ def execute_with_retry(client, connector_id, params, max_retries=3):
     """Execute connector with retry logic."""
     for attempt in range(max_retries):
         try:
-            result = client.actions.execute(
+            result = client.connectors.execute(
                 id=connector_id,
                 params=params
             )
@@ -647,7 +679,7 @@ result = execute_with_retry(
 
 ```python
 # List all connectors to find the correct ID
-connectors = client.actions.get_all()
+connectors = client.connectors.get_all()
 for conn in connectors.body:
     print(f"{conn['id']}: {conn['name']}")
 ```
@@ -663,7 +695,7 @@ for conn in connectors.body:
 
 ```python
 # List connector types to see configuration requirements
-types = client.actions.list_types()
+types = client.connectors.list_types()
 for t in types.body:
     if t['id'] == '.index':
         print(f"Config schema: {t.get('config_schema')}")
@@ -681,7 +713,7 @@ for t in types.body:
 
 ```python
 # Check execution result
-result = client.actions.execute(
+result = client.connectors.execute(
     id=connector_id,
     params={"documents": [{"test": "data"}]}
 )

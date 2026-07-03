@@ -101,6 +101,10 @@ myst_enable_extensions = [
     "html_admonition",
 ]
 
+# Auto-generate slug anchors for headings so cross-document links such as
+# ``platform-apis.md#maintenance-windows`` resolve.
+myst_heading_anchors = 3
+
 # Source file suffixes
 source_suffix = {
     ".rst": "restructuredtext",
