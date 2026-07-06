@@ -9,7 +9,7 @@
 
 > **Disclaimer:** This is an independent, community-driven project and is **not** officially affiliated with, endorsed by, or supported by Elastic N.V. or any of its subsidiaries. "Kibana" and "Elasticsearch" are trademarks of Elastic N.V. This project is provided "as is", without warranty of any kind. Use it at your own risk. See the [Disclaimer](#disclaimer) section and the [LICENSE](LICENSE) for full details.
 
-A Python client library for the Kibana REST API with **complete Kibana 9.4.3 platform API coverage** — 24 namespaces, 269 endpoints, sync and async. Built following the design patterns of the [elasticsearch-py](https://github.com/elastic/elasticsearch-py) client, and verified live against Kibana 9.4.3.
+A Python client library for the Kibana REST API with **complete Kibana 9.4.3 platform, Fleet, and Security Solution API coverage** — 39 namespaces, 610 endpoints, sync and async. Built following the design patterns of the [elasticsearch-py](https://github.com/elastic/elasticsearch-py) client, and verified live against Kibana 9.4.3.
 
 Headline feature: first-class support for the **new Kibana Dashboards HTTP API** (`client.dashboards`, technical preview in 9.4) and its sibling **Visualizations HTTP API** (`client.visualizations`) — manage dashboards and Lens visualizations through a real, documented data model instead of opaque saved objects.
 
@@ -25,7 +25,8 @@ Headline feature: first-class support for the **new Kibana Dashboards HTTP API**
 
 ## Features
 
-- **Complete platform API coverage**: 24 namespaces, 269 endpoints of the Kibana 9.4.3 platform REST API, every one live-tested against a real Kibana 9.4.3
+- **Complete API coverage**: 39 namespaces, 610 endpoints spanning the Kibana 9.4.3 platform, Fleet, and Security Solution REST APIs, every one live-tested against a real Kibana 9.4.3
+- **Fleet & Security Solution**: full clients for Fleet (agents, policies, integrations/EPM, outputs, enrollment) and Security Solution (detection engine, exceptions, value lists, timelines, endpoint response actions, entity analytics, osquery, AI assistant, attack discovery)
 - **New Dashboards & Visualizations APIs**: first-class clients for the tech-preview Dashboards and Lens Visualizations HTTP APIs introduced in Kibana 9.4
 - **Dual API support**: synchronous (`Kibana`) and asynchronous (`AsyncKibana`) clients with full method parity
 - **NDJSON & multipart**: saved-object export (`application/x-ndjson`) parsing and multipart/form-data uploads (saved-object import, APM source maps)
@@ -130,7 +131,9 @@ For more examples and detailed usage, see:
 
 ## API Coverage
 
-Full coverage of the Kibana 9.4.3 platform REST API — 24 namespaces, 269 endpoints, identical sync and async surfaces:
+Full coverage of the Kibana 9.4.3 platform, Fleet, and Security Solution REST APIs — 39 namespaces, 610 endpoints, identical sync and async surfaces.
+
+### Platform (24 namespaces, 269 endpoints)
 
 | Client namespace | Kibana API | Endpoints | Status |
 |---|---|---|---|
@@ -159,9 +162,36 @@ Full coverage of the Kibana 9.4.3 platform REST API — 24 namespaces, 269 endpo
 | `client.uptime` | Uptime settings | 2 | GA |
 | `client.workflows` | Workflows (definitions, executions, logs) | 26 | GA |
 
+### Fleet (6 namespaces, 140 endpoints)
+
+| Client namespace | Kibana API | Endpoints | Status |
+|---|---|---|---|
+| `client.fleet` | Fleet setup, settings, space settings, health check, permissions | 7 | GA |
+| `client.fleet_agents` | Elastic Agents (list, actions, bulk actions, status, uploads, tags) | 33 | GA |
+| `client.fleet_policies` | Agent policies, package policies, agentless policies | 23 | GA |
+| `client.fleet_epm` | Elastic Package Manager (integrations, installs, assets, custom integrations) | 37 | GA |
+| `client.fleet_outputs` | Outputs, Fleet Server hosts, proxies, download sources, cloud connectors | 29 | GA |
+| `client.fleet_enrollment` | Enrollment keys, service/logstash tokens, uninstall tokens, signing, kubernetes | 11 | GA |
+
+### Security Solution (9 namespaces, 201 endpoints)
+
+| Client namespace | Kibana API | Endpoints | Status |
+|---|---|---|---|
+| `client.detection_engine` | Detection rules, alerts (signals), prepackaged rules, migrations | 25 | GA |
+| `client.exception_lists` | Exception lists & items, shared/rule exceptions, endpoint exceptions | 22 | GA |
+| `client.lists` | Value lists & items (index, import/export) | 18 | GA |
+| `client.timeline` | Timelines, notes, pinned events, drafts, import/export | 17 | GA |
+| `client.endpoint` | Endpoint metadata, response actions, scripts library | 29 | GA |
+| `client.entity_analytics` | Asset criticality, risk score, entity store, monitoring, watchlists³ | 42 | GA³ |
+| `client.osquery` | Osquery packs, saved queries, live queries | 14 | GA |
+| `client.security_ai_assistant` | AI Assistant conversations, prompts, knowledge base, chat complete | 21 | GA |
+| `client.attack_discovery` | AI attack discoveries, generations, schedules | 13 | Tech preview |
+
 ¹ Some endpoints in this namespace are technical preview in Kibana 9.4 (e.g. Agent Builder consumption/skills/plugins, cases custom-field/template features, `status.get_features()`).
 
 ² Most single-object and bulk saved-object CRUD endpoints are deprecated by Kibana 9.4.3 in favor of the type-specific APIs (dashboards, data views, ...) and the export/import APIs; the client methods carry deprecation notes with replacements.
+
+³ Entity analytics spans several maturity levels in Kibana 9.4: asset-criticality endpoints are deprecated (superseded by the entity store), watchlists and privileged-user monitoring are technical preview, and the risk-score engine and entity store are GA. Method docstrings note the per-endpoint state and any live-server behavior that differs from the OpenAPI spec.
 
 For detailed API documentation, see the [API Reference](https://kibana-py.readthedocs.io/en/latest/api-reference/index.html).
 

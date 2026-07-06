@@ -8,6 +8,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 (unreleased)=
 ## Unreleased
 
+(v0.3.0)=
+## [0.3.0] - 2026-07-07
+
+Complete Kibana 9.4.3 Fleet and Security Solution REST API coverage on top of the platform surface: **15 new namespaces, 341 new endpoints (610 total across 39 namespaces)**, full sync/async parity, all verified live against Kibana 9.4.3. The Security AI namespaces (`security_ai_assistant`, `attack_discovery`) were exercised end-to-end through a local OpenAI-compatible model.
+
+### Added
+
+- **Fleet (140 endpoints):** `fleet` (setup, settings, health), `fleet_agents` (agents, actions, bulk actions, status), `fleet_policies` (agent/package/agentless policies), `fleet_epm` (Elastic Package Manager: integrations, installs, assets, custom integrations), `fleet_outputs` (outputs, Fleet Server hosts, proxies, download sources, cloud connectors), and `fleet_enrollment` (enrollment keys, tokens, signing, Kubernetes).
+- **Security Solution (201 endpoints):** `detection_engine` (rules, alerts, prepackaged rules, migrations), `exception_lists` (exceptions, shared/rule/endpoint exceptions), `lists` (value lists and items), `timeline` (timelines, notes, pinned events), `endpoint` (metadata, response actions, scripts library), `entity_analytics` (asset criticality, risk score, entity store, monitoring, watchlists), `osquery` (packs, saved queries, live queries), `security_ai_assistant` (conversations, prompts, knowledge base, chat), and `attack_discovery` (discoveries, generations, schedules — technical preview).
+
+### Changed
+
+- The `Kibana`, `AsyncKibana`, `SpaceScopedKibana`, and `AsyncSpaceScopedKibana` clients eagerly wire the 15 new Fleet and Security Solution namespaces.
+
+See the [root CHANGELOG](https://github.com/pedro-angel/kibana-py/blob/main/CHANGELOG.md) for the full per-endpoint detail and the documented spec/live discrepancies.
+
+(v0.2.0)=
+## [0.2.0] - 2026-07-03
+
+Complete Kibana 9.4.3 **platform** REST API coverage: 24 namespaces, 269 endpoints, full sync/async parity, all verified live against Kibana 9.4.3. Headlined by first-class clients for the new tech-preview **Dashboards** and **Visualizations** HTTP APIs. Breaking: requires Python 3.14+; async `space()` is now a coroutine; `actions` renamed to `connectors` (deprecated alias kept). See the [root CHANGELOG](https://github.com/pedro-angel/kibana-py/blob/main/CHANGELOG.md) for full detail.
+
 (v0.1.0)=
 ## [0.1.0] - 2026-03-17
 
@@ -355,5 +376,7 @@ When version 1.0 is released, this section will contain upgrade instructions.
 - [PyPI Package](https://pypi.org/project/kibana-py/)
 - [Documentation](https://kibana-py.readthedocs.io/)
 
-[Unreleased]: https://github.com/pedro-angel/kibana-py/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/pedro-angel/kibana-py/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/pedro-angel/kibana-py/releases/tag/v0.3.0
+[0.2.0]: https://github.com/pedro-angel/kibana-py/releases/tag/v0.2.0
 [0.1.0]: https://github.com/pedro-angel/kibana-py/releases/tag/v0.1.0

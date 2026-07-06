@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-07
+
+Complete Kibana 9.4.3 Fleet and Security Solution REST API coverage on top of the platform surface: 15 new namespaces, 341 new endpoints (610 total across 39 namespaces), full sync/async parity, all verified live against Kibana 9.4.3 (Security AI namespaces exercised end-to-end through a local LM Studio OpenAI-compatible model).
+
+### Added
+
+#### Fleet namespaces (140 endpoints)
+- `fleet` — Fleet setup, settings, per-space settings, health check, and permission check (7 endpoints).
+- `fleet_agents` — Elastic Agents: list/get/update/delete, per-agent and bulk actions (reassign, unenroll, upgrade, migrate, privilege-level change, request diagnostics, rollback), action status/cancel, available versions, uploads, tags, and agent setup (33 endpoints).
+- `fleet_policies` — agent policies (CRUD, copy, download, full policy, outputs, bulk get/delete), package policies (CRUD, bulk get/delete, upgrade + dry-run), and agentless policies (23 endpoints).
+- `fleet_epm` — Elastic Package Manager: browse/install/update/uninstall packages (by name+version and by upload), bulk install/upgrade/uninstall/rollback with task-status polling, categories, stats, dependencies, package files, Kibana/rule/datastream assets, custom integrations, input templates, transform authorization, and data streams (37 endpoints).
+- `fleet_outputs` — outputs (Elasticsearch/Kafka/remote-ES/logstash) with health, Fleet Server hosts, proxies, agent binary download sources, remote synced integrations status, and cloud connectors (29 endpoints).
+- `fleet_enrollment` — enrollment API keys, service tokens, Logstash API keys, uninstall tokens, message-signing key rotation, and Kubernetes manifest/download (11 endpoints).
+
+#### Security Solution namespaces (201 endpoints)
+- `detection_engine` — detection rules (CRUD, find, bulk actions, preview, import/export), prepackaged rules status/install, alerts index management, signals search/status/tags/assignees, tags, privileges, and legacy signals migrations (25 endpoints).
+- `exception_lists` — exception lists and items (CRUD, find, duplicate, import/export, summary), shared exceptions, rule exceptions, and endpoint exceptions (`endpoint_list`) (22 endpoints).
+- `lists` — value lists and list items (CRUD, find, index management, import/export) and privileges (18 endpoints).
+- `timeline` — timelines (CRUD, list, resolve, copy, drafts, favorite, import/export), notes, pinned events, and prepackaged timelines (17 endpoints).
+- `endpoint` — endpoint metadata, response actions (isolate/release, kill/suspend process, running processes, get-file, execute, scan, memory dump, run script, upload, cancel), action status/details/file downloads, policy responses, protection-updates notes, and the scripts library (29 endpoints).
+- `entity_analytics` — asset criticality, risk-score engine, entity store (install/status/start/stop/entities/resolution), privileged-user monitoring (engine, users, CSV), privileged-access detection (PAD), and watchlists (42 endpoints).
+- `osquery` — osquery packs, saved queries, and live queries with results (14 endpoints).
+- `security_ai_assistant` — AI Assistant conversations, prompts, anonymization fields, knowledge base (status/setup/entries), and chat completion (21 endpoints).
+- `attack_discovery` — AI attack discoveries, generations (list/get/dismiss), schedules (CRUD, find, enable/disable), and on-demand generation (13 endpoints, technical preview).
+
+#### Notes on live behavior
+- All 15 namespaces ship live-verified integration tests. Endpoints whose happy path requires infrastructure the dev stack lacks (an enrolled Elastic Agent, an enrolled Elastic Defend endpoint, a cloud account, a reachable remote cluster) are still exercised live against their semantic error responses — asserting the server's actual message so a routing regression cannot pass silently — and fully unit-tested for request shape.
+- Numerous spec/live discrepancies observed against Kibana 9.4.3 are documented in the method docstrings (for example: Fleet space-settings rejecting `-` in namespace prefixes; Logstash API-key creation requiring basic auth; Timeline `_copy`/`_import` using POST/multipart rather than the documented GET/JSON; the detection-engine `enabled` field not being editable via PATCH; the attack-discovery `schedules/_find` page off-by-one; the `.gen-ai` connector requiring the full `/chat/completions` URL).
+
+### Changed
+- The `Kibana`, `AsyncKibana`, `SpaceScopedKibana`, and `AsyncSpaceScopedKibana` clients now eagerly wire the 15 new Fleet and Security Solution namespaces alongside the existing platform namespaces.
+
 ## [0.2.0] - 2026-07-03
 
 Complete Kibana 9.4.3 platform REST API coverage: 24 namespaces, 269 endpoints, full sync/async parity, all verified live against Kibana 9.4.3.
