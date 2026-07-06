@@ -13,18 +13,32 @@ from kibana._sync.client.actions import ActionsClient
 from kibana._sync.client.agent_builder import AgentBuilderClient
 from kibana._sync.client.alerting import AlertingClient
 from kibana._sync.client.apm import ApmClient
+from kibana._sync.client.attack_discovery import AttackDiscoveryClient
 from kibana._sync.client.cases import CasesClient
 from kibana._sync.client.connectors import ConnectorsClient
 from kibana._sync.client.dashboards import DashboardsClient
 from kibana._sync.client.data_views import DataViewsClient
+from kibana._sync.client.detection_engine import DetectionEngineClient
+from kibana._sync.client.endpoint import EndpointClient
+from kibana._sync.client.entity_analytics import EntityAnalyticsClient
+from kibana._sync.client.exception_lists import ExceptionListsClient
+from kibana._sync.client.fleet import FleetClient
+from kibana._sync.client.fleet_agents import FleetAgentsClient
+from kibana._sync.client.fleet_enrollment import FleetEnrollmentClient
+from kibana._sync.client.fleet_epm import FleetEpmClient
+from kibana._sync.client.fleet_outputs import FleetOutputsClient
+from kibana._sync.client.fleet_policies import FleetPoliciesClient
+from kibana._sync.client.lists import ListsClient
 from kibana._sync.client.logstash import LogstashClient
 from kibana._sync.client.maintenance_windows import MaintenanceWindowsClient
 from kibana._sync.client.ml import MlClient
 from kibana._sync.client.observability_ai_assistant import (
     ObservabilityAiAssistantClient,
 )
+from kibana._sync.client.osquery import OsqueryClient
 from kibana._sync.client.saved_objects import SavedObjectsClient
 from kibana._sync.client.security import SecurityClient
+from kibana._sync.client.security_ai_assistant import SecurityAiAssistantClient
 from kibana._sync.client.short_urls import ShortUrlsClient
 from kibana._sync.client.slos import SlosClient
 from kibana._sync.client.spaces import SpacesClient
@@ -32,6 +46,7 @@ from kibana._sync.client.status import StatusClient
 from kibana._sync.client.streams import StreamsClient
 from kibana._sync.client.synthetics import SyntheticsClient
 from kibana._sync.client.task_manager import TaskManagerClient
+from kibana._sync.client.timeline import TimelineClient
 from kibana._sync.client.upgrade_assistant import UpgradeAssistantClient
 from kibana._sync.client.uptime import UptimeClient
 from kibana._sync.client.visualizations import VisualizationsClient
@@ -74,16 +89,30 @@ class Kibana(BaseClient):
     agent_builder: AgentBuilderClient
     alerting: AlertingClient
     apm: ApmClient
+    attack_discovery: AttackDiscoveryClient
     cases: CasesClient
     connectors: ConnectorsClient
     dashboards: DashboardsClient
     data_views: DataViewsClient
+    detection_engine: DetectionEngineClient
+    endpoint: EndpointClient
+    entity_analytics: EntityAnalyticsClient
+    exception_lists: ExceptionListsClient
+    fleet: FleetClient
+    fleet_agents: FleetAgentsClient
+    fleet_enrollment: FleetEnrollmentClient
+    fleet_epm: FleetEpmClient
+    fleet_outputs: FleetOutputsClient
+    fleet_policies: FleetPoliciesClient
+    lists: ListsClient
     logstash: LogstashClient
     maintenance_windows: MaintenanceWindowsClient
     ml: MlClient
     observability_ai_assistant: ObservabilityAiAssistantClient
+    osquery: OsqueryClient
     saved_objects: SavedObjectsClient
     security: SecurityClient
+    security_ai_assistant: SecurityAiAssistantClient
     short_urls: ShortUrlsClient
     slos: SlosClient
     spaces: SpacesClient
@@ -91,6 +120,7 @@ class Kibana(BaseClient):
     streams: StreamsClient
     synthetics: SyntheticsClient
     task_manager: TaskManagerClient
+    timeline: TimelineClient
     upgrade_assistant: UpgradeAssistantClient
     uptime: UptimeClient
     visualizations: VisualizationsClient
@@ -267,16 +297,30 @@ class Kibana(BaseClient):
         self.agent_builder = AgentBuilderClient(self)
         self.alerting = AlertingClient(self)
         self.apm = ApmClient(self)
+        self.attack_discovery = AttackDiscoveryClient(self)
         self.cases = CasesClient(self)
         self.connectors = ConnectorsClient(self)
         self.dashboards = DashboardsClient(self)
         self.data_views = DataViewsClient(self)
+        self.detection_engine = DetectionEngineClient(self)
+        self.endpoint = EndpointClient(self)
+        self.entity_analytics = EntityAnalyticsClient(self)
+        self.exception_lists = ExceptionListsClient(self)
+        self.fleet = FleetClient(self)
+        self.fleet_agents = FleetAgentsClient(self)
+        self.fleet_enrollment = FleetEnrollmentClient(self)
+        self.fleet_epm = FleetEpmClient(self)
+        self.fleet_outputs = FleetOutputsClient(self)
+        self.fleet_policies = FleetPoliciesClient(self)
+        self.lists = ListsClient(self)
         self.logstash = LogstashClient(self)
         self.maintenance_windows = MaintenanceWindowsClient(self)
         self.ml = MlClient(self)
         self.observability_ai_assistant = ObservabilityAiAssistantClient(self)
+        self.osquery = OsqueryClient(self)
         self.saved_objects = SavedObjectsClient(self)
         self.security = SecurityClient(self)
+        self.security_ai_assistant = SecurityAiAssistantClient(self)
         self.short_urls = ShortUrlsClient(self)
         self.slos = SlosClient(self)
         self.spaces = SpacesClient(self)
@@ -284,6 +328,7 @@ class Kibana(BaseClient):
         self.streams = StreamsClient(self)
         self.synthetics = SyntheticsClient(self)
         self.task_manager = TaskManagerClient(self)
+        self.timeline = TimelineClient(self)
         self.upgrade_assistant = UpgradeAssistantClient(self)
         self.uptime = UptimeClient(self)
         self.visualizations = VisualizationsClient(self)
@@ -477,18 +522,33 @@ class SpaceScopedKibana:
     agent_builder: AgentBuilderClient
     alerting: AlertingClient
     apm: ApmClient
+    attack_discovery: AttackDiscoveryClient
     cases: CasesClient
     connectors: ConnectorsClient
     dashboards: DashboardsClient
     data_views: DataViewsClient
+    detection_engine: DetectionEngineClient
+    endpoint: EndpointClient
+    entity_analytics: EntityAnalyticsClient
+    exception_lists: ExceptionListsClient
+    fleet: FleetClient
+    fleet_agents: FleetAgentsClient
+    fleet_enrollment: FleetEnrollmentClient
+    fleet_epm: FleetEpmClient
+    fleet_outputs: FleetOutputsClient
+    fleet_policies: FleetPoliciesClient
+    lists: ListsClient
     maintenance_windows: MaintenanceWindowsClient
     ml: MlClient
     observability_ai_assistant: ObservabilityAiAssistantClient
+    osquery: OsqueryClient
     saved_objects: SavedObjectsClient
+    security_ai_assistant: SecurityAiAssistantClient
     short_urls: ShortUrlsClient
     slos: SlosClient
     streams: StreamsClient
     synthetics: SyntheticsClient
+    timeline: TimelineClient
     uptime: UptimeClient
     visualizations: VisualizationsClient
     workflows: WorkflowsClient
@@ -522,18 +582,33 @@ class SpaceScopedKibana:
         self.agent_builder = scoped(AgentBuilderClient)
         self.alerting = scoped(AlertingClient)
         self.apm = scoped(ApmClient)
+        self.attack_discovery = scoped(AttackDiscoveryClient)
         self.cases = scoped(CasesClient)
         self.connectors = scoped(ConnectorsClient)
         self.dashboards = scoped(DashboardsClient)
         self.data_views = scoped(DataViewsClient)
+        self.detection_engine = scoped(DetectionEngineClient)
+        self.endpoint = scoped(EndpointClient)
+        self.entity_analytics = scoped(EntityAnalyticsClient)
+        self.exception_lists = scoped(ExceptionListsClient)
+        self.fleet = scoped(FleetClient)
+        self.fleet_agents = scoped(FleetAgentsClient)
+        self.fleet_enrollment = scoped(FleetEnrollmentClient)
+        self.fleet_epm = scoped(FleetEpmClient)
+        self.fleet_outputs = scoped(FleetOutputsClient)
+        self.fleet_policies = scoped(FleetPoliciesClient)
+        self.lists = scoped(ListsClient)
         self.maintenance_windows = scoped(MaintenanceWindowsClient)
         self.ml = scoped(MlClient)
         self.observability_ai_assistant = scoped(ObservabilityAiAssistantClient)
+        self.osquery = scoped(OsqueryClient)
         self.saved_objects = scoped(SavedObjectsClient)
+        self.security_ai_assistant = scoped(SecurityAiAssistantClient)
         self.short_urls = scoped(ShortUrlsClient)
         self.slos = scoped(SlosClient)
         self.streams = scoped(StreamsClient)
         self.synthetics = scoped(SyntheticsClient)
+        self.timeline = scoped(TimelineClient)
         self.uptime = scoped(UptimeClient)
         self.visualizations = scoped(VisualizationsClient)
         self.workflows = scoped(WorkflowsClient)

@@ -7,9 +7,10 @@ This section provides detailed documentation for all public classes, methods,
 and exceptions in the kibana-py library. The documentation is automatically
 generated from code docstrings and includes usage examples.
 
-The client covers the Kibana 9.4 platform APIs across 24 namespaces —
-headlined by the new :doc:`Dashboards HTTP API <dashboards>` (technical
-preview) — with full synchronous and asynchronous parity.
+The client covers the Kibana 9.4 platform, Fleet and Security Solution APIs
+across 39 namespaces — headlined by the new
+:doc:`Dashboards HTTP API <dashboards>` (technical preview) — with full
+synchronous and asynchronous parity.
 
 .. toctree::
    :maxdepth: 2
@@ -67,6 +68,31 @@ preview) — with full synchronous and asynchronous parity.
 
    agent-builder
    workflows
+
+.. toctree::
+   :maxdepth: 2
+   :caption: Fleet
+
+   fleet
+   fleet-agents
+   fleet-policies
+   fleet-epm
+   fleet-outputs
+   fleet-enrollment
+
+.. toctree::
+   :maxdepth: 2
+   :caption: Security Solution
+
+   detection-engine
+   exception-lists
+   lists
+   timeline
+   endpoint
+   entity-analytics
+   osquery
+   security-ai-assistant
+   attack-discovery
 
 .. toctree::
    :maxdepth: 2
@@ -136,6 +162,29 @@ AI
 
 - :class:`~kibana._sync.client.agent_builder.AgentBuilderClient` (``client.agent_builder``) - AI agents, tools, A2A and MCP
 - :class:`~kibana._sync.client.workflows.WorkflowsClient` (``client.workflows``) - Automate YAML-defined workflows
+
+Fleet
+"""""
+
+- :class:`~kibana._sync.client.fleet.FleetClient` (``client.fleet``) - Fleet setup, settings and health
+- :class:`~kibana._sync.client.fleet_agents.FleetAgentsClient` (``client.fleet_agents``) - Elastic Agents, actions and status
+- :class:`~kibana._sync.client.fleet_policies.FleetPoliciesClient` (``client.fleet_policies``) - Agent and package policies
+- :class:`~kibana._sync.client.fleet_epm.FleetEpmClient` (``client.fleet_epm``) - Elastic Package Manager (integrations)
+- :class:`~kibana._sync.client.fleet_outputs.FleetOutputsClient` (``client.fleet_outputs``) - Outputs, Fleet Server hosts, proxies and connectivity
+- :class:`~kibana._sync.client.fleet_enrollment.FleetEnrollmentClient` (``client.fleet_enrollment``) - Enrollment keys, tokens and signing
+
+Security Solution
+"""""""""""""""""
+
+- :class:`~kibana._sync.client.detection_engine.DetectionEngineClient` (``client.detection_engine``) - Detection rules and alerts
+- :class:`~kibana._sync.client.exception_lists.ExceptionListsClient` (``client.exception_lists``) - Exception lists and endpoint exceptions
+- :class:`~kibana._sync.client.lists.ListsClient` (``client.lists``) - Value lists and list items
+- :class:`~kibana._sync.client.timeline.TimelineClient` (``client.timeline``) - Timelines, notes and pinned events
+- :class:`~kibana._sync.client.endpoint.EndpointClient` (``client.endpoint``) - Endpoint management and response actions
+- :class:`~kibana._sync.client.entity_analytics.EntityAnalyticsClient` (``client.entity_analytics``) - Entity analytics, entity store and asset criticality
+- :class:`~kibana._sync.client.osquery.OsqueryClient` (``client.osquery``) - Osquery packs, saved queries and live queries
+- :class:`~kibana._sync.client.security_ai_assistant.SecurityAiAssistantClient` (``client.security_ai_assistant``) - Security AI Assistant conversations and chat
+- :class:`~kibana._sync.client.attack_discovery.AttackDiscoveryClient` (``client.attack_discovery``) - AI attack discoveries and schedules
 
 Exception Classes
 ^^^^^^^^^^^^^^^^^

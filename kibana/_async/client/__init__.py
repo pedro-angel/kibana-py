@@ -11,18 +11,32 @@ from kibana._async.client.actions import AsyncActionsClient
 from kibana._async.client.agent_builder import AsyncAgentBuilderClient
 from kibana._async.client.alerting import AsyncAlertingClient
 from kibana._async.client.apm import AsyncApmClient
+from kibana._async.client.attack_discovery import AsyncAttackDiscoveryClient
 from kibana._async.client.cases import AsyncCasesClient
 from kibana._async.client.connectors import AsyncConnectorsClient
 from kibana._async.client.dashboards import AsyncDashboardsClient
 from kibana._async.client.data_views import AsyncDataViewsClient
+from kibana._async.client.detection_engine import AsyncDetectionEngineClient
+from kibana._async.client.endpoint import AsyncEndpointClient
+from kibana._async.client.entity_analytics import AsyncEntityAnalyticsClient
+from kibana._async.client.exception_lists import AsyncExceptionListsClient
+from kibana._async.client.fleet import AsyncFleetClient
+from kibana._async.client.fleet_agents import AsyncFleetAgentsClient
+from kibana._async.client.fleet_enrollment import AsyncFleetEnrollmentClient
+from kibana._async.client.fleet_epm import AsyncFleetEpmClient
+from kibana._async.client.fleet_outputs import AsyncFleetOutputsClient
+from kibana._async.client.fleet_policies import AsyncFleetPoliciesClient
+from kibana._async.client.lists import AsyncListsClient
 from kibana._async.client.logstash import AsyncLogstashClient
 from kibana._async.client.maintenance_windows import AsyncMaintenanceWindowsClient
 from kibana._async.client.ml import AsyncMlClient
 from kibana._async.client.observability_ai_assistant import (
     AsyncObservabilityAiAssistantClient,
 )
+from kibana._async.client.osquery import AsyncOsqueryClient
 from kibana._async.client.saved_objects import AsyncSavedObjectsClient
 from kibana._async.client.security import AsyncSecurityClient
+from kibana._async.client.security_ai_assistant import AsyncSecurityAiAssistantClient
 from kibana._async.client.short_urls import AsyncShortUrlsClient
 from kibana._async.client.slos import AsyncSlosClient
 from kibana._async.client.spaces import AsyncSpacesClient
@@ -30,6 +44,7 @@ from kibana._async.client.status import AsyncStatusClient
 from kibana._async.client.streams import AsyncStreamsClient
 from kibana._async.client.synthetics import AsyncSyntheticsClient
 from kibana._async.client.task_manager import AsyncTaskManagerClient
+from kibana._async.client.timeline import AsyncTimelineClient
 from kibana._async.client.upgrade_assistant import AsyncUpgradeAssistantClient
 from kibana._async.client.uptime import AsyncUptimeClient
 from kibana._async.client.visualizations import AsyncVisualizationsClient
@@ -74,16 +89,30 @@ class AsyncKibana(AsyncBaseClient):
     agent_builder: AsyncAgentBuilderClient
     alerting: AsyncAlertingClient
     apm: AsyncApmClient
+    attack_discovery: AsyncAttackDiscoveryClient
     cases: AsyncCasesClient
     connectors: AsyncConnectorsClient
     dashboards: AsyncDashboardsClient
     data_views: AsyncDataViewsClient
+    detection_engine: AsyncDetectionEngineClient
+    endpoint: AsyncEndpointClient
+    entity_analytics: AsyncEntityAnalyticsClient
+    exception_lists: AsyncExceptionListsClient
+    fleet: AsyncFleetClient
+    fleet_agents: AsyncFleetAgentsClient
+    fleet_enrollment: AsyncFleetEnrollmentClient
+    fleet_epm: AsyncFleetEpmClient
+    fleet_outputs: AsyncFleetOutputsClient
+    fleet_policies: AsyncFleetPoliciesClient
+    lists: AsyncListsClient
     logstash: AsyncLogstashClient
     maintenance_windows: AsyncMaintenanceWindowsClient
     ml: AsyncMlClient
     observability_ai_assistant: AsyncObservabilityAiAssistantClient
+    osquery: AsyncOsqueryClient
     saved_objects: AsyncSavedObjectsClient
     security: AsyncSecurityClient
+    security_ai_assistant: AsyncSecurityAiAssistantClient
     short_urls: AsyncShortUrlsClient
     slos: AsyncSlosClient
     spaces: AsyncSpacesClient
@@ -91,6 +120,7 @@ class AsyncKibana(AsyncBaseClient):
     streams: AsyncStreamsClient
     synthetics: AsyncSyntheticsClient
     task_manager: AsyncTaskManagerClient
+    timeline: AsyncTimelineClient
     upgrade_assistant: AsyncUpgradeAssistantClient
     uptime: AsyncUptimeClient
     visualizations: AsyncVisualizationsClient
@@ -267,16 +297,30 @@ class AsyncKibana(AsyncBaseClient):
         self.agent_builder = AsyncAgentBuilderClient(self)
         self.alerting = AsyncAlertingClient(self)
         self.apm = AsyncApmClient(self)
+        self.attack_discovery = AsyncAttackDiscoveryClient(self)
         self.cases = AsyncCasesClient(self)
         self.connectors = AsyncConnectorsClient(self)
         self.dashboards = AsyncDashboardsClient(self)
         self.data_views = AsyncDataViewsClient(self)
+        self.detection_engine = AsyncDetectionEngineClient(self)
+        self.endpoint = AsyncEndpointClient(self)
+        self.entity_analytics = AsyncEntityAnalyticsClient(self)
+        self.exception_lists = AsyncExceptionListsClient(self)
+        self.fleet = AsyncFleetClient(self)
+        self.fleet_agents = AsyncFleetAgentsClient(self)
+        self.fleet_enrollment = AsyncFleetEnrollmentClient(self)
+        self.fleet_epm = AsyncFleetEpmClient(self)
+        self.fleet_outputs = AsyncFleetOutputsClient(self)
+        self.fleet_policies = AsyncFleetPoliciesClient(self)
+        self.lists = AsyncListsClient(self)
         self.logstash = AsyncLogstashClient(self)
         self.maintenance_windows = AsyncMaintenanceWindowsClient(self)
         self.ml = AsyncMlClient(self)
         self.observability_ai_assistant = AsyncObservabilityAiAssistantClient(self)
+        self.osquery = AsyncOsqueryClient(self)
         self.saved_objects = AsyncSavedObjectsClient(self)
         self.security = AsyncSecurityClient(self)
+        self.security_ai_assistant = AsyncSecurityAiAssistantClient(self)
         self.short_urls = AsyncShortUrlsClient(self)
         self.slos = AsyncSlosClient(self)
         self.spaces = AsyncSpacesClient(self)
@@ -284,6 +328,7 @@ class AsyncKibana(AsyncBaseClient):
         self.streams = AsyncStreamsClient(self)
         self.synthetics = AsyncSyntheticsClient(self)
         self.task_manager = AsyncTaskManagerClient(self)
+        self.timeline = AsyncTimelineClient(self)
         self.upgrade_assistant = AsyncUpgradeAssistantClient(self)
         self.uptime = AsyncUptimeClient(self)
         self.visualizations = AsyncVisualizationsClient(self)
@@ -382,18 +427,33 @@ class AsyncSpaceScopedKibana:
     agent_builder: AsyncAgentBuilderClient
     alerting: AsyncAlertingClient
     apm: AsyncApmClient
+    attack_discovery: AsyncAttackDiscoveryClient
     cases: AsyncCasesClient
     connectors: AsyncConnectorsClient
     dashboards: AsyncDashboardsClient
     data_views: AsyncDataViewsClient
+    detection_engine: AsyncDetectionEngineClient
+    endpoint: AsyncEndpointClient
+    entity_analytics: AsyncEntityAnalyticsClient
+    exception_lists: AsyncExceptionListsClient
+    fleet: AsyncFleetClient
+    fleet_agents: AsyncFleetAgentsClient
+    fleet_enrollment: AsyncFleetEnrollmentClient
+    fleet_epm: AsyncFleetEpmClient
+    fleet_outputs: AsyncFleetOutputsClient
+    fleet_policies: AsyncFleetPoliciesClient
+    lists: AsyncListsClient
     maintenance_windows: AsyncMaintenanceWindowsClient
     ml: AsyncMlClient
     observability_ai_assistant: AsyncObservabilityAiAssistantClient
+    osquery: AsyncOsqueryClient
     saved_objects: AsyncSavedObjectsClient
+    security_ai_assistant: AsyncSecurityAiAssistantClient
     short_urls: AsyncShortUrlsClient
     slos: AsyncSlosClient
     streams: AsyncStreamsClient
     synthetics: AsyncSyntheticsClient
+    timeline: AsyncTimelineClient
     uptime: AsyncUptimeClient
     visualizations: AsyncVisualizationsClient
     workflows: AsyncWorkflowsClient
@@ -427,18 +487,33 @@ class AsyncSpaceScopedKibana:
         self.agent_builder = scoped(AsyncAgentBuilderClient)
         self.alerting = scoped(AsyncAlertingClient)
         self.apm = scoped(AsyncApmClient)
+        self.attack_discovery = scoped(AsyncAttackDiscoveryClient)
         self.cases = scoped(AsyncCasesClient)
         self.connectors = scoped(AsyncConnectorsClient)
         self.dashboards = scoped(AsyncDashboardsClient)
         self.data_views = scoped(AsyncDataViewsClient)
+        self.detection_engine = scoped(AsyncDetectionEngineClient)
+        self.endpoint = scoped(AsyncEndpointClient)
+        self.entity_analytics = scoped(AsyncEntityAnalyticsClient)
+        self.exception_lists = scoped(AsyncExceptionListsClient)
+        self.fleet = scoped(AsyncFleetClient)
+        self.fleet_agents = scoped(AsyncFleetAgentsClient)
+        self.fleet_enrollment = scoped(AsyncFleetEnrollmentClient)
+        self.fleet_epm = scoped(AsyncFleetEpmClient)
+        self.fleet_outputs = scoped(AsyncFleetOutputsClient)
+        self.fleet_policies = scoped(AsyncFleetPoliciesClient)
+        self.lists = scoped(AsyncListsClient)
         self.maintenance_windows = scoped(AsyncMaintenanceWindowsClient)
         self.ml = scoped(AsyncMlClient)
         self.observability_ai_assistant = scoped(AsyncObservabilityAiAssistantClient)
+        self.osquery = scoped(AsyncOsqueryClient)
         self.saved_objects = scoped(AsyncSavedObjectsClient)
+        self.security_ai_assistant = scoped(AsyncSecurityAiAssistantClient)
         self.short_urls = scoped(AsyncShortUrlsClient)
         self.slos = scoped(AsyncSlosClient)
         self.streams = scoped(AsyncStreamsClient)
         self.synthetics = scoped(AsyncSyntheticsClient)
+        self.timeline = scoped(AsyncTimelineClient)
         self.uptime = scoped(AsyncUptimeClient)
         self.visualizations = scoped(AsyncVisualizationsClient)
         self.workflows = scoped(AsyncWorkflowsClient)
