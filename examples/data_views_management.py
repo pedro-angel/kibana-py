@@ -16,7 +16,7 @@ Run this example:
 
 import uuid
 
-from utils import get_kibana_config
+from utils import get_kibana_config, print_kept, resource_prefix, should_cleanup
 
 from kibana import Kibana
 from kibana.exceptions import NotFoundError
@@ -29,19 +29,22 @@ def main() -> None:
     else:
         client = Kibana(kibana_url, basic_auth=basic_auth)
 
-    view_id = f"kbnpy-dataviews-example-{uuid.uuid4().hex[:8]}"
+    prefix = resource_prefix(__file__)  # "kbnpy-data-views"
+    view_id = f"{prefix}-{uuid.uuid4().hex[:8]}"
+    created: list[tuple[str, str]] = []
     try:
         # 1. Create a data view (allowNoIndex lets it exist without data)
-        created = client.data_views.create(
+        created_view = client.data_views.create(
             data_view={
                 "id": view_id,
-                "title": "kbnpy-example-logs-*",
+                "title": f"{prefix}-logs-*",
                 "name": "Example logs",
                 "timeFieldName": "@timestamp",
                 "allowNoIndex": True,
             }
         )
-        print(f"Created data view: {created['data_view']['id']}")
+        created.append(("data view", view_id))
+        print(f"Created data view: {created_view['data_view']['id']}")
 
         # 2. List all data views and fetch ours back
         listed = client.data_views.get_all()
@@ -85,11 +88,14 @@ def main() -> None:
         print(f"Swap preview would change {len(preview['result'])} saved object(s)")
     finally:
         # 6. Clean up
-        try:
-            client.data_views.delete(view_id=view_id)
-            print(f"Deleted data view: {view_id}")
-        except NotFoundError:
-            pass
+        if should_cleanup():
+            try:
+                client.data_views.delete(view_id=view_id)
+                print(f"Deleted data view: {view_id}")
+            except NotFoundError:
+                pass
+        else:
+            print_kept(created)
         client.close()
 
 

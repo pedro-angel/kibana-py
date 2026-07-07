@@ -20,7 +20,7 @@ Run this example:
 
 import uuid
 
-from utils import get_kibana_config
+from utils import get_kibana_config, print_kept, resource_prefix, should_cleanup
 
 from kibana import Kibana
 
@@ -32,7 +32,9 @@ def main() -> None:
     else:
         client = Kibana(kibana_url, basic_auth=basic_auth)
 
-    connector_id = f"kbnpy-connectors-ex-{uuid.uuid4().hex[:8]}"
+    prefix = resource_prefix(__file__)  # "kbnpy-connectors"
+    connector_id = f"{prefix}-{uuid.uuid4().hex[:8]}"
+    created: list[tuple[str, str]] = []
 
     try:
         # 1. List connector types, then only those usable by alerting rules
@@ -42,12 +44,16 @@ def main() -> None:
 
         # 2. Create a server-log connector with a caller-specified ID.
         #    config/secrets are optional and default to {}.
-        created = client.connectors.create(
+        created_connector = client.connectors.create(
             id=connector_id,
-            name="kbnpy example server log",
+            name=f"{prefix} example server log",
             connector_type_id=".server-log",
         ).body
-        print(f"Created connector: {created['id']} ({created['connector_type_id']})")
+        created.append(("connector", connector_id))
+        print(
+            f"Created connector: {created_connector['id']} "
+            f"({created_connector['connector_type_id']})"
+        )
 
         # 3. Retrieve it, and see it in the full listing
         fetched = client.connectors.get(id=connector_id).body
@@ -59,7 +65,7 @@ def main() -> None:
         #    omitted config/secrets are reset to {} on the server.
         updated = client.connectors.update(
             id=connector_id,
-            name="kbnpy example server log (updated)",
+            name=f"{prefix} example server log (updated)",
         ).body
         print(f"Updated connector name: {updated['name']}")
 
@@ -75,11 +81,14 @@ def main() -> None:
         print(f"OAuth callback script: {len(script.body)} bytes of JavaScript")
     finally:
         # 7. Clean up
-        try:
-            client.connectors.delete(id=connector_id)
-            print(f"Deleted connector: {connector_id}")
-        except Exception as cleanup_error:
-            print(f"Cleanup note: {cleanup_error}")
+        if should_cleanup():
+            try:
+                client.connectors.delete(id=connector_id)
+                print(f"Deleted connector: {connector_id}")
+            except Exception as cleanup_error:
+                print(f"Cleanup note: {cleanup_error}")
+        else:
+            print_kept(created)
         client.close()
 
 

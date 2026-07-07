@@ -16,11 +16,12 @@ Run this example:
     python examples/logstash_management.py
 """
 
-from utils import get_kibana_config
+from utils import get_kibana_config, print_kept, resource_prefix, should_cleanup
 
 from kibana import Kibana
 
-PIPELINE_ID = "kbnpy-logstash-example-pipeline"
+PREFIX = resource_prefix(__file__)  # "kbnpy-logstash"
+PIPELINE_ID = f"{PREFIX}-pipeline"
 
 
 def main():
@@ -31,6 +32,7 @@ def main():
     else:
         client = Kibana(kibana_url, basic_auth=basic_auth)
 
+    created: list[tuple[str, str]] = []
     try:
         # 1. Create a pipeline (204 No Content on success)
         print(f"Creating pipeline '{PIPELINE_ID}'...")
@@ -40,6 +42,7 @@ def main():
             description="Example pipeline created by kibana-py",
             settings={"queue.type": "memory", "pipeline.workers": 1},
         )
+        created.append(("logstash pipeline", PIPELINE_ID))
         print("Pipeline created")
 
         # 2. Read it back
@@ -67,11 +70,14 @@ def main():
 
     finally:
         # 5. Clean up: delete the example pipeline
-        try:
-            client.logstash.delete(id=PIPELINE_ID)
-            print(f"Deleted pipeline '{PIPELINE_ID}'")
-        except Exception as e:
-            print(f"Cleanup failed for '{PIPELINE_ID}': {e}")
+        if should_cleanup():
+            try:
+                client.logstash.delete(id=PIPELINE_ID)
+                print(f"Deleted pipeline '{PIPELINE_ID}'")
+            except Exception as e:
+                print(f"Cleanup failed for '{PIPELINE_ID}': {e}")
+        else:
+            print_kept(created)
         client.close()
 
 

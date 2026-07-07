@@ -17,9 +17,10 @@ Run this example:
 
 from datetime import UTC, datetime
 
-from utils import get_kibana_config
+from utils import get_kibana_config, print_kept, resource_prefix, should_cleanup
 
 from kibana import Kibana
+from kibana.exceptions import NotFoundError
 
 
 def main():
@@ -30,30 +31,40 @@ def main():
     else:
         client = Kibana(kibana_url, basic_auth=basic_auth)
 
-    rule_id = "kbnpy-example-detection-rule"
+    prefix = resource_prefix(__file__)  # "kbnpy-detection-engine"
+    rule_id = f"{prefix}-detection-rule"
+    rule_name = f"{prefix} rule"
+    created: list[tuple[str, str]] = []
     try:
+        # Idempotent start: clear only THIS example's own prior rule
+        try:
+            client.detection_engine.delete_rule(rule_id=rule_id)
+        except NotFoundError:
+            pass
+
         # 1. Create a custom query rule (disabled so it does not execute)
-        created = client.detection_engine.create_rule(
+        created_rule = client.detection_engine.create_rule(
             type="query",
-            name="kbnpy example rule",
+            name=rule_name,
             description="Example rule created by kibana-py",
             severity="low",
             risk_score=21,
             rule_id=rule_id,
-            query='user.name: "kbnpy-example-nonexistent"',
+            query=f'user.name: "{prefix}-nonexistent"',
             index=["logs-*"],
             interval="60m",
             from_="now-120m",
             enabled=False,
         )
-        print(f"Created rule {created.body['id']} (rule_id={rule_id})")
+        created.append(("detection rule", rule_id))
+        print(f"Created rule {created_rule.body['id']} (rule_id={rule_id})")
 
         # 2. Get it back and find it by name
         fetched = client.detection_engine.get_rule(rule_id=rule_id)
         print(f"Fetched rule: {fetched.body['name']} ({fetched.body['severity']})")
 
         found = client.detection_engine.find_rules(
-            filter='alert.attributes.name: "kbnpy example rule"'
+            filter=f'alert.attributes.name: "{rule_name}"'
         )
         print(f"Found {found.body['total']} rule(s) matching the name filter")
 
@@ -66,11 +77,11 @@ def main():
         # 4. Preview the alerts this rule would have generated
         preview = client.detection_engine.preview_rule(
             type="query",
-            name="kbnpy example preview",
+            name=f"{prefix} preview",
             description="Preview run",
             severity="low",
             risk_score=21,
-            query='user.name: "kbnpy-example-nonexistent"',
+            query=f'user.name: "{prefix}-nonexistent"',
             index=["logs-*"],
             invocation_count=1,
             timeframe_end=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.000Z"),
@@ -94,8 +105,14 @@ def main():
         print(f"Alerts in index: {alerts.body['hits']['total']['value']}")
     finally:
         # 7. Clean up
-        client.detection_engine.delete_rule(rule_id=rule_id)
-        print(f"Deleted rule {rule_id}")
+        if should_cleanup():
+            try:
+                client.detection_engine.delete_rule(rule_id=rule_id)
+                print(f"Deleted rule {rule_id}")
+            except NotFoundError:
+                pass
+        else:
+            print_kept(created)
         client.close()
 
 

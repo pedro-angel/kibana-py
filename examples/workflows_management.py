@@ -17,17 +17,19 @@ Run this example:
 
 import time
 
-from utils import get_kibana_config
+from utils import get_kibana_config, print_kept, resource_prefix, should_cleanup
 
 from kibana import Kibana
+from kibana.exceptions import NotFoundError
 
-WORKFLOW_ID = "kbnpy-example-workflow"
+PREFIX = resource_prefix(__file__)  # "kbnpy-workflows"
+WORKFLOW_ID = f"{PREFIX}-workflow"
 
 WORKFLOW_YAML = f"""name: {WORKFLOW_ID}
 description: kibana-py example workflow
 enabled: true
 tags:
-  - kbnpy-example
+  - {PREFIX}
 triggers:
   - type: manual
 steps:
@@ -46,11 +48,19 @@ def main():
     else:
         client = Kibana(kibana_url, basic_auth=basic_auth)
 
-    created = False
+    workflow_created = False
+    created: list[tuple[str, str]] = []
     try:
+        # Idempotent start: clear only THIS example's own prior workflow
+        try:
+            client.workflows.delete(id=WORKFLOW_ID, force=True)
+        except NotFoundError:
+            pass
+
         # 1. Create the workflow from its YAML definition
         workflow = client.workflows.create(id=WORKFLOW_ID, yaml=WORKFLOW_YAML).body
-        created = True
+        workflow_created = True
+        created.append(("workflow", WORKFLOW_ID))
         print(f"Created workflow {workflow['id']} (valid={workflow['valid']})")
 
         # 2. Get it by ID and find it via search
@@ -87,9 +97,12 @@ def main():
                 print(f"  [{entry['level']}] {entry['message']}")
     finally:
         # 5. Clean up
-        if created:
-            client.workflows.delete(id=WORKFLOW_ID, force=True)
-            print(f"Deleted workflow {WORKFLOW_ID}")
+        if workflow_created:
+            if should_cleanup():
+                client.workflows.delete(id=WORKFLOW_ID, force=True)
+                print(f"Deleted workflow {WORKFLOW_ID}")
+            else:
+                print_kept(created)
         client.close()
 
 

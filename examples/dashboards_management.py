@@ -13,7 +13,7 @@ Run this example:
     python examples/dashboards_management.py
 """
 
-from utils import get_kibana_config
+from utils import get_kibana_config, print_kept, resource_prefix, should_cleanup
 
 from kibana import Kibana
 
@@ -25,13 +25,15 @@ def main():
     else:
         client = Kibana(kibana_url, basic_auth=basic_auth)
 
-    created_ids = []
+    prefix = resource_prefix(__file__)  # "kbnpy-dashboards"
+    tag = f"{prefix}-tag"
+    created: list[tuple[str, str]] = []
     try:
         # 1. Create a dashboard (the server assigns the ID)
-        created = client.dashboards.create(
-            title="kbnpy-example Team Overview",
+        created_dashboard = client.dashboards.create(
+            title=f"{prefix} Team Overview",
             description="Created by the kibana-py dashboards example",
-            tags=["kbnpy-example-tag"],
+            tags=[tag],
             time_range={"from": "now-7d", "to": "now"},
             panels=[
                 {
@@ -45,8 +47,8 @@ def main():
                 }
             ],
         )
-        dashboard_id = created.body["id"]
-        created_ids.append(dashboard_id)
+        dashboard_id = created_dashboard.body["id"]
+        created.append(("dashboard", dashboard_id))
         print(f"✓ Created dashboard: {dashboard_id}")
 
         # 2. Read it back: responses are {id, data, meta} envelopes
@@ -60,30 +62,34 @@ def main():
 
         # 3. Upsert with a custom ID — create() cannot take an id;
         #    PUT creates the dashboard when the ID does not exist yet.
+        custom_id = f"{prefix}-custom-id"
         upserted = client.dashboards.update(
-            id="kbnpy-example-custom-id",
-            title="kbnpy-example Custom ID Dashboard",
+            id=custom_id,
+            title=f"{prefix} Custom ID Dashboard",
         )
-        created_ids.append(upserted.body["id"])
+        created.append(("dashboard", upserted.body["id"]))
         print(f"✓ Upserted dashboard with custom ID: {upserted.body['id']}")
 
         # 4. Search: simple_query_string on title/description + tag filters
-        results = client.dashboards.get_all(query="kbnpy-example*", per_page=10, page=1)
+        results = client.dashboards.get_all(query=f"{prefix}*", per_page=10, page=1)
         print(f"✓ Search found {results.body['total']} dashboard(s):")
         for item in results.body["dashboards"]:
             print(f"  - {item['id']}: {item['data']['title']}")
 
-        tagged = client.dashboards.get_all(tags=["kbnpy-example-tag"])
+        tagged = client.dashboards.get_all(tags=[tag])
         print(f"✓ Tag filter found {tagged.body['total']} dashboard(s)")
 
     finally:
         # 5. Clean up
-        for dashboard_id in created_ids:
-            try:
-                client.dashboards.delete(id=dashboard_id)
-                print(f"✓ Deleted dashboard: {dashboard_id}")
-            except Exception as e:
-                print(f"❌ Failed to delete {dashboard_id}: {e}")
+        if should_cleanup():
+            for _, dashboard_id in created:
+                try:
+                    client.dashboards.delete(id=dashboard_id)
+                    print(f"✓ Deleted dashboard: {dashboard_id}")
+                except Exception as e:
+                    print(f"❌ Failed to delete {dashboard_id}: {e}")
+        else:
+            print_kept(created)
         client.close()
 
 

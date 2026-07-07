@@ -14,7 +14,7 @@ Run this example:
     python examples/cases_management.py
 """
 
-from utils import get_kibana_config
+from utils import get_kibana_config, print_kept, resource_prefix, should_cleanup
 
 from kibana import Kibana
 
@@ -26,17 +26,19 @@ def main():
     else:
         client = Kibana(kibana_url, basic_auth=basic_auth)
 
-    created_ids = []
+    prefix = resource_prefix(__file__)  # "kbnpy-cases"
+    tag = f"{prefix}-tag"
+    created: list[tuple[str, str]] = []
     try:
         # 1. Create a case
         case = client.cases.create(
-            title="kbnpy-example Suspicious login activity",
+            title=f"{prefix} Suspicious login activity",
             description="Multiple failed logins detected from a single IP.",
-            tags=["kbnpy-example-tag", "security"],
+            tags=[tag, "security"],
             severity="high",
         )
         case_id = case.body["id"]
-        created_ids.append(case_id)
+        created.append(("case", case_id))
         print(f"✓ Created case: {case_id}")
         print(f"  Status: {case.body['status']}, severity: {case.body['severity']}")
 
@@ -65,8 +67,8 @@ def main():
         print(f"✓ Updated status: {updated.body[0]['status']}")
 
         # 4. Search cases and aggregate tags
-        found = client.cases.find(tags="kbnpy-example-tag", per_page=5)
-        print(f"✓ Found {found.body['total']} case(s) tagged kbnpy-example-tag")
+        found = client.cases.find(tags=tag, per_page=5)
+        print(f"✓ Found {found.body['total']} case(s) tagged {tag}")
         tags = client.cases.get_tags(owner="cases")
         print(f"  All case tags: {tags.body}")
 
@@ -80,9 +82,13 @@ def main():
 
     finally:
         # 6. Clean up
-        if created_ids:
-            client.cases.delete(ids=created_ids)
-            print(f"✓ Deleted {len(created_ids)} case(s)")
+        if should_cleanup():
+            case_ids = [ident for kind, ident in created if kind == "case"]
+            if case_ids:
+                client.cases.delete(ids=case_ids)
+                print(f"✓ Deleted {len(case_ids)} case(s)")
+        else:
+            print_kept(created)
         client.close()
 
 

@@ -14,9 +14,10 @@ Run this example:
     python examples/short_urls_management.py
 """
 
-from utils import get_kibana_config
+from utils import get_kibana_config, print_kept, resource_prefix, should_cleanup
 
 from kibana import Kibana
+from kibana.exceptions import NotFoundError
 
 
 def main():
@@ -27,18 +28,28 @@ def main():
     else:
         client = Kibana(kibana_url, basic_auth=basic_auth)
 
-    slug = "kbnpy-example-dashboards"
+    prefix = resource_prefix(__file__)  # "kbnpy-short-urls"
+    slug = f"{prefix}-dashboards"
     short_url_id = None
+    created: list[tuple[str, str]] = []
     try:
+        # Idempotent start: clear only THIS example's own prior short URL
+        try:
+            resolved_prior = client.short_urls.resolve(slug=slug)
+            client.short_urls.delete(id=resolved_prior.body["id"])
+        except NotFoundError:
+            pass
+
         # 1. Create a short URL that redirects to the dashboards app
-        created = client.short_urls.create(
+        created_url = client.short_urls.create(
             locator_id="LEGACY_SHORT_URL_LOCATOR",
             params={"url": "/app/dashboards"},
             slug=slug,
         )
-        short_url_id = created.body["id"]
+        short_url_id = created_url.body["id"]
+        created.append(("short url", short_url_id))
         print(f"Created short URL {short_url_id}")
-        print(f"  Share it as: {kibana_url}/goto/{created.body['slug']}")
+        print(f"  Share it as: {kibana_url}/goto/{created_url.body['slug']}")
 
         # 2. Get it by ID
         fetched = client.short_urls.get(id=short_url_id)
@@ -51,8 +62,11 @@ def main():
     finally:
         # 4. Clean up
         if short_url_id is not None:
-            client.short_urls.delete(id=short_url_id)
-            print(f"Deleted short URL {short_url_id}")
+            if should_cleanup():
+                client.short_urls.delete(id=short_url_id)
+                print(f"Deleted short URL {short_url_id}")
+            else:
+                print_kept(created)
         client.close()
 
 

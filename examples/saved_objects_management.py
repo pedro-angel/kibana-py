@@ -18,11 +18,12 @@ Run this example:
     python examples/saved_objects_management.py
 """
 
-from utils import get_kibana_config
+from utils import get_kibana_config, print_kept, resource_prefix, should_cleanup
 
 from kibana import Kibana
+from kibana.exceptions import NotFoundError
 
-PREFIX = "kbnpy-example-savedobj"
+PREFIX = resource_prefix(__file__)  # "kbnpy-saved-objects"
 
 
 def tag_attributes(name: str) -> dict:
@@ -38,6 +39,18 @@ def main():
 
     created: list[tuple[str, str]] = []  # (type, id) pairs for cleanup
     try:
+        # 0. Idempotent start: clear only THIS example's own prior objects
+        for obj_type, obj_id in [
+            ("tag", f"{PREFIX}-tag"),
+            ("dashboard", f"{PREFIX}-dashboard"),
+            ("tag", f"{PREFIX}-bulk-0"),
+            ("tag", f"{PREFIX}-bulk-1"),
+        ]:
+            try:
+                client.saved_objects.delete(type=obj_type, id=obj_id, force=True)
+            except NotFoundError:
+                pass
+
         # 1. Create a tag and a dashboard referencing it
         tag = client.saved_objects.create(
             type="tag", id=f"{PREFIX}-tag", attributes=tag_attributes(PREFIX)
@@ -119,21 +132,24 @@ def main():
 
     finally:
         # 7. Clean up everything we created (bulk_delete for the tags)
-        tags = [{"type": t, "id": i} for t, i in created if t == "tag"]
-        others = [(t, i) for t, i in created if t != "tag"]
-        try:
-            if tags:
-                result = client.saved_objects.bulk_delete(objects=tags, force=True)
-                ok = sum(1 for s in result["statuses"] if s["success"])
-                print(f"Bulk-deleted {ok}/{len(tags)} tags")
-        except Exception as e:
-            print(f"Failed to bulk-delete tags: {e}")
-        for obj_type, obj_id in others:
+        if should_cleanup():
+            tags = [{"type": t, "id": i} for t, i in created if t == "tag"]
+            others = [(t, i) for t, i in created if t != "tag"]
             try:
-                client.saved_objects.delete(type=obj_type, id=obj_id, force=True)
-                print(f"Deleted {obj_type}: {obj_id}")
+                if tags:
+                    result = client.saved_objects.bulk_delete(objects=tags, force=True)
+                    ok = sum(1 for s in result["statuses"] if s["success"])
+                    print(f"Bulk-deleted {ok}/{len(tags)} tags")
             except Exception as e:
-                print(f"Failed to delete {obj_type}/{obj_id}: {e}")
+                print(f"Failed to bulk-delete tags: {e}")
+            for obj_type, obj_id in others:
+                try:
+                    client.saved_objects.delete(type=obj_type, id=obj_id, force=True)
+                    print(f"Deleted {obj_type}: {obj_id}")
+                except Exception as e:
+                    print(f"Failed to delete {obj_type}/{obj_id}: {e}")
+        else:
+            print_kept(created)
         client.close()
 
 

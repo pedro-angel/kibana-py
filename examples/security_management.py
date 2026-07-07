@@ -14,12 +14,12 @@ Run this example:
     python examples/security_management.py
 """
 
-from utils import get_kibana_config
+from utils import get_kibana_config, print_kept, resource_prefix, should_cleanup
 
 from kibana import Kibana
 from kibana.exceptions import ApiError, NotFoundError
 
-PREFIX = "kbnpy-security-example"
+PREFIX = resource_prefix(__file__)  # "kbnpy-security"
 
 
 def main() -> None:
@@ -31,6 +31,9 @@ def main() -> None:
 
     role_name = f"{PREFIX}-log-reader"
     bulk_names = [f"{PREFIX}-bulk-a", f"{PREFIX}-bulk-b"]
+    created: list[tuple[str, str]] = [
+        ("role", name) for name in [role_name, *bulk_names]
+    ]
 
     try:
         # 1. Create or update a role
@@ -86,12 +89,15 @@ def main() -> None:
         print(f"API error: {e}")
     finally:
         # 6. Cleanup: delete everything the example created
-        for name in [role_name, *bulk_names]:
-            try:
-                client.security.delete_role(name=name)
-                print(f"Deleted role: {name}")
-            except NotFoundError:
-                pass
+        if should_cleanup():
+            for name in [role_name, *bulk_names]:
+                try:
+                    client.security.delete_role(name=name)
+                    print(f"Deleted role: {name}")
+                except NotFoundError:
+                    pass
+        else:
+            print_kept(created)
         client.close()
 
 

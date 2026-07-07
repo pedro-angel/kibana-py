@@ -17,7 +17,7 @@ Run this example:
 
 import uuid
 
-from utils import get_kibana_config
+from utils import get_kibana_config, print_kept, resource_prefix, should_cleanup
 
 from kibana import Kibana
 
@@ -31,7 +31,9 @@ def main() -> None:
     else:
         client = Kibana(kibana_url)
 
-    rule_id = f"kbnpy-alerting-example-{uuid.uuid4().hex[:8]}"
+    prefix = resource_prefix(__file__)  # "kbnpy-alerting"
+    rule_id = f"{prefix}-{uuid.uuid4().hex[:8]}"
+    created: list[tuple[str, str]] = []
 
     try:
         # 1. Framework health and rule types
@@ -45,9 +47,9 @@ def main() -> None:
         )
 
         # 2. Create a disabled .es-query rule with a chosen ID
-        created = client.alerting.rule.create(
+        created_rule = client.alerting.rule.create(
             id=rule_id,
-            name="kbnpy example: error spike",
+            name=f"{prefix} example: error spike",
             consumer="alerts",
             rule_type_id=".es-query",
             schedule={"interval": "1m"},
@@ -63,17 +65,18 @@ def main() -> None:
                 "timeWindowUnit": "m",
             },
             enabled=False,
-            tags=["kbnpy-example"],
+            tags=[prefix],
             alert_delay={"active": 2},
         )
-        print(f"Created rule {created.body['id']} ({created.body['name']})")
+        created.append(("alerting rule", rule_id))
+        print(f"Created rule {created_rule.body['id']} ({created_rule.body['name']})")
 
         # 3. Get, find, update
         rule = client.alerting.rule.get(id=rule_id).body
         print(f"Fetched rule, schedule: {rule['schedule']}")
 
         found = client.alerting.rule.find(
-            search="kbnpy example",
+            search=prefix,
             search_fields=["name"],
             sort_field="name",
             sort_order="asc",
@@ -83,7 +86,7 @@ def main() -> None:
 
         updated = client.alerting.rule.update(
             id=rule_id,
-            name="kbnpy example: error spike (updated)",
+            name=f"{prefix} example: error spike (updated)",
             schedule={"interval": "5m"},
             params=rule["params"],
             tags=rule["tags"],
@@ -112,11 +115,14 @@ def main() -> None:
 
     finally:
         # 6. Cleanup
-        try:
-            client.alerting.rule.delete(id=rule_id)
-            print(f"Deleted rule {rule_id}")
-        except Exception:
-            pass
+        if should_cleanup():
+            try:
+                client.alerting.rule.delete(id=rule_id)
+                print(f"Deleted rule {rule_id}")
+            except Exception:
+                pass
+        else:
+            print_kept(created)
         client.close()
 
 

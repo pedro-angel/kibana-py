@@ -13,9 +13,10 @@ Run this example:
     python examples/exception_lists_management.py
 """
 
-from utils import get_kibana_config
+from utils import get_kibana_config, print_kept, resource_prefix, should_cleanup
 
 from kibana import Kibana
+from kibana.exceptions import NotFoundError
 
 
 def main():
@@ -26,18 +27,27 @@ def main():
     else:
         client = Kibana(kibana_url, basic_auth=basic_auth)
 
-    list_id = "kbnpy-example-trusted-hosts"
+    prefix = resource_prefix(__file__)  # "kbnpy-exception-lists"
+    list_id = f"{prefix}-trusted-hosts"
     imported_id = None
+    created: list[tuple[str, str]] = []
     try:
+        # Idempotent start: clear only THIS example's own prior list
+        try:
+            client.exception_lists.delete(list_id=list_id)
+        except NotFoundError:
+            pass
+
         # 1. Create a detection exception list
-        created = client.exception_lists.create(
+        created_list = client.exception_lists.create(
             name="Trusted hosts (kibana-py example)",
             description="Hosts that should never generate detection alerts",
             type="detection",
             list_id=list_id,
             tags=["kibana-py-example"],
         )
-        print(f"Created exception list {created.body['id']} ({list_id})")
+        created.append(("exception list", list_id))
+        print(f"Created exception list {created_list.body['id']} ({list_id})")
 
         # 2. Add an exception item for a trusted host
         item = client.exception_lists.create_item(
@@ -63,7 +73,7 @@ def main():
 
         # 4. Export as NDJSON and re-import as a brand new list
         exported = client.exception_lists.export(
-            id=created.body["id"], list_id=list_id, namespace_type="single"
+            id=created_list.body["id"], list_id=list_id, namespace_type="single"
         )
         result = client.exception_lists.import_lists(
             file=exported.body, as_new_list=True
@@ -76,19 +86,26 @@ def main():
             per_page=100,
         )
         for lst in found.body["data"]:
-            if lst["id"] != created.body["id"]:
+            if lst["id"] != created_list.body["id"]:
                 imported_id = lst["id"]
+                created.append(("exception list (imported copy)", imported_id))
                 print(f"Imported copy has list_id {lst['list_id']}")
     finally:
         # 5. Clean up both lists (items are deleted with their list)
-        try:
-            client.exception_lists.delete(list_id=list_id)
-            print(f"Deleted exception list {list_id}")
-        except Exception:
-            pass
-        if imported_id is not None:
-            client.exception_lists.delete(id=imported_id)
-            print(f"Deleted imported copy {imported_id}")
+        if should_cleanup():
+            try:
+                client.exception_lists.delete(list_id=list_id)
+                print(f"Deleted exception list {list_id}")
+            except NotFoundError:
+                pass
+            if imported_id is not None:
+                try:
+                    client.exception_lists.delete(id=imported_id)
+                    print(f"Deleted imported copy {imported_id}")
+                except NotFoundError:
+                    pass
+        else:
+            print_kept(created)
         client.close()
 
 

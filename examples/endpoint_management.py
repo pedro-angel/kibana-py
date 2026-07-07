@@ -16,7 +16,7 @@ Run this example:
     python examples/endpoint_management.py
 """
 
-from utils import get_kibana_config
+from utils import get_kibana_config, print_kept, resource_prefix, should_cleanup
 
 from kibana import Kibana
 from kibana.exceptions import BadRequestError
@@ -30,7 +30,9 @@ def main():
     else:
         client = Kibana(kibana_url, basic_auth=basic_auth)
 
+    prefix = resource_prefix(__file__)  # "kbnpy-endpoint"
     script_id = None
+    created: list[tuple[str, str]] = []
     try:
         # 1. List enrolled endpoint hosts and read actions state
         hosts = client.endpoint.get_metadata_list(page_size=20)
@@ -40,16 +42,17 @@ def main():
         print(f"Response actions can encrypt: {state.body['data']['canEncrypt']}")
 
         # 2. Scripts library CRUD (works without enrolled endpoints)
-        created = client.endpoint.create_script(
-            name="kbnpy-example-collect-logs",
+        created_script = client.endpoint.create_script(
+            name=f"{prefix}-collect-logs",
             platform=["linux"],
             file_type="script",
-            file=b"#!/bin/bash\necho kbnpy-example\n",
+            file=f"#!/bin/bash\necho {prefix}\n".encode(),
             filename="collect-logs.sh",
             description="Example script created by kibana-py",
             tags=["threatHunting"],
         )
-        script_id = created.body["data"]["id"]
+        script_id = created_script.body["data"]["id"]
+        created.append(("endpoint script", script_id))
         print(f"Created library script {script_id}")
 
         fetched = client.endpoint.get_script(script_id=script_id)
@@ -74,8 +77,11 @@ def main():
     finally:
         # 4. Clean up
         if script_id is not None:
-            client.endpoint.delete_script(script_id=script_id)
-            print(f"Deleted library script {script_id}")
+            if should_cleanup():
+                client.endpoint.delete_script(script_id=script_id)
+                print(f"Deleted library script {script_id}")
+            else:
+                print_kept(created)
         client.close()
 
 

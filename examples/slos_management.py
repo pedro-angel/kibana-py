@@ -18,12 +18,13 @@ Run this example:
 import time
 import uuid
 
-from utils import get_kibana_config
+from utils import get_kibana_config, print_kept, resource_prefix, should_cleanup
 
 from kibana import Kibana
 from kibana.exceptions import ApiError
 
-SLO_NAME = f"kbnpy-slos-example-{uuid.uuid4().hex[:8]}"
+PREFIX = resource_prefix(__file__)  # "kbnpy-slos"
+SLO_NAME = f"{PREFIX}-{uuid.uuid4().hex[:8]}"
 
 
 def main() -> None:
@@ -34,26 +35,34 @@ def main() -> None:
         client = Kibana(kibana_url, basic_auth=basic_auth)
 
     slo_id: str | None = None
+    created: list[tuple[str, str]] = []
     try:
         # 1. Create an SLO: 99% of documents in the last 7 days are "good"
-        created = client.slos.create(
-            name=SLO_NAME,
-            description="Example availability SLO managed by kibana-py",
-            indicator={
-                "type": "sli.kql.custom",
-                "params": {
-                    "index": "kbnpy-example-logs-*",
-                    "good": "status: ok",
-                    "total": "",
-                    "timestampField": "@timestamp",
+        try:
+            created_slo = client.slos.create(
+                name=SLO_NAME,
+                description="Example availability SLO managed by kibana-py",
+                indicator={
+                    "type": "sli.kql.custom",
+                    "params": {
+                        "index": f"{PREFIX}-logs-*",
+                        "good": "status: ok",
+                        "total": "",
+                        "timestampField": "@timestamp",
+                    },
                 },
-            },
-            time_window={"duration": "7d", "type": "rolling"},
-            budgeting_method="occurrences",
-            objective={"target": 0.99},
-            tags=["kbnpy", "example"],
-        )
-        slo_id = created.body["id"]
+                time_window={"duration": "7d", "type": "rolling"},
+                budgeting_method="occurrences",
+                objective={"target": 0.99},
+                tags=["kbnpy", "slos"],
+            )
+        except ApiError as exc:
+            # SLOs require a Platinum-level (or trial) license; assert the
+            # real rejection instead of crashing when unlicensed.
+            print(f"SLO creation rejected (license required?): {exc}")
+            return
+        slo_id = created_slo.body["id"]
+        created.append(("slo", slo_id))
         print(f"Created SLO {SLO_NAME!r} with id {slo_id}")
 
         # 2. Read it back and list SLOs
@@ -77,27 +86,34 @@ def main() -> None:
         print(f"Disabled: enabled={client.slos.get(slo_id=slo_id).body['enabled']}")
         client.slos.enable(slo_id=slo_id)
         print(f"Enabled:  enabled={client.slos.get(slo_id=slo_id).body['enabled']}")
-
-        # 5. Bulk delete (asynchronous) and poll the task status
-        task = client.slos.bulk_delete(slo_ids=[slo_id])
-        task_id = task.body["taskId"]
-        print(f"Bulk delete started, task {task_id}")
-
-        deadline = time.time() + 60
-        while time.time() < deadline:
-            status = client.slos.bulk_delete_status(task_id=task_id)
-            if status.body.get("isDone"):
-                print(f"Bulk delete finished: {status.body.get('results')}")
-                slo_id = None
-                break
-            time.sleep(2)
     finally:
-        if slo_id is not None:  # fallback cleanup if bulk delete did not finish
-            try:
-                client.slos.delete(slo_id=slo_id)
-                print(f"Deleted SLO {slo_id}")
-            except ApiError as exc:
-                print(f"Cleanup failed: {exc}")
+        # 5. Clean up: bulk delete (asynchronous) + poll the task status,
+        # with a single-delete fallback if the bulk task does not finish
+        # in time. Only runs when the caller opts into cleanup.
+        if slo_id is not None:
+            if should_cleanup():
+                task = client.slos.bulk_delete(slo_ids=[slo_id])
+                task_id = task.body["taskId"]
+                print(f"Bulk delete started, task {task_id}")
+
+                deadline = time.time() + 60
+                done = False
+                while time.time() < deadline:
+                    status = client.slos.bulk_delete_status(task_id=task_id)
+                    if status.body.get("isDone"):
+                        print(f"Bulk delete finished: {status.body.get('results')}")
+                        done = True
+                        break
+                    time.sleep(2)
+
+                if not done:  # fallback cleanup if bulk delete did not finish
+                    try:
+                        client.slos.delete(slo_id=slo_id)
+                        print(f"Deleted SLO {slo_id}")
+                    except ApiError as exc:
+                        print(f"Cleanup failed: {exc}")
+            else:
+                print_kept(created)
         client.close()
 
 

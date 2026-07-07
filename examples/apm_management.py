@@ -12,11 +12,12 @@ Run this example:
     python examples/apm_management.py
 """
 
-from utils import get_kibana_config
+from utils import get_kibana_config, print_kept, resource_prefix, should_cleanup
 
 from kibana import Kibana
 
-SERVICE = "kbnpy-example-apm-svc"
+PREFIX = resource_prefix(__file__)  # "kbnpy-apm"
+SERVICE = f"{PREFIX}-svc"
 ENVIRONMENT = "testing"
 
 
@@ -29,6 +30,7 @@ def main():
         client = Kibana(kibana_url, basic_auth=basic_auth)
 
     sourcemap_id = None
+    created: list[tuple[str, str]] = []
     try:
         # 1. Create an agent configuration and read it back
         client.apm.create_or_update_agent_configuration(
@@ -78,21 +80,29 @@ def main():
             },
         )
         sourcemap_id = uploaded.body["id"]
+        created.append(("APM source map", sourcemap_id))
+        created.append(("APM agent configuration", f"{SERVICE}/{ENVIRONMENT}"))
         print(f"Uploaded source map {uploaded.body['identifier']}")
         listed = client.apm.get_sourcemaps(page=1, per_page=10)
         print(f"Source maps stored: {listed.body['total']}")
     finally:
         # 4. Clean up
-        if sourcemap_id is not None:
-            client.apm.delete_sourcemap(id=sourcemap_id)
-            print(f"Deleted source map {sourcemap_id}")
-        try:
-            client.apm.delete_agent_configuration(
-                service_name=SERVICE, service_environment=ENVIRONMENT
-            )
-            print("Deleted agent configuration")
-        except Exception:
-            pass
+        if should_cleanup():
+            if sourcemap_id is not None:
+                client.apm.delete_sourcemap(id=sourcemap_id)
+                print(f"Deleted source map {sourcemap_id}")
+            try:
+                client.apm.delete_agent_configuration(
+                    service_name=SERVICE, service_environment=ENVIRONMENT
+                )
+                print("Deleted agent configuration")
+            except Exception:
+                pass
+        else:
+            print_kept(created)
+        # The deployment annotation has no delete API; it stays in the
+        # observability-annotations index and cannot be torn down here.
+        print("Note: the APM deployment annotation cannot be deleted (no API).")
         client.close()
 
 

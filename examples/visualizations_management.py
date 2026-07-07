@@ -15,11 +15,11 @@ Run this example:
 
 import uuid
 
-from utils import create_kibana_client
+from utils import create_kibana_client, print_kept, resource_prefix, should_cleanup
 
 from kibana.exceptions import NotFoundError
 
-PREFIX = "kbnpy-visualizations-example"
+PREFIX = resource_prefix(__file__)  # "kbnpy-visualizations"
 
 
 def metric_config(title: str) -> dict:
@@ -40,10 +40,12 @@ def main() -> None:
     client = create_kibana_client()
     title = f"{PREFIX}-{uuid.uuid4().hex[:8]}"
     viz_id = None
+    created: list[tuple[str, str]] = []
     try:
         # 1. Create — the server assigns the ID and returns {id, data, meta}
-        created = client.visualizations.create(data=metric_config(title))
-        viz_id = created.body["id"]
+        created_viz = client.visualizations.create(data=metric_config(title))
+        viz_id = created_viz.body["id"]
+        created.append(("visualization", viz_id))
         print(f"Created visualization {viz_id!r} titled {title!r}")
 
         # 2. Get by ID
@@ -64,11 +66,14 @@ def main() -> None:
     finally:
         # 5. Delete (cleanup)
         if viz_id is not None:
-            try:
-                client.visualizations.delete(id=viz_id)
-                print(f"Deleted visualization {viz_id!r}")
-            except NotFoundError:
-                pass
+            if should_cleanup():
+                try:
+                    client.visualizations.delete(id=viz_id)
+                    print(f"Deleted visualization {viz_id!r}")
+                except NotFoundError:
+                    pass
+            else:
+                print_kept(created)
         client.close()
 
 
