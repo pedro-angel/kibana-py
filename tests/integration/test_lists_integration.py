@@ -94,6 +94,18 @@ class TestListsIndexStatus:
     TestListsIndexLifecycleInOwnSpace instead.
     """
 
+    @pytest.fixture(autouse=True)
+    def _ensure_index(self, kibana_client):
+        """Ensure the shared value list data streams exist before these tests.
+
+        On a fresh stack the ``.lists-default``/``.items-default`` data streams
+        do not exist until ``create_index()`` runs, so ``get_index_status``
+        would 404 depending on test order. ``create_index`` is idempotent on
+        9.4.3 (``{"acknowledged": true}`` whether or not they already exist),
+        so this makes the status assertions independent of stack freshness.
+        """
+        kibana_client.lists.create_index()
+
     def test_get_index_status(self, kibana_client):
         """Test that the shared value list data streams exist."""
         status = kibana_client.lists.get_index_status()
