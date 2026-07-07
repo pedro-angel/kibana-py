@@ -27,6 +27,27 @@ export KIBANA_PASSWORD="changeme"
 
 Shared helpers live in `utils.py` (stack detection, client construction, optional OpenTelemetry setup) — the examples import it, you don't run it directly.
 
+## Running examples: keep or clean
+
+Every `*_management.py` example creates real resources in your Kibana instance, prints what it
+did, and then decides whether to delete them:
+
+```
+Delete created resources? (y/N):
+```
+
+- **Interactively**, you're prompted as shown above; anything but `y` keeps the resources.
+- **`--cleanup`** deletes the created resources without prompting.
+- **`--no-cleanup`** keeps the created resources without prompting.
+- **Non-interactively** (no TTY — e.g. piped input, cron, CI) and neither flag is given, the
+  example keeps the resources by default and prints a notice instead of prompting. Keep is
+  always the default when in doubt.
+
+Every resource an example creates is namespaced `kbnpy-<example>-<resource>` (for example,
+`lists_management.py` creates a value list called `kbnpy-lists-bad-ips`), so resources kept from
+one example never collide with another. Each example also clears only its own prior resources
+before creating new ones, so re-running a kept example is safe and won't fail with a conflict.
+
 ## Examples by API
 
 ### Dashboards & Visualizations — the new HTTP APIs (tech preview, Kibana 9.4+)

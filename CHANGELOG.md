@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-07-07
+
+### Fixed
+- Examples: repaired a Python-2 `except` SyntaxError in `examples/utils.py` that broke
+  `import utils` (and therefore every example) under Python 3.14.
+
+### Changed
+- Examples are now human-usable end-to-end: each run prints its results, then prompts to
+  keep or delete the resources it created (`--cleanup` / `--no-cleanup` override; keep is the
+  default, including non-interactively). Every resource is namespaced `kbnpy-<example>-<...>`
+  so kept resources never collide across examples, and setup is idempotent so re-running a
+  kept example is safe.
+
 ## [0.3.0] - 2026-07-07
 
 Complete Kibana 9.4.3 Fleet and Security Solution REST API coverage on top of the platform surface: 15 new namespaces, 341 new endpoints (610 total across 39 namespaces), full sync/async parity, all verified live against Kibana 9.4.3 (Security AI namespaces exercised end-to-end through a local LM Studio OpenAI-compatible model).
