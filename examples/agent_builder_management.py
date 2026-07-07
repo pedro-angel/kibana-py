@@ -17,13 +17,10 @@ Run this example:
     python examples/agent_builder_management.py
 """
 
-from utils import get_kibana_config
+from utils import get_kibana_config, print_kept, resource_prefix, should_cleanup
 
 from kibana import Kibana
-from kibana.exceptions import ApiError
-
-TOOL_ID = "kbnpy_example.cluster_indices"
-AGENT_ID = "kbnpy-example-agent"
+from kibana.exceptions import ApiError, NotFoundError
 
 
 def main():
@@ -34,11 +31,26 @@ def main():
     else:
         client = Kibana(kibana_url, basic_auth=basic_auth)
 
-    tool_created = agent_created = False
+    prefix = resource_prefix(__file__)  # "kbnpy-agent-builder"
+    tool_id = f"{prefix.replace('-', '_')}.cluster_indices"
+    agent_id = f"{prefix}-agent"
+    created: list[tuple[str, str]] = []
     try:
+        # Idempotent start: clear only THIS example's own prior resources.
+        # Dependency order matters here too: the agent references the
+        # tool, so it must be deleted first.
+        try:
+            client.agent_builder.delete_agent(id=agent_id)
+        except NotFoundError:
+            pass
+        try:
+            client.agent_builder.delete_tool(tool_id=tool_id, force=True)
+        except NotFoundError:
+            pass
+
         # 1. Create an ES|QL tool with a static query and run it directly
         client.agent_builder.create_tool(
-            id=TOOL_ID,
+            id=tool_id,
             type="esql",
             description="Count documents in the Kibana event log",
             configuration={
@@ -48,30 +60,30 @@ def main():
             },
             tags=["kbnpy-example"],
         )
-        tool_created = True
-        print(f"Created tool {TOOL_ID}")
+        created.append(("agent_builder tool", tool_id))
+        print(f"Created tool {tool_id}")
 
-        executed = client.agent_builder.execute_tool(tool_id=TOOL_ID, tool_params={})
+        executed = client.agent_builder.execute_tool(tool_id=tool_id, tool_params={})
         for result in executed.body["results"]:
             if result["type"] == "esql_results":
                 print(f"  Tool result: {result['data']['values']}")
 
         # 2. Create an agent that can use the tool
         client.agent_builder.create_agent(
-            id=AGENT_ID,
-            name="kbnpy example agent",
+            id=agent_id,
+            name=f"{prefix} agent",
             description="Example agent created by kibana-py",
             configuration={
                 "instructions": "Answer briefly using your tools.",
-                "tools": [{"tool_ids": [TOOL_ID]}],
+                "tools": [{"tool_ids": [tool_id]}],
             },
             labels=["kbnpy-example"],
         )
-        agent_created = True
-        print(f"Created agent {AGENT_ID}")
+        created.append(("agent_builder agent", agent_id))
+        print(f"Created agent {agent_id}")
 
         # 3. Fetch the agent's A2A card (Agent2Agent protocol descriptor)
-        card = client.agent_builder.get_a2a_card(agent_id=AGENT_ID)
+        card = client.agent_builder.get_a2a_card(agent_id=agent_id)
         print(f"A2A card: {card.body['name']} (A2A {card.body['protocolVersion']})")
 
         # 4. Initialize a session against the built-in MCP server
@@ -89,11 +101,12 @@ def main():
         )
         print(f"MCP server: {mcp.body['result']['serverInfo']['name']}")
 
-        # 5. Chat with the agent (this needs a working LLM connector)
+        # 5. Chat with the agent (needs a working LLM connector). The
+        # conversation only exists when this branch actually runs.
         try:
             reply = client.agent_builder.converse(
                 input="How many documents are in the event log?",
-                agent_id=AGENT_ID,
+                agent_id=agent_id,
             )
             print(f"Agent reply: {reply.body['response']['message']}")
             client.agent_builder.delete_conversation(
@@ -102,13 +115,22 @@ def main():
         except ApiError as exc:
             print(f"converse skipped (no LLM connector available): {exc.message}")
     finally:
-        # 6. Clean up
-        if agent_created:
-            client.agent_builder.delete_agent(id=AGENT_ID)
-            print(f"Deleted agent {AGENT_ID}")
-        if tool_created:
-            client.agent_builder.delete_tool(tool_id=TOOL_ID, force=True)
-            print(f"Deleted tool {TOOL_ID}")
+        # 6. Clean up: delete the agent BEFORE the tool (the agent
+        # references the tool; force=True lets the tool go even if a
+        # reference lingers).
+        if should_cleanup():
+            try:
+                client.agent_builder.delete_agent(id=agent_id)
+                print(f"Deleted agent {agent_id}")
+            except NotFoundError:
+                pass
+            try:
+                client.agent_builder.delete_tool(tool_id=tool_id, force=True)
+                print(f"Deleted tool {tool_id}")
+            except NotFoundError:
+                pass
+        else:
+            print_kept(created)
         client.close()
 
 

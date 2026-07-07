@@ -12,7 +12,7 @@ Run this example:
     python examples/timeline_management.py
 """
 
-from utils import get_kibana_config
+from utils import get_kibana_config, print_kept, resource_prefix, should_cleanup
 
 from kibana import Kibana
 
@@ -25,12 +25,16 @@ def main():
     else:
         client = Kibana(kibana_url, basic_auth=basic_auth)
 
+    prefix = resource_prefix(__file__)  # "kbnpy-timeline"
     timeline_id = None
+    cleanup: bool | None = None
+    created: list[tuple[str, str]] = []
     try:
-        # 1. Create a Timeline
-        created = client.timeline.create(
+        # 1. Create a Timeline (the id is server-generated, so no
+        # idempotent pre-delete is needed for re-runs)
+        created_timeline = client.timeline.create(
             timeline={
-                "title": "kbnpy-example-investigation",
+                "title": f"{prefix}-investigation",
                 "description": "Investigating suspicious logons",
                 "dateRange": {
                     "start": "2026-07-01T00:00:00.000Z",
@@ -38,8 +42,9 @@ def main():
                 },
             }
         )
-        timeline_id = created.body["savedObjectId"]
-        print(f"Created timeline {timeline_id} ({created.body['title']})")
+        timeline_id = created_timeline.body["savedObjectId"]
+        created.append(("timeline", timeline_id))
+        print(f"Created timeline {timeline_id} ({created_timeline.body['title']})")
 
         # 2a. Add an investigation note
         note = client.timeline.create_note(
@@ -50,7 +55,7 @@ def main():
 
         # 2b. Pin an event (its Elasticsearch document _id) to the Timeline
         pinned = client.timeline.pin_event(
-            event_id="example-event-document-id", timeline_id=timeline_id
+            event_id=f"{prefix}-event-document-id", timeline_id=timeline_id
         )
         print(f"Pinned event as {pinned.body['pinnedEventId']}")
 
@@ -60,14 +65,24 @@ def main():
         )
         print(f"Exported {len(list(exported))} timeline(s) as NDJSON")
 
-        # 4a. Delete the note
-        client.timeline.delete_notes(note_id=note_id)
-        print(f"Deleted note {note_id}")
+        # 4a. Delete the note (gated — decide once here and reuse the same
+        # decision for the Timeline delete in `finally`)
+        cleanup = should_cleanup()
+        if cleanup:
+            client.timeline.delete_notes(note_id=note_id)
+            print(f"Deleted note {note_id}")
     finally:
-        # 4b. Delete the Timeline (also removes its pinned events)
+        # 4b. Delete the Timeline (also removes its pinned events). Both
+        # this and the note deletion above are gated by the same
+        # keep/clean decision.
         if timeline_id is not None:
-            client.timeline.delete(saved_object_ids=[timeline_id])
-            print(f"Deleted timeline {timeline_id}")
+            if cleanup is None:
+                cleanup = should_cleanup()
+            if cleanup:
+                client.timeline.delete(saved_object_ids=[timeline_id])
+                print(f"Deleted timeline {timeline_id}")
+            else:
+                print_kept(created)
         client.close()
 
 
