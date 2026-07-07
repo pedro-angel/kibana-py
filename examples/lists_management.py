@@ -16,7 +16,7 @@ Run this example:
 
 import time
 
-from utils import get_kibana_config
+from utils import get_kibana_config, print_kept, resource_prefix, should_cleanup
 
 from kibana import Kibana
 from kibana.exceptions import NotFoundError
@@ -30,9 +30,12 @@ def main():
     else:
         client = Kibana(kibana_url, basic_auth=basic_auth)
 
-    list_id = "kbnpy-example-bad-ips"
+    prefix = resource_prefix(__file__)  # "kbnpy-lists"
+    list_id = f"{prefix}-bad-ips"
+    created: list[tuple[str, str]] = []
     try:
-        # 1. Make sure the value list data streams exist
+        # 1. Make sure the value list data streams exist (shared infra — create only
+        # if missing, never torn down)
         try:
             status = client.lists.get_index_status()
         except NotFoundError:
@@ -40,14 +43,22 @@ def main():
             status = client.lists.get_index_status()
         print(f"Value list data streams ready: {status.body}")
 
-        # 2. Create a value list of IPs
-        created = client.lists.create(
-            name="Bad ips (kibana-py example)",
+        # 2. Idempotent start: clear only THIS example's own prior resource, then
+        # create fresh
+        try:
+            client.lists.delete(id=list_id)
+        except NotFoundError:
+            pass
+        created_list = client.lists.create(
+            name="Bad IPs (kibana-py example)",
             description="Known bad IP addresses",
             type="ip",
             id=list_id,
         )
-        print(f"Created list {created.body['id']} (type={created.body['type']})")
+        created.append(("value list", list_id))
+        print(
+            f"Created list {created_list.body['id']} (type={created_list.body['type']})"
+        )
 
         # 3. Add a single list item
         item = client.lists.create_item(
@@ -74,11 +85,14 @@ def main():
         print(f"Exported values: {sorted(str(v) for v in exported.body)}")
     finally:
         # 6. Clean up: deleting the list also deletes all of its items
-        try:
-            client.lists.delete(id=list_id)
-            print(f"Deleted list {list_id}")
-        except NotFoundError:
-            pass
+        if should_cleanup():
+            try:
+                client.lists.delete(id=list_id)
+                print(f"Deleted list {list_id}")
+            except NotFoundError:
+                pass
+        else:
+            print_kept(created)
         client.close()
 
 
