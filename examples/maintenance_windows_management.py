@@ -10,8 +10,10 @@ This example shows the minimal code needed to:
 4. Update it (rename + disable)
 5. Clean up (delete the maintenance window)
 
-Maintenance windows require a Platinum or higher license (or a trial).
-The Maintenance Windows API is generally available in Kibana 9.4.
+Maintenance windows require a Platinum or higher license (or a trial). The
+Maintenance Windows API is generally available in Kibana 9.4. On an
+unlicensed (Basic) stack, creation is rejected -- this example asserts that
+exact rejection instead of crashing or skipping silently.
 
 Run this example:
     python examples/maintenance_windows_management.py
@@ -19,9 +21,10 @@ Run this example:
 
 from datetime import UTC, datetime, timedelta
 
-from utils import get_kibana_config
+from utils import get_kibana_config, print_kept, resource_prefix, should_cleanup
 
 from kibana import Kibana
+from kibana.exceptions import AuthorizationException, NotFoundError
 
 
 def main():
@@ -32,35 +35,49 @@ def main():
     else:
         client = Kibana(kibana_url, basic_auth=basic_auth)
 
+    prefix = resource_prefix(__file__)  # "kbnpy-maintenance-windows"
+    title = f"{prefix}-weekly-maintenance"
+
     # Start next week so the maintenance window is "upcoming". (Kibana only
     # materializes recurring events within a limited look-ahead horizon, so a
     # far-future start would be reported as "finished".)
     start = (datetime.now(UTC) + timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
 
     mw_id = None
+    created: list[tuple[str, str]] = []
     try:
-        # 1. Create a weekly two-hour maintenance window scoped by a KQL query
-        created = client.maintenance_windows.create(
-            title="kbnpy-example-weekly-maintenance",
-            schedule={
-                "custom": {
-                    "start": start,
-                    "duration": "2h",
-                    "timezone": "UTC",
-                    "recurring": {"every": "1w"},
-                }
-            },
-            scope={"alerting": {"query": {"kql": 'tags: "maintenance"'}}},
+        # 1. Create a weekly two-hour maintenance window scoped by a KQL
+        # query. This requires a Platinum/Enterprise license (or trial);
+        # assert the exact rejection rather than crashing or skipping
+        # silently when unlicensed.
+        try:
+            created_mw = client.maintenance_windows.create(
+                title=title,
+                schedule={
+                    "custom": {
+                        "start": start,
+                        "duration": "2h",
+                        "timezone": "UTC",
+                        "recurring": {"every": "1w"},
+                    }
+                },
+                scope={"alerting": {"query": {"kql": 'tags: "maintenance"'}}},
+            )
+        except AuthorizationException as exc:
+            print(f"Maintenance window creation rejected (license required): {exc}")
+            return
+        mw_id = created_mw.body["id"]
+        created.append(("maintenance window", mw_id))
+        print(
+            f"Created maintenance window {mw_id} (status={created_mw.body['status']})"
         )
-        mw_id = created.body["id"]
-        print(f"Created maintenance window {mw_id} (status={created.body['status']})")
 
         # 2. Get it by ID and search for it
         fetched = client.maintenance_windows.get(id=mw_id)
         print(f"Fetched by ID: title={fetched.body['title']}")
 
         found = client.maintenance_windows.find(
-            title="kbnpy-example-weekly-maintenance", status=["upcoming", "running"]
+            title=title, status=["upcoming", "running"]
         )
         print(f"Find matched {found.body['total']} maintenance window(s)")
 
@@ -74,15 +91,21 @@ def main():
         # 4. Update: rename and disable it
         updated = client.maintenance_windows.update(
             id=mw_id,
-            title="kbnpy-example-weekly-maintenance-renamed",
+            title=f"{title}-renamed",
             enabled=False,
         )
         print(f"Updated: title={updated.body['title']} status={updated.body['status']}")
     finally:
         # 5. Clean up
         if mw_id is not None:
-            client.maintenance_windows.delete(id=mw_id)
-            print(f"Deleted maintenance window {mw_id}")
+            if should_cleanup():
+                try:
+                    client.maintenance_windows.delete(id=mw_id)
+                    print(f"Deleted maintenance window {mw_id}")
+                except NotFoundError:
+                    pass
+            else:
+                print_kept(created)
         client.close()
 
 

@@ -7,11 +7,14 @@ This example shows the minimal code needed to:
 2. Create a Gen AI connector for an OpenAI-compatible backend
 3. Create, inspect, enable/disable and delete an Attack Discovery schedule
 4. Search Attack discoveries and list generation runs
-5. Clean up (schedule, connector, space)
+5. Clean up (schedule, connector, space) in reverse creation order
 
 Optionally set KBNPY_LMSTUDIO_OPENAI_URL / KBNPY_LMSTUDIO_MODEL to point the
 connector at a real OpenAI-compatible backend (e.g. LM Studio). Note that the
-connector's apiUrl must be the full /chat/completions endpoint.
+connector's apiUrl must be the full /chat/completions endpoint. The happy
+path below does not require the LLM to actually be reachable -- it only
+exercises the schedule/discovery API surface, which works against a
+connector configuration alone.
 
 Run this example:
     python examples/attack_discovery_management.py
@@ -20,9 +23,10 @@ Run this example:
 import os
 import uuid
 
-from utils import get_kibana_config
+from utils import get_kibana_config, print_kept, resource_prefix, should_cleanup
 
 from kibana import Kibana
+from kibana.exceptions import NotFoundError
 
 LLM_URL = os.getenv("KBNPY_LMSTUDIO_OPENAI_URL", "http://localhost:1234/v1")
 LLM_MODEL = os.getenv("KBNPY_LMSTUDIO_MODEL", "qwen/qwen3.5-9b")
@@ -36,15 +40,18 @@ def main():
     else:
         client = Kibana(kibana_url, basic_auth=basic_auth)
 
+    prefix = resource_prefix(__file__)  # "kbnpy-attack-discovery"
     suffix = uuid.uuid4().hex[:8]
-    space_id = f"kbnpy-attack-discovery-{suffix}"
+    space_id = f"{prefix}-{suffix}"
     connector_id = None
     schedule_id = None
+    created: list[tuple[str, str]] = []
     try:
         # 1. Attack Discovery requires the securitySolutionAttackDiscovery
         #    feature, which is disabled in spaces with the Elasticsearch
         #    solution view -- create a security-solution space for the demo.
         client.spaces.create(id=space_id, name=space_id, solution="security")
+        created.append(("space", space_id))
         print(f"Created space {space_id}")
 
         # 2. Create a Gen AI connector (OpenAI-compatible backend)
@@ -52,7 +59,7 @@ def main():
         if not api_url.endswith("/chat/completions"):
             api_url = f"{api_url}/chat/completions"
         connector = client.connectors.create(
-            name=f"kbnpy-attack-discovery-conn-{suffix}",
+            name=f"{prefix}-conn-{suffix}",
             connector_type_id=".gen-ai",
             config={
                 "apiProvider": "OpenAI",
@@ -63,10 +70,11 @@ def main():
             space_id=space_id,
         )
         connector_id = connector.body["id"]
+        created.append(("connector", connector_id))
         print(f"Created .gen-ai connector {connector_id} -> {api_url}")
 
         # 3. Create a daily Attack Discovery schedule using that connector
-        created = client.attack_discovery.create_schedule(
+        created_schedule = client.attack_discovery.create_schedule(
             name=f"kbnpy-daily-attack-discovery-{suffix}",
             params={
                 "alerts_index_pattern": f".alerts-security.alerts-{space_id}",
@@ -80,8 +88,9 @@ def main():
             schedule={"interval": "24h"},
             space_id=space_id,
         )
-        schedule_id = created.body["id"]
-        print(f"Created schedule {schedule_id} ({created.body['name']})")
+        schedule_id = created_schedule.body["id"]
+        created.append(("schedule", schedule_id))
+        print(f"Created schedule {schedule_id} ({created_schedule.body['name']})")
 
         # Enable, inspect and disable the schedule
         client.attack_discovery.enable_schedule(id=schedule_id, space_id=space_id)
@@ -94,7 +103,9 @@ def main():
         found = client.attack_discovery.find_schedules(per_page=100, space_id=space_id)
         print(f"Schedules in space: {found.body['total']}")
 
-        # 4. Search Attack discoveries and list generation runs
+        # 4. Search Attack discoveries and list generation runs. This does
+        # NOT require the LLM connector to be reachable -- it only reports
+        # counts (likely 0 without a real backend generating discoveries).
         discoveries = client.attack_discovery.find(
             start="now-24h", end="now", space_id=space_id
         )
@@ -105,18 +116,29 @@ def main():
         )
         print(f"Recent generation runs: {len(generations.body['generations'])}")
     finally:
-        # 5. Clean up
-        if schedule_id is not None:
-            client.attack_discovery.delete_schedule(id=schedule_id, space_id=space_id)
-            print(f"Deleted schedule {schedule_id}")
-        if connector_id is not None:
-            client.connectors.delete(id=connector_id, space_id=space_id)
-            print(f"Deleted connector {connector_id}")
-        try:
-            client.spaces.delete(id=space_id)
-            print(f"Deleted space {space_id}")
-        except Exception:
-            pass
+        # 5. Clean up in reverse creation order: schedule -> connector -> space
+        if should_cleanup():
+            if schedule_id is not None:
+                try:
+                    client.attack_discovery.delete_schedule(
+                        id=schedule_id, space_id=space_id
+                    )
+                    print(f"Deleted schedule {schedule_id}")
+                except NotFoundError:
+                    pass
+            if connector_id is not None:
+                try:
+                    client.connectors.delete(id=connector_id, space_id=space_id)
+                    print(f"Deleted connector {connector_id}")
+                except NotFoundError:
+                    pass
+            try:
+                client.spaces.delete(id=space_id)
+                print(f"Deleted space {space_id}")
+            except NotFoundError:
+                pass
+        else:
+            print_kept(created)
         client.close()
 
 

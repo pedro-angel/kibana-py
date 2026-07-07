@@ -16,9 +16,10 @@ Run this example:
 
 import os
 
-from utils import get_kibana_config
+from utils import get_kibana_config, print_kept, resource_prefix, should_cleanup
 
 from kibana import Kibana
+from kibana.exceptions import NotFoundError
 
 
 def main():
@@ -29,14 +30,18 @@ def main():
     else:
         client = Kibana(kibana_url, basic_auth=basic_auth)
 
+    prefix = resource_prefix(__file__)  # "kbnpy-security-ai-assistant"
     conversation_id = None
-    prompt_ids = []
+    prompt_ids: list[str] = []
+    connector_id = None
+    created: list[tuple[str, str]] = []
     try:
         # 1. Conversation lifecycle
-        created = client.security_ai_assistant.create_conversation(
-            title="kbnpy example: suspicious login investigation",
+        created_conv = client.security_ai_assistant.create_conversation(
+            title=f"{prefix}: suspicious login investigation",
         )
-        conversation_id = created.body["id"]
+        conversation_id = created_conv.body["id"]
+        created.append(("conversation", conversation_id))
         print(f"Created conversation {conversation_id}")
 
         found = client.security_ai_assistant.find_conversations(
@@ -46,20 +51,29 @@ def main():
 
         client.security_ai_assistant.update_conversation(
             id=conversation_id,
-            title="kbnpy example: suspicious login investigation (triaged)",
+            title=f"{prefix}: suspicious login investigation (triaged)",
         )
         print("Updated conversation title")
 
-        # 2. Bulk-create two quick prompts, then bulk-delete them
+        # 2. Bulk-create two quick prompts, then bulk-delete them. Prompt
+        # names must be unique, so clear only THIS example's own prior
+        # prompts first (a kept previous run would otherwise 409 here).
+        stale = client.security_ai_assistant.find_prompts(
+            filter=f"{prefix}*", per_page=50
+        )
+        stale_ids = [prompt["id"] for prompt in stale.body["data"]]
+        if stale_ids:
+            client.security_ai_assistant.bulk_action_prompts(delete={"ids": stale_ids})
+
         bulk = client.security_ai_assistant.bulk_action_prompts(
             create=[
                 {
-                    "name": "kbnpy example - summarize alerts",
+                    "name": f"{prefix} - summarize alerts",
                     "content": "Summarize the open alerts of the last 24 hours.",
                     "promptType": "quick",
                 },
                 {
-                    "name": "kbnpy example - explain rule",
+                    "name": f"{prefix} - explain rule",
                     "content": "Explain what this detection rule does.",
                     "promptType": "quick",
                 },
@@ -68,6 +82,7 @@ def main():
         prompt_ids = [
             prompt["id"] for prompt in bulk.body["attributes"]["results"]["created"]
         ]
+        created.extend(("quick prompt", pid) for pid in prompt_ids)
         print(f"Created {len(prompt_ids)} prompts")
 
         # 3. Anonymization fields and Knowledge Base status
@@ -81,12 +96,15 @@ def main():
             f"setup_available={kb_status.body.get('is_setup_available')}"
         )
 
-        # 4. Optional live chat through an OpenAI-compatible backend
+        # 4. Optional live chat through an OpenAI-compatible backend. The
+        # connector this creates is brought under the same keep/clean gate
+        # as everything else below -- it is NOT torn down immediately, so
+        # --no-cleanup keeps it around like any other created resource.
         llm_url = os.getenv("KBNPY_LMSTUDIO_OPENAI_URL")
         if llm_url:
             model = os.getenv("KBNPY_LMSTUDIO_MODEL", "qwen/qwen3.5-9b")
             connector = client.connectors.create(
-                name="kbnpy example - security assistant llm",
+                name=f"{prefix} - llm connector",
                 connector_type_id=".gen-ai",
                 config={
                     "apiProvider": "OpenAI",
@@ -98,29 +116,41 @@ def main():
                 secrets={"apiKey": "dummy-key"},
             )
             connector_id = connector.body["id"]
-            try:
-                answer = client.options(
-                    request_timeout=120
-                ).security_ai_assistant.chat_complete(
-                    connector_id=connector_id,
-                    messages=[
-                        {"role": "user", "content": "What is credential stuffing?"}
-                    ],
-                    persist=False,
-                )
-                print(f"Model answered: {answer.body['data'][:120]}...")
-            finally:
-                client.connectors.delete(id=connector_id)
+            created.append(("security AI connector", connector_id))
+            print(f"Created AI connector {connector_id}")
+
+            answer = client.options(
+                request_timeout=120
+            ).security_ai_assistant.chat_complete(
+                connector_id=connector_id,
+                messages=[{"role": "user", "content": "What is credential stuffing?"}],
+                persist=False,
+            )
+            print(f"Model answered: {answer.body['data'][:120]}...")
         else:
-            print("KBNPY_LMSTUDIO_OPENAI_URL not set; skipping chat/complete demo")
+            print("KBNPY_LMSTUDIO_OPENAI_URL not set; skipped (no LLM connector)")
     finally:
         # 5. Clean up
-        if prompt_ids:
-            client.security_ai_assistant.bulk_action_prompts(delete={"ids": prompt_ids})
-            print(f"Deleted {len(prompt_ids)} prompts")
-        if conversation_id is not None:
-            client.security_ai_assistant.delete_conversation(id=conversation_id)
-            print(f"Deleted conversation {conversation_id}")
+        if should_cleanup():
+            if connector_id is not None:
+                try:
+                    client.connectors.delete(id=connector_id)
+                    print(f"Deleted connector {connector_id}")
+                except NotFoundError:
+                    pass
+            if prompt_ids:
+                client.security_ai_assistant.bulk_action_prompts(
+                    delete={"ids": prompt_ids}
+                )
+                print(f"Deleted {len(prompt_ids)} prompts")
+            if conversation_id is not None:
+                try:
+                    client.security_ai_assistant.delete_conversation(id=conversation_id)
+                    print(f"Deleted conversation {conversation_id}")
+                except NotFoundError:
+                    pass
+        else:
+            print_kept(created)
         client.close()
 
 
