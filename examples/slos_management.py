@@ -21,7 +21,7 @@ import uuid
 from utils import get_kibana_config, print_kept, resource_prefix, should_cleanup
 
 from kibana import Kibana
-from kibana.exceptions import ApiError
+from kibana.exceptions import ApiError, AuthorizationException
 
 PREFIX = resource_prefix(__file__)  # "kbnpy-slos"
 SLO_NAME = f"{PREFIX}-{uuid.uuid4().hex[:8]}"
@@ -56,7 +56,7 @@ def main() -> None:
                 objective={"target": 0.99},
                 tags=["kbnpy", "slos"],
             )
-        except ApiError as exc:
+        except AuthorizationException as exc:
             # SLOs require a Platinum-level (or trial) license; assert the
             # real rejection instead of crashing when unlicensed.
             print(f"SLO creation rejected (license required?): {exc}")
