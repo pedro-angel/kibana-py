@@ -58,11 +58,32 @@ the missing precondition are named rather than implying a clean run.
 5. **`debug_saved_objects.py`** — `with create_span(...)` raised `TypeError` when OTel was off, swallowed by a bare `except: pass`, silently skipping `create()`; replaced with `span_context` + narrowed except (C9).
 6. **Connector-id length** — Kibana caps caller-specified connector ids at 36 chars; `{prefix}-connector` (38) was rejected. Ids shortened (C9).
 
+## Idempotency-completeness follow-up (F1–F3)
+
+After the initial C1–C10 pass, three follow-up passes closed resource **accumulation** on re-run
+for every server/uuid-id example, so that re-running a *kept* example replaces its own copy rather
+than piling up duplicates:
+
+- **F1** — `visualizations_management.py`: prefix-scoped cleanup (find own `kbnpy-visualizations-*`,
+  delete, recreate). Live: search stays at 1 across re-runs (was accumulating).
+- **F2** — `cases`, `connectors`, `actions`, `slos`, `alerting`, `simple_alerting_rules`,
+  `attack_discovery` (schedule **and** connector). Live: counts flat across two `--no-cleanup` runs,
+  zero after `--cleanup`.
+- **F3** — `data_views`, `debug_saved_objects`, `space_scoped_connector`, `async_example` (connector,
+  space **and** saved object), `debug_connector`, `observability_ai_assistant`, `fleet_outputs`
+  (host→proxy→output stable ids), `maintenance_windows`, `dashboards`, `endpoint`. Live: counts flat.
+
+Each follow-up file was live-verified by running `--no-cleanup` twice and confirming the resource
+count did **not** grow, then `--cleanup` confirming zero remain. Final static audit: every
+resource-creating example carries an idempotent mechanism (stable-id pre-delete, find-by-prefix
+cleanup, or an inherent upsert). The sole exception is `error_handling.py`, which deliberately
+creates a duplicate to demonstrate `ConflictError` and is documented as such.
+
 ## Honest caveats
 
-- Not every one of the 58 examples was individually driven through all four modes; a representative
-  example per conversion group was, and the C5/C6/C7/C9 groups had **every** file run live. The
-  remaining creators in C4 were compile+ruff verified with `cases_management.py` as the live
-  representative.
+- Not every one of the 58 examples was individually driven through all four keep/clean modes in the
+  original C-pass; a representative example per conversion group was, and the C5/C6/C7/C9 groups had
+  **every** file run live. The F1–F3 follow-ups then live-verified the two-run no-accumulation check
+  on each server/uuid-id example individually.
 - Two paths are tier **C** (LLM connector absent) and one is tier **B** (streams feature flag
   absent). These are environment gaps, not code defects — the examples skip/assert cleanly.

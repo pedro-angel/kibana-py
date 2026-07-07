@@ -17,8 +17,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Examples are now human-usable end-to-end: each run prints its results, then prompts to
   keep or delete the resources it created (`--cleanup` / `--no-cleanup` override; keep is the
   default, including non-interactively). Every resource is namespaced `kbnpy-<example>-<...>`
-  so kept resources never collide across examples, and setup is idempotent so re-running a
-  kept example is safe.
+  so kept resources never collide across examples. Every resource-creating example uses an
+  idempotent start — a stable caller-chosen id where the API allows one, otherwise a
+  prefix-scoped cleanup of its own resources — so re-running a kept example **replaces** its
+  own copy rather than accumulating duplicates, and never fails with a conflict. (The sole
+  exception is `error_handling.py`, which creates a duplicate on purpose to demonstrate
+  `ConflictError` handling.)
 
 ## [0.3.0] - 2026-07-07
 

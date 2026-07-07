@@ -1,11 +1,33 @@
 # Human-usable examples with keep/clean and non-colliding resources
 
 - **Date:** 2026-07-07
-- **Version:** v0.2 (v0.1 → v0.2: aligned to `pedro-angel/agent-methodology` skills — see
-  *Methodology alignment*)
+- **Version:** v0.3 (v0.1 → v0.2: aligned to `pedro-angel/agent-methodology` skills; v0.2 → v0.3:
+  reconciled onto shipped code — see *Reconciliation (v0.3)*)
 - **Target release:** `0.3.1` (patch)
-- **Status:** Approved design, pending user review of v0.2. Reconcile onto shipped code and
-  bump the version if implementation diverges (per `spec-driven-development`).
+- **Status:** Shipped. Reconciled to the delivered examples.
+
+## Reconciliation (v0.3 — onto shipped code)
+
+Implemented and live-verified against Kibana 9.4.3. Divergences/refinements from the v0.2 design,
+per `spec-driven-development` (record what actually shipped):
+
+- **Idempotent start, universalized.** v0.2 described idempotent-start as "delete-if-exists before
+  create" for fixed-id resources. Shipped reality: *every* resource-creating example is idempotent
+  on re-run, via one of two own-scope mechanisms — (a) a **stable caller-chosen id + pre-delete**
+  where the API accepts one (lists, spaces, connectors, alerting rules, data views, fleet outputs,
+  …), or (b) a **find-by-prefix cleanup** of the example's own `kbnpy-<slug>-*` resources where the
+  id is server-assigned (visualizations, cases, slos, dashboards, maintenance windows, endpoint
+  scripts, attack-discovery schedules). Both never touch anything outside the example's own prefix.
+- **Deliberate exception:** `error_handling.py` intentionally creates a duplicate to demonstrate
+  `ConflictError` handling, so it does *not* pre-delete — documented as the sole exception in
+  `examples/README.md` and the CHANGELOG.
+- **Live-found fixes folded in** (the running system is ground truth, per `battle-testing-on-real-infra`):
+  the `utils.py` Python-2 `except` SyntaxError; osquery re-run 409 (wrong id field); fleet_epm
+  `uninstall_package` returning 400-not-404 on a not-installed package; security_ai quick-prompt 409;
+  `debug_saved_objects` silent create-swallow (`create_span` `TypeError`); the 36-char connector-id
+  cap; and the attack-discovery schedule-name/prefix mismatch. Follow-up passes F1–F3 (after the
+  original C1–C10) closed the accumulation on all server/uuid-id examples.
+- **Evidence:** `docs/evidence/examples-0.3.1.md`.
 
 ## Problem
 

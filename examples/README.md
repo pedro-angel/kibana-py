@@ -45,8 +45,11 @@ Delete created resources? (y/N):
 
 Every resource an example creates is namespaced `kbnpy-<example>-<resource>` (for example,
 `lists_management.py` creates a value list called `kbnpy-lists-bad-ips`), so resources kept from
-one example never collide with another. Each example also clears only its own prior resources
-before creating new ones, so re-running a kept example is safe and won't fail with a conflict.
+one example never collide with another. Each example also clears its own prior resources before
+recreating them — by a stable id where the API accepts a caller-chosen one, or by finding its own
+`kbnpy-<example>-*` resources otherwise — so re-running a kept example **replaces** its own copy
+rather than piling up duplicates, and never fails with a conflict. (The one deliberate exception is
+`error_handling.py`, which creates a duplicate on purpose to demonstrate `ConflictError` handling.)
 
 ## Examples by API
 
