@@ -16,7 +16,7 @@ Run this example:
 from utils import get_kibana_config, print_kept, resource_prefix, should_cleanup
 
 from kibana import Kibana
-from kibana.exceptions import ApiError
+from kibana.exceptions import NotFoundError
 
 
 def main():
@@ -123,7 +123,7 @@ def main():
                         package_policy_id=package_policy_id, force=True
                     )
                     print(f"Deleted package policy {package_policy_id}")
-                except ApiError as exc:
+                except NotFoundError as exc:
                     print(f"Could not delete package policy: {exc.message}")
             if agent_policy_id is not None:
                 try:
@@ -131,7 +131,7 @@ def main():
                         agent_policy_id=agent_policy_id, force=True
                     )
                     print(f"Deleted agent policy {agent_policy_id}")
-                except ApiError as exc:
+                except NotFoundError as exc:
                     print(f"Could not delete agent policy: {exc.message}")
         else:
             print_kept(created)
