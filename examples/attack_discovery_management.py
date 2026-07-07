@@ -5,13 +5,16 @@ Attack Discovery Management Example
 This example shows the minimal code needed to:
 1. Create (or reuse) a space with the security solution view (Attack
    Discovery needs it) -- a STABLE id shared across runs
-2. Create a Gen AI connector for an OpenAI-compatible backend
-3. Idempotent start: clear this example's own leftover schedule(s), matched
+2. Idempotent start: clear this example's own leftover connector, matched
+   by a STABLE id, so re-running a kept example replaces its connector
+   instead of accumulating a new one
+3. Create a Gen AI connector for an OpenAI-compatible backend
+4. Idempotent start: clear this example's own leftover schedule(s), matched
    by name prefix, so re-running a kept example replaces its schedule
    instead of accumulating a new one
-4. Create, inspect, enable/disable and delete an Attack Discovery schedule
-5. Search Attack discoveries and list generation runs
-6. Clean up (schedule, connector, space) in reverse creation order
+5. Create, inspect, enable/disable and delete an Attack Discovery schedule
+6. Search Attack discoveries and list generation runs
+7. Clean up (schedule, connector, space) in reverse creation order
 
 Optionally set KBNPY_LMSTUDIO_OPENAI_URL / KBNPY_LMSTUDIO_MODEL to point the
 connector at a real OpenAI-compatible backend (e.g. LM Studio). Note that the
@@ -46,12 +49,16 @@ def main():
 
     prefix = resource_prefix(__file__)  # "kbnpy-attack-discovery"
     suffix = uuid.uuid4().hex[:8]
-    # STABLE space id: the schedule idempotent-start below (step 3) needs a
+    # STABLE space id: the schedule idempotent-start below (step 4) needs a
     # space that survives across kept runs to find and replace its own prior
     # schedule, so the space itself is shared infra -- created only if
     # missing, like the value-list data streams in lists_management.py.
     space_id = prefix
-    connector_id = None
+    # STABLE connector id: like the space, the connector would otherwise
+    # accumulate a fresh uuid-suffixed instance on every kept re-run --
+    # pre-delete any leftover under this id (own scope) before creating a
+    # fresh one, the same Pattern-S used in connectors_management.py.
+    connector_id = f"{prefix}-conn"
     schedule_id = None
     created: list[tuple[str, str]] = []
     try:
@@ -67,11 +74,20 @@ def main():
             print(f"Created space {space_id}")
         created.append(("space", space_id))
 
-        # 2. Create a Gen AI connector (OpenAI-compatible backend)
+        # 2. Idempotent start: clear any leftover connector under this
+        #    example's stable id (own scope only) before creating fresh.
+        try:
+            client.connectors.delete(id=connector_id, space_id=space_id)
+            print(f"Cleared leftover connector {connector_id!r}")
+        except NotFoundError:
+            pass
+
+        # 3. Create a Gen AI connector (OpenAI-compatible backend)
         api_url = LLM_URL.rstrip("/")
         if not api_url.endswith("/chat/completions"):
             api_url = f"{api_url}/chat/completions"
         connector = client.connectors.create(
+            id=connector_id,
             name=f"{prefix}-conn-{suffix}",
             connector_type_id=".gen-ai",
             config={
@@ -82,11 +98,10 @@ def main():
             secrets={"apiKey": "dummy-key"},
             space_id=space_id,
         )
-        connector_id = connector.body["id"]
         created.append(("connector", connector_id))
         print(f"Created .gen-ai connector {connector_id} -> {api_url}")
 
-        # 3. Idempotent start: the schedule is the resource most worth not
+        # 4. Idempotent start: the schedule is the resource most worth not
         #    accumulating (it's a periodic background job). Since the space
         #    is now shared/reused across runs, clear this example's OWN
         #    leftover schedule(s) -- matched by name prefix, own scope only
@@ -108,7 +123,7 @@ def main():
         if cleared:
             print(f"Cleared {cleared} leftover schedule(s)")
 
-        # 4. Create a daily Attack Discovery schedule using that connector
+        # 5. Create a daily Attack Discovery schedule using that connector
         created_schedule = client.attack_discovery.create_schedule(
             name=f"{prefix}-daily-{suffix}",
             params={
@@ -138,7 +153,7 @@ def main():
         found = client.attack_discovery.find_schedules(per_page=100, space_id=space_id)
         print(f"Schedules in space: {found.body['total']}")
 
-        # 5. Search Attack discoveries and list generation runs. This does
+        # 6. Search Attack discoveries and list generation runs. This does
         # NOT require the LLM connector to be reachable -- it only reports
         # counts (likely 0 without a real backend generating discoveries).
         discoveries = client.attack_discovery.find(
@@ -151,7 +166,7 @@ def main():
         )
         print(f"Recent generation runs: {len(generations.body['generations'])}")
     finally:
-        # 6. Clean up in reverse creation order: schedule -> connector -> space
+        # 7. Clean up in reverse creation order: schedule -> connector -> space
         if should_cleanup():
             if schedule_id is not None:
                 try:
@@ -161,12 +176,11 @@ def main():
                     print(f"Deleted schedule {schedule_id}")
                 except NotFoundError:
                     pass
-            if connector_id is not None:
-                try:
-                    client.connectors.delete(id=connector_id, space_id=space_id)
-                    print(f"Deleted connector {connector_id}")
-                except NotFoundError:
-                    pass
+            try:
+                client.connectors.delete(id=connector_id, space_id=space_id)
+                print(f"Deleted connector {connector_id}")
+            except NotFoundError:
+                pass
             try:
                 client.spaces.delete(id=space_id)
                 print(f"Deleted space {space_id}")
