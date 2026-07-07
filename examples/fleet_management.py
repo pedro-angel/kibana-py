@@ -43,10 +43,13 @@ def main():
         print(f"Pre-release integrations enabled: {prerelease}")
 
         # 4. Update a global Fleet setting, then restore the original value
-        client.fleet.update_settings(prerelease_integrations_enabled=not prerelease)
-        print(f"Toggled pre-release integrations to {not prerelease}")
-        client.fleet.update_settings(prerelease_integrations_enabled=prerelease)
-        print(f"Restored pre-release integrations to {prerelease}")
+        # (in finally, so a mid-run error still restores it)
+        try:
+            client.fleet.update_settings(prerelease_integrations_enabled=not prerelease)
+            print(f"Toggled pre-release integrations to {not prerelease}")
+        finally:
+            client.fleet.update_settings(prerelease_integrations_enabled=prerelease)
+            print(f"Restored pre-release integrations to {prerelease}")
 
         # 5. Read the Fleet settings for the current space
         space_settings = client.fleet.get_space_settings()
