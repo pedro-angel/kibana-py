@@ -42,6 +42,19 @@ def main() -> None:
     viz_id = None
     created: list[tuple[str, str]] = []
     try:
+        # 0. Idempotent start: this example's visualizations get server-assigned IDs,
+        #    so there is no fixed ID to pre-delete. Instead clear this example's OWN
+        #    leftovers from earlier kept runs by matching its title prefix (own scope
+        #    only — never touches visualizations another example or you created).
+        leftovers = client.visualizations.get_all(query=f"{PREFIX}*", per_page=100)
+        for item in leftovers.body["data"]:
+            try:
+                client.visualizations.delete(id=item["id"])
+            except NotFoundError:
+                pass
+        if leftovers.body["data"]:
+            print(f"Cleared {len(leftovers.body['data'])} leftover visualization(s)")
+
         # 1. Create — the server assigns the ID and returns {id, data, meta}
         created_viz = client.visualizations.create(data=metric_config(title))
         viz_id = created_viz.body["id"]
