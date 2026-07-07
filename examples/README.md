@@ -29,8 +29,8 @@ Shared helpers live in `utils.py` (stack detection, client construction, optiona
 
 ## Running examples: keep or clean
 
-Every `*_management.py` example creates real resources in your Kibana instance, prints what it
-did, and then decides whether to delete them:
+Each example that creates resources in your Kibana instance prints what it did, then decides
+whether to delete them:
 
 ```
 Delete created resources? (y/N):
