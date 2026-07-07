@@ -19,7 +19,9 @@ from utils import (
     configure_example_telemetry,
     create_kibana_client,
     print_config_info,
+    print_kept,
     print_telemetry_info,
+    resource_prefix,
     setup_telemetry_cleanup,
     should_cleanup,
     should_enable_telemetry,
@@ -57,16 +59,22 @@ def main():
     # Initialize Kibana client with automatic configuration
     client = create_kibana_client()
 
+    # Namespace the display name so repeated runs are easy to tell apart from
+    # other examples; the rule id itself is server-generated (uuid), so
+    # there's no 409 risk and no pre-delete is needed.
+    prefix = resource_prefix(__file__)
+    rule_name = f"{prefix} High Request Count"
+
     try:
         # 1. Create an index-threshold rule
         print("Creating alerting rule...")
         logger.info(
             "Creating alerting rule",
-            extra={"rule_name": "High Request Count", "operation": "create"},
+            extra={"rule_name": rule_name, "operation": "create"},
         )
 
         create_response = client.alerting.rule.create(
-            name="High Request Count",
+            name=rule_name,
             consumer="alerts",
             rule_type_id=".index-threshold",
             schedule={"interval": "1m"},
@@ -137,7 +145,7 @@ def main():
         )
         update_response = client.alerting.rule.update(
             id=rule_id,
-            name="High Request Count (updated)",
+            name=f"{rule_name} (updated)",
             schedule={"interval": "5m"},
             params={
                 "index": ["*"],
@@ -201,8 +209,8 @@ def main():
                         extra={"rule_id": rule_id, "operation": "delete"},
                     )
         else:
-            print(f"✓ Rule kept (ID: {rule_id})")
             logger.info("Rule kept by user choice", extra={"rule_id": rule_id})
+            print_kept([("alerting rule", rule_id)])
 
     except Exception as e:
         print(f"❌ Error: {e}")

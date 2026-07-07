@@ -46,7 +46,9 @@ from utils import (
     configure_example_telemetry,
     create_kibana_client,
     print_config_info,
+    print_kept,
     print_telemetry_info,
+    resource_prefix,
     setup_telemetry_cleanup,
     should_cleanup,
     should_enable_telemetry,
@@ -65,9 +67,10 @@ def create_team_space(client):
 
     print("Creating team space...")
 
-    # Generate unique space ID with timestamp to avoid conflicts
+    # Generate unique space ID: namespaced to this example plus a timestamp
+    # to avoid conflicts across runs
     timestamp = int(time.time())
-    space_id = f"team-space-{timestamp}"
+    space_id = f"{resource_prefix(__file__)}-team-space-{timestamp}"
 
     try:
         logger.info(
@@ -310,12 +313,12 @@ def interactive_cleanup(client, connector_id, space_id):
                 except Exception:
                     # If get() fails, deletion likely succeeded
                     print("✓ Primary connector deleted (confirmed)")
-            print(f"✓ Space kept (ID: {space_id})")
             print("  Note: Space-scoped connector may still exist in the space")
+            print_kept([("space", space_id)])
         else:
             # Display resource IDs if user declines cleanup
-            print(f"✓ All resources kept in space (ID: {space_id})")
             print("  You can manage them later from the Kibana UI")
+            print_kept([("space", space_id), ("primary connector", connector_id)])
 
 
 def demonstrate_space_scoped_client(client, space_id):

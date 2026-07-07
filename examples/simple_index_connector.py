@@ -18,11 +18,15 @@ from utils import (
     configure_example_telemetry,
     create_kibana_client,
     print_config_info,
+    print_kept,
     print_telemetry_info,
+    resource_prefix,
     setup_telemetry_cleanup,
     should_cleanup,
     should_enable_telemetry,
 )
+
+from kibana.exceptions import NotFoundError
 
 # Set up logger for this example
 logger = logging.getLogger("kibana.examples.simple_index_connector")
@@ -56,12 +60,29 @@ def main():
     # Initialize Kibana client with automatic configuration
     client = create_kibana_client()
 
+    # Namespaced, fixed connector id so this example is idempotent: re-running
+    # it (e.g. after choosing --no-cleanup) reuses the same identity instead
+    # of piling up duplicate connectors of the same name. Connector ids are
+    # capped at 36 characters server-side, so use the bare prefix (the
+    # filename already conveys "connector") rather than appending a suffix.
+    prefix = resource_prefix(__file__)
+    connector_id = prefix
+
     try:
+        # Idempotent start: remove this example's own connector from a prior
+        # run, if any, since we create with a fixed id below (a stale
+        # connector at that id would otherwise 409 on create).
+        try:
+            client.actions.delete(id=connector_id)
+        except NotFoundError:
+            pass
+
         # 1. Create index connector
         print("Creating index connector...")
         logger.info(
             "Creating index connector",
             extra={
+                "connector_id": connector_id,
                 "connector_type": ".index",
                 "target_index": "miconnectedindex",
                 "operation": "create",
@@ -69,9 +90,15 @@ def main():
         )
 
         connector_response = client.actions.create(
-            name="My Connected Index Connector",
+            id=connector_id,
+            name=f"{prefix} - My Connected Index Connector",
             connector_type_id=".index",
             config={
+                # NOTE: "miconnectedindex" is a fixed, shared ES index. The
+                # connectors API has no delete endpoint for the underlying ES
+                # index (only for the connector object itself), so documents
+                # written here persist across every run of this example --
+                # this is a known, intentional resource leak, not a bug.
                 "index": "miconnectedindex",
                 "refresh": True,
                 "executionTimeField": "@timestamp",
@@ -79,7 +106,6 @@ def main():
         )
 
         connector = connector_response.body  # Access the body attribute
-        connector_id = connector["id"]
 
         logger.info(
             "Index connector created successfully",
@@ -143,6 +169,10 @@ def main():
         print(f"   Connector ID: {connector_id}")
         print("   Kibana Dev Tools: http://localhost:5601/app/dev_tools#/console")
         print("   Try this query: GET miconnectedindex/_search")
+        print(
+            "   Note: 'miconnectedindex' is a shared, fixed ES index with no "
+            "delete path here — it is left behind on every run by design."
+        )
 
         # Ask user about cleanup
         print(f"\nConnector '{connector_info['name']}' was created for this example.")
@@ -177,10 +207,10 @@ def main():
                         extra={"connector_id": connector_id, "operation": "delete"},
                     )
         else:
-            print(f"✓ Connector kept (ID: {connector_id})")
             logger.info(
                 "Connector kept by user choice", extra={"connector_id": connector_id}
             )
+            print_kept([("connector", connector_id)])
 
     except Exception as e:
         print(f"❌ Error: {e}")

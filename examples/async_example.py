@@ -23,7 +23,9 @@ from examples.utils import (
     configure_example_telemetry,
     create_async_kibana_client,
     print_config_info,
+    print_kept,
     print_telemetry_info,
+    resource_prefix,
     setup_telemetry_cleanup,
     should_cleanup,
     should_enable_telemetry,
@@ -69,7 +71,7 @@ async def demonstrate_actions(client):
 
         # Create a server-log connector
         print("\n➕ Creating server-log connector...")
-        connector_name = f"async-example-{uuid.uuid4().hex[:8]}"
+        connector_name = f"{resource_prefix(__file__)}-{uuid.uuid4().hex[:8]}"
 
         logger.info(
             "Creating async server-log connector",
@@ -163,7 +165,7 @@ async def demonstrate_actions(client):
                     print("   ✓ Connector deleted (confirmed)")
             connector_id = None
         else:
-            print(f"   ✓ Connector kept (ID: {connector_id})")
+            print_kept([("connector", connector_id)])
 
     except Exception as e:
         print(f"\n❌ Error in actions demo: {e}")
@@ -199,7 +201,7 @@ async def demonstrate_spaces(client):
 
         # Create a new space
         print("\n➕ Creating new space...")
-        space_id = f"async-example-{uuid.uuid4().hex[:8]}"
+        space_id = f"{resource_prefix(__file__)}-{uuid.uuid4().hex[:8]}"
         space_name = f"Async Example Space {uuid.uuid4().hex[:4]}"
         create_response = await client.spaces.create(
             id=space_id,
@@ -235,7 +237,7 @@ async def demonstrate_spaces(client):
             print("   ✓ Space deleted")
             space_id = None
         else:
-            print(f"   ✓ Space kept (ID: {space_id})")
+            print_kept([("space", space_id)])
 
     except Exception as e:
         print(f"\n❌ Error in spaces demo: {e}")
@@ -257,7 +259,7 @@ async def demonstrate_saved_objects(client):
     try:
         # Create a saved object
         print("\n➕ Creating saved object...")
-        object_id = f"async-example-{uuid.uuid4().hex[:8]}"
+        object_id = f"{resource_prefix(__file__)}-{uuid.uuid4().hex[:8]}"
         attributes = {
             "title": f"Async Example Config {uuid.uuid4().hex[:4]}",
             "buildNum": 99999,
@@ -297,7 +299,7 @@ async def demonstrate_saved_objects(client):
             print("   ✓ Saved object deleted")
             object_id = None
         else:
-            print(f"   ✓ Saved object kept (ID: {object_id})")
+            print_kept([("saved object", object_id)])
 
     except Exception as e:
         print(f"\n❌ Error in saved objects demo: {e}")
