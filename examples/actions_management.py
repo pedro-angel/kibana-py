@@ -31,6 +31,8 @@ from utils import (
     should_enable_telemetry,
 )
 
+from kibana.exceptions import NotFoundError
+
 
 def list_connector_types(client):
     """List all available connector types."""
@@ -80,6 +82,16 @@ def list_existing_connectors(client):
         return []
 
 
+def _delete_if_exists(client, connector_id):
+    """Idempotent start: clear this example's OWN prior connector (stable id)
+    from an earlier kept run before creating a fresh one (own scope only)."""
+    try:
+        client.actions.delete(id=connector_id)
+        print(f"  (cleared leftover connector {connector_id!r})")
+    except NotFoundError:
+        pass
+
+
 def create_index_connector(client, prefix):
     """Create an index connector for writing to Elasticsearch."""
     import logging
@@ -87,6 +99,9 @@ def create_index_connector(client, prefix):
     logger = logging.getLogger(__name__)
 
     print("\n=== Creating Index Connector ===")
+
+    connector_id = f"{prefix}-index"
+    _delete_if_exists(client, connector_id)
 
     try:
         logger.info(
@@ -99,6 +114,7 @@ def create_index_connector(client, prefix):
         )
 
         connector_response = client.actions.create(
+            id=connector_id,
             name=f"{prefix}-index-connector",
             connector_type_id=".index",
             config={
@@ -145,8 +161,12 @@ def create_webhook_connector(client, prefix):
     """Create a webhook connector for HTTP requests."""
     print("\n=== Creating Webhook Connector ===")
 
+    connector_id = f"{prefix}-webhook"
+    _delete_if_exists(client, connector_id)
+
     try:
         connector_response = client.actions.create(
+            id=connector_id,
             name=f"{prefix}-webhook-connector",
             connector_type_id=".webhook",
             config={
@@ -174,8 +194,12 @@ def create_server_log_connector(client, prefix):
     """Create a server log connector for logging."""
     print("\n=== Creating Server Log Connector ===")
 
+    connector_id = f"{prefix}-log"
+    _delete_if_exists(client, connector_id)
+
     try:
         connector_response = client.actions.create(
+            id=connector_id,
             name=f"{prefix}-server-log-connector",
             connector_type_id=".server-log",
             config={},  # Server log connector has no configuration

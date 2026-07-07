@@ -21,7 +21,7 @@ import uuid
 from utils import get_kibana_config, print_kept, resource_prefix, should_cleanup
 
 from kibana import Kibana
-from kibana.exceptions import ApiError, AuthorizationException
+from kibana.exceptions import ApiError, AuthorizationException, NotFoundError
 
 PREFIX = resource_prefix(__file__)  # "kbnpy-slos"
 SLO_NAME = f"{PREFIX}-{uuid.uuid4().hex[:8]}"
@@ -37,6 +37,24 @@ def main() -> None:
     slo_id: str | None = None
     created: list[tuple[str, str]] = []
     try:
+        # 0. Idempotent start: SLOs get server-assigned IDs, so find this
+        # example's OWN leftover SLOs by their namespaced name prefix (own
+        # scope only, via find_definitions' name-search) and delete them
+        # before creating fresh. Skipped gracefully if unlicensed.
+        try:
+            leftovers = client.slos.find_definitions(search=f"{PREFIX}*", per_page=100)
+            leftover_ids = [item["id"] for item in leftovers.body["results"]]
+            for leftover_id in leftover_ids:
+                try:
+                    client.slos.delete(slo_id=leftover_id)
+                except NotFoundError:
+                    pass
+            if leftover_ids:
+                print(f"Cleared {len(leftover_ids)} leftover SLO(s)")
+        except AuthorizationException as exc:
+            print(f"SLO lookup rejected (license required?): {exc}")
+            return
+
         # 1. Create an SLO: 99% of documents in the last 7 days are "good"
         try:
             created_slo = client.slos.create(

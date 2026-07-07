@@ -30,6 +30,15 @@ def main():
     tag = f"{prefix}-tag"
     created: list[tuple[str, str]] = []
     try:
+        # 0. Idempotent start: cases get server-assigned IDs, so find this
+        # example's OWN cases by their namespaced tag (own scope only) and
+        # delete them before creating fresh.
+        leftovers = client.cases.find(tags=tag, per_page=100)
+        leftover_ids = [c["id"] for c in leftovers.body["cases"]]
+        if leftover_ids:
+            client.cases.delete(ids=leftover_ids)
+            print(f"Cleared {len(leftover_ids)} leftover case(s) tagged {tag}")
+
         # 1. Create a case
         case = client.cases.create(
             title=f"{prefix} Suspicious login activity",

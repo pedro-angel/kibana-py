@@ -15,11 +15,10 @@ Run this example:
     python examples/alerting_management.py
 """
 
-import uuid
-
 from utils import get_kibana_config, print_kept, resource_prefix, should_cleanup
 
 from kibana import Kibana
+from kibana.exceptions import NotFoundError
 
 
 def main() -> None:
@@ -32,7 +31,7 @@ def main() -> None:
         client = Kibana(kibana_url)
 
     prefix = resource_prefix(__file__)  # "kbnpy-alerting"
-    rule_id = f"{prefix}-{uuid.uuid4().hex[:8]}"
+    rule_id = f"{prefix}-rule"
     created: list[tuple[str, str]] = []
 
     try:
@@ -46,7 +45,16 @@ def main() -> None:
             f"{[t['id'] for t in rule_types[:3]]}"
         )
 
-        # 2. Create a disabled .es-query rule with a chosen ID
+        # 2. Idempotent start: this rule uses a STABLE id, so clear this
+        #    example's own leftover rule from a previous kept run (own
+        #    scope only) before creating fresh.
+        try:
+            client.alerting.rule.delete(id=rule_id)
+            print(f"Cleared leftover rule {rule_id!r}")
+        except NotFoundError:
+            pass
+
+        # 3. Create a disabled .es-query rule with a chosen ID
         created_rule = client.alerting.rule.create(
             id=rule_id,
             name=f"{prefix} example: error spike",
@@ -71,7 +79,7 @@ def main() -> None:
         created.append(("alerting rule", rule_id))
         print(f"Created rule {created_rule.body['id']} ({created_rule.body['name']})")
 
-        # 3. Get, find, update
+        # 4. Get, find, update
         rule = client.alerting.rule.get(id=rule_id).body
         print(f"Fetched rule, schedule: {rule['schedule']}")
 
@@ -93,7 +101,7 @@ def main() -> None:
         )
         print(f"Updated rule name: {updated.body['name']}")
 
-        # 4. Lifecycle: enable, mute, snooze, unsnooze, unmute, disable
+        # 5. Lifecycle: enable, mute, snooze, unsnooze, unmute, disable
         client.alerting.rule.enable(id=rule_id)
         client.alerting.rule.mute_all(id=rule_id)
         snoozed = client.alerting.rule.snooze(
@@ -109,12 +117,12 @@ def main() -> None:
         client.alerting.rule.disable(id=rule_id, untrack=True)
         print("Lifecycle operations complete")
 
-        # 5. Backfills (only some rule types support scheduling backfills)
+        # 6. Backfills (only some rule types support scheduling backfills)
         backfills = client.alerting.backfill.find(per_page=5)
         print(f"Existing backfills: {backfills.body['total']}")
 
     finally:
-        # 6. Cleanup
+        # 7. Cleanup
         if should_cleanup():
             try:
                 client.alerting.rule.delete(id=rule_id)

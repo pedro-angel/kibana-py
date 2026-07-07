@@ -27,6 +27,8 @@ from utils import (
     should_enable_telemetry,
 )
 
+from kibana.exceptions import NotFoundError
+
 # Set up logger for this example
 logger = logging.getLogger("kibana.examples.alerting_rules")
 
@@ -59,13 +61,21 @@ def main():
     # Initialize Kibana client with automatic configuration
     client = create_kibana_client()
 
-    # Namespace the display name so repeated runs are easy to tell apart from
-    # other examples; the rule id itself is server-generated (uuid), so
-    # there's no 409 risk and no pre-delete is needed.
+    # Namespace the display name and use a STABLE rule id so repeated runs
+    # replace this example's own rule instead of accumulating a new one.
     prefix = resource_prefix(__file__)
     rule_name = f"{prefix} High Request Count"
+    rule_id = f"{prefix}-rule"
 
     try:
+        # 0. Idempotent start: clear this example's own leftover rule (own
+        # scope only, by stable id) from a previous kept run.
+        try:
+            client.alerting.rule.delete(id=rule_id)
+            print(f"Cleared leftover rule {rule_id!r}")
+        except NotFoundError:
+            pass
+
         # 1. Create an index-threshold rule
         print("Creating alerting rule...")
         logger.info(
@@ -74,6 +84,7 @@ def main():
         )
 
         create_response = client.alerting.rule.create(
+            id=rule_id,
             name=rule_name,
             consumer="alerts",
             rule_type_id=".index-threshold",

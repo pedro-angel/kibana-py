@@ -3,11 +3,15 @@
 Attack Discovery Management Example
 
 This example shows the minimal code needed to:
-1. Create a space with the security solution view (Attack Discovery needs it)
+1. Create (or reuse) a space with the security solution view (Attack
+   Discovery needs it) -- a STABLE id shared across runs
 2. Create a Gen AI connector for an OpenAI-compatible backend
-3. Create, inspect, enable/disable and delete an Attack Discovery schedule
-4. Search Attack discoveries and list generation runs
-5. Clean up (schedule, connector, space) in reverse creation order
+3. Idempotent start: clear this example's own leftover schedule(s), matched
+   by name prefix, so re-running a kept example replaces its schedule
+   instead of accumulating a new one
+4. Create, inspect, enable/disable and delete an Attack Discovery schedule
+5. Search Attack discoveries and list generation runs
+6. Clean up (schedule, connector, space) in reverse creation order
 
 Optionally set KBNPY_LMSTUDIO_OPENAI_URL / KBNPY_LMSTUDIO_MODEL to point the
 connector at a real OpenAI-compatible backend (e.g. LM Studio). Note that the
@@ -42,17 +46,26 @@ def main():
 
     prefix = resource_prefix(__file__)  # "kbnpy-attack-discovery"
     suffix = uuid.uuid4().hex[:8]
-    space_id = f"{prefix}-{suffix}"
+    # STABLE space id: the schedule idempotent-start below (step 3) needs a
+    # space that survives across kept runs to find and replace its own prior
+    # schedule, so the space itself is shared infra -- created only if
+    # missing, like the value-list data streams in lists_management.py.
+    space_id = prefix
     connector_id = None
     schedule_id = None
     created: list[tuple[str, str]] = []
     try:
         # 1. Attack Discovery requires the securitySolutionAttackDiscovery
         #    feature, which is disabled in spaces with the Elasticsearch
-        #    solution view -- create a security-solution space for the demo.
-        client.spaces.create(id=space_id, name=space_id, solution="security")
+        #    solution view -- create (or reuse) a security-solution space
+        #    for the demo.
+        try:
+            client.spaces.get(id=space_id)
+            print(f"Reusing existing space {space_id}")
+        except NotFoundError:
+            client.spaces.create(id=space_id, name=space_id, solution="security")
+            print(f"Created space {space_id}")
         created.append(("space", space_id))
-        print(f"Created space {space_id}")
 
         # 2. Create a Gen AI connector (OpenAI-compatible backend)
         api_url = LLM_URL.rstrip("/")
@@ -73,9 +86,31 @@ def main():
         created.append(("connector", connector_id))
         print(f"Created .gen-ai connector {connector_id} -> {api_url}")
 
-        # 3. Create a daily Attack Discovery schedule using that connector
+        # 3. Idempotent start: the schedule is the resource most worth not
+        #    accumulating (it's a periodic background job). Since the space
+        #    is now shared/reused across runs, clear this example's OWN
+        #    leftover schedule(s) -- matched by name prefix, own scope only
+        #    -- before creating a fresh one. find_schedules() has no
+        #    server-side name filter, so filter client-side.
+        leftover_schedules = client.attack_discovery.find_schedules(
+            per_page=100, space_id=space_id
+        )
+        cleared = 0
+        for sched in leftover_schedules.body["data"]:
+            if sched["name"].startswith(prefix):
+                try:
+                    client.attack_discovery.delete_schedule(
+                        id=sched["id"], space_id=space_id
+                    )
+                    cleared += 1
+                except NotFoundError:
+                    pass
+        if cleared:
+            print(f"Cleared {cleared} leftover schedule(s)")
+
+        # 4. Create a daily Attack Discovery schedule using that connector
         created_schedule = client.attack_discovery.create_schedule(
-            name=f"kbnpy-daily-attack-discovery-{suffix}",
+            name=f"{prefix}-daily-{suffix}",
             params={
                 "alerts_index_pattern": f".alerts-security.alerts-{space_id}",
                 "api_config": {
@@ -103,7 +138,7 @@ def main():
         found = client.attack_discovery.find_schedules(per_page=100, space_id=space_id)
         print(f"Schedules in space: {found.body['total']}")
 
-        # 4. Search Attack discoveries and list generation runs. This does
+        # 5. Search Attack discoveries and list generation runs. This does
         # NOT require the LLM connector to be reachable -- it only reports
         # counts (likely 0 without a real backend generating discoveries).
         discoveries = client.attack_discovery.find(
@@ -116,7 +151,7 @@ def main():
         )
         print(f"Recent generation runs: {len(generations.body['generations'])}")
     finally:
-        # 5. Clean up in reverse creation order: schedule -> connector -> space
+        # 6. Clean up in reverse creation order: schedule -> connector -> space
         if should_cleanup():
             if schedule_id is not None:
                 try:
