@@ -1,6 +1,9 @@
 # Pre-commit hooks for kibana-py
 # Install with: pip install pre-commit && pre-commit install
 
+default_install_hook_types: [pre-commit, commit-msg]
+minimum_pre_commit_version: "3.5.0"
+
 exclude: '^(\.venv/|venv/|env/|docs/build/|build/|dist/|htmlcov/)'
 
 repos:
@@ -13,6 +16,12 @@ repos:
       - id: check-toml
       - id: check-added-large-files
         args: ["--maxkb=500"]
+      - id: mixed-line-ending
+        args: ["--fix=lf"]
+      - id: check-merge-conflict
+      - id: check-case-conflict
+      - id: detect-private-key
+        exclude: ^tests/conftest\.py$
 
   - repo: https://github.com/psf/black
     rev: 26.5.1
@@ -31,3 +40,23 @@ repos:
     hooks:
       - id: ruff
         args: ["--fix"]
+
+  - repo: https://github.com/compilerla/conventional-pre-commit
+    rev: v4.4.0
+    hooks:
+      - id: conventional-pre-commit
+        stages: [commit-msg]
+        args: [feat, fix, docs, chore, refactor, test, build, ci, perf, style, revert]
+
+  - repo: local
+    hooks:
+      - id: check-no-tracked-secrets
+        name: "no secret-looking file is tracked by git"
+        language: script
+        entry: scripts/checks/check-no-tracked-secrets.sh
+        pass_filenames: false
+      - id: check-commit-trailer
+        name: "commit body carries a provenance trailer"
+        language: script
+        entry: scripts/checks/check-commit-trailer.sh
+        stages: [commit-msg]
