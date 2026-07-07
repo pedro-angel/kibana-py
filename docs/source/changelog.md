@@ -8,6 +8,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 (unreleased)=
 ## Unreleased
 
+(v0.3.1)=
+## [0.3.1] - 2026-07-07
+
+Examples and developer tooling only — no shipped API changes (`kibana/` is unchanged apart from the version bump, so this is a patch).
+
+### Fixed
+
+- Repaired a Python-2 `except` SyntaxError in `examples/utils.py` that broke `import utils` (and therefore every example) under Python 3.14.
+
+### Changed
+
+- Examples are now human-usable end-to-end: each run prints its results, then prompts to keep or delete the resources it created (`--cleanup` / `--no-cleanup` override; keep is the default, including non-interactively). Resources are namespaced `kbnpy-<example>-<...>` so kept resources never collide across examples, and every resource-creating example uses an idempotent start so re-running a kept example **replaces** its own copy rather than accumulating duplicates (the sole exception is `error_handling.py`, which demonstrates `ConflictError`).
+
+See the [root CHANGELOG](https://github.com/pedro-angel/kibana-py/blob/main/CHANGELOG.md) for full detail.
+
 (v0.3.0)=
 ## [0.3.0] - 2026-07-07
 
@@ -376,7 +391,8 @@ When version 1.0 is released, this section will contain upgrade instructions.
 - [PyPI Package](https://pypi.org/project/kibana-py/)
 - [Documentation](https://kibana-py.readthedocs.io/)
 
-[Unreleased]: https://github.com/pedro-angel/kibana-py/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/pedro-angel/kibana-py/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/pedro-angel/kibana-py/releases/tag/v0.3.1
 [0.3.0]: https://github.com/pedro-angel/kibana-py/releases/tag/v0.3.0
 [0.2.0]: https://github.com/pedro-angel/kibana-py/releases/tag/v0.2.0
 [0.1.0]: https://github.com/pedro-angel/kibana-py/releases/tag/v0.1.0
