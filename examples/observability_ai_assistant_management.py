@@ -45,8 +45,19 @@ def main():
             if not api_url.endswith("/chat/completions"):
                 api_url = f"{api_url}/chat/completions"
 
+            # 0. Idempotent start: clear only THIS example's own prior
+            # connector, then create fresh. Connector IDs are capped at 36
+            # characters and this example's prefix is already 32, so the
+            # bare prefix is used as the ID rather than "{prefix}-conn".
+            stable_connector_id = prefix
+            try:
+                client.connectors.delete(id=stable_connector_id)
+            except NotFoundError:
+                pass
+
             # 1. Create an OpenAI-compatible connector for the assistant to use
             created_conn = client.connectors.create(
+                id=stable_connector_id,
                 name=f"{prefix}-connector",
                 connector_type_id=".gen-ai",
                 config={

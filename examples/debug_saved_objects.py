@@ -19,7 +19,6 @@ Run this example:
 
 import json
 import logging
-import uuid
 from contextlib import nullcontext
 
 from utils import (
@@ -35,6 +34,8 @@ from utils import (
     should_cleanup,
     should_enable_telemetry,
 )
+
+from kibana.exceptions import NotFoundError
 
 # Set up logger for this example
 logger = logging.getLogger("kibana.examples.debug_saved_objects")
@@ -55,8 +56,8 @@ def main():
     # Set up automatic telemetry cleanup
     setup_telemetry_cleanup()
 
-    # Generate unique ID for test object
-    test_id = f"{resource_prefix(__file__)}-{uuid.uuid4().hex[:8]}"
+    # Stable ID for the test object (own scope for this example)
+    test_id = f"{resource_prefix(__file__)}-obj"
 
     # Log example start with detailed context
     logger.info(
@@ -127,6 +128,13 @@ def main():
                     "span_active": span is not None,
                 },
             )
+
+            # 0. Idempotent start: clear only THIS example's own prior test
+            # object, then create fresh
+            try:
+                client.saved_objects.delete(type="visualization", id=test_id)
+            except NotFoundError:
+                pass
 
             # 1. Create a test visualization
             print("\n📝 Creating test visualization...")

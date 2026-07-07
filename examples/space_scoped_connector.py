@@ -39,7 +39,6 @@ The example uses automatic configuration from examples/utils.py, which supports:
 - Sensible defaults (http://localhost:5601)
 """
 
-import time
 from datetime import UTC, datetime
 
 from utils import (
@@ -54,6 +53,8 @@ from utils import (
     should_enable_telemetry,
 )
 
+from kibana.exceptions import NotFoundError
+
 
 def create_team_space(client):
     """Create a team space with appropriate configuration.
@@ -67,12 +68,18 @@ def create_team_space(client):
 
     print("Creating team space...")
 
-    # Generate unique space ID: namespaced to this example plus a timestamp
-    # to avoid conflicts across runs
-    timestamp = int(time.time())
-    space_id = f"{resource_prefix(__file__)}-team-space-{timestamp}"
+    # Stable space ID namespaced to this example (own scope)
+    space_id = f"{resource_prefix(__file__)}-team-space"
 
     try:
+        # Idempotent start: clear only THIS example's own prior space.
+        # Deleting the space cascades to any connectors created within it.
+        try:
+            client.spaces.delete(id=space_id)
+            print(f"Cleared leftover space {space_id!r}")
+        except NotFoundError:
+            pass
+
         logger.info(
             "Creating team space",
             extra={
@@ -147,8 +154,12 @@ def create_space_connector(client, space_id):
             },
         )
 
-        # Create connector using ActionsClient space support with automatic validation
+        # Create connector using ActionsClient space support with automatic validation.
+        # Stable id (own scope): the space is recreated fresh on every run (see
+        # create_team_space), so there is no risk of an ID conflict, but a
+        # fixed id keeps this connector's identity reproducible across runs.
         response = client.actions.create(
+            id=f"{resource_prefix(__file__)}-conn",
             name=f"Team Connector ({space_id})",
             connector_type_id=".index",
             config={

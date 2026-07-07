@@ -46,11 +46,31 @@ def main():
     mw_id = None
     created: list[tuple[str, str]] = []
     try:
+        # 0. Idempotent start: this example's maintenance windows get
+        # server-assigned IDs, so there is no fixed ID to pre-delete.
+        # Instead clear this example's OWN leftovers from earlier kept runs
+        # by matching the title prefix (own scope only — this also catches
+        # the "-renamed" title left behind by step 4 below).
+        #
         # 1. Create a weekly two-hour maintenance window scoped by a KQL
         # query. This requires a Platinum/Enterprise license (or trial);
         # assert the exact rejection rather than crashing or skipping
         # silently when unlicensed.
         try:
+            leftovers = client.maintenance_windows.find(per_page=100)
+            stale = [
+                mw
+                for mw in leftovers.body["maintenanceWindows"]
+                if mw["title"].startswith(prefix)
+            ]
+            for mw in stale:
+                try:
+                    client.maintenance_windows.delete(id=mw["id"])
+                except NotFoundError:
+                    pass
+            if stale:
+                print(f"Cleared {len(stale)} leftover maintenance window(s)")
+
             created_mw = client.maintenance_windows.create(
                 title=title,
                 schedule={

@@ -27,11 +27,26 @@ def main():
         client = Kibana(kibana_url, basic_auth=basic_auth)
 
     prefix = resource_prefix(__file__)  # "kbnpy-fleet-outputs"
-    output_id = None
-    proxy_id = None
-    host_id = None
+    output_id = f"{prefix}-output"
+    proxy_id = f"{prefix}-proxy"
+    host_id = f"{prefix}-host"
     created: list[tuple[str, str]] = []
     try:
+        # 0. Idempotent start: clear only THIS example's own prior resources,
+        # in dependency order (the host references the proxy).
+        try:
+            client.fleet_outputs.delete_fleet_server_host(item_id=host_id)
+        except NotFoundError:
+            pass
+        try:
+            client.fleet_outputs.delete_proxy(item_id=proxy_id)
+        except NotFoundError:
+            pass
+        try:
+            client.fleet_outputs.delete_output(output_id=output_id)
+        except NotFoundError:
+            pass
+
         # 1. List outputs (the default Elasticsearch output always exists)
         outputs = client.fleet_outputs.get_outputs()
         for item in outputs.body["items"]:
@@ -40,6 +55,7 @@ def main():
 
         # 2. Create a Logstash output, rename it and check its health
         created_output = client.fleet_outputs.create_output(
+            id=output_id,
             name=f"{prefix}-logstash",
             type="logstash",
             hosts=["logstash.example.com:5044"],
@@ -56,6 +72,7 @@ def main():
 
         # 3. Create a proxy and a Fleet Server host that connects through it
         proxy = client.fleet_outputs.create_proxy(
+            id=proxy_id,
             name=f"{prefix}-proxy",
             url="https://proxy.example.com:3128",
         )
@@ -64,6 +81,7 @@ def main():
         print(f"Created proxy {proxy_id}")
 
         host = client.fleet_outputs.create_fleet_server_host(
+            id=host_id,
             name=f"{prefix}-fleet-server",
             host_urls=["https://fleet.example.com:8220"],
             proxy_id=proxy_id,

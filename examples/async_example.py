@@ -69,9 +69,16 @@ async def demonstrate_actions(client):
             },
         )
 
-        # Create a server-log connector
-        print("\n➕ Creating server-log connector...")
-        connector_name = f"{resource_prefix(__file__)}-{uuid.uuid4().hex[:8]}"
+        # Create a server-log connector with a stable ID (own scope): clear
+        # only THIS example's own prior connector, then create fresh
+        prefix = resource_prefix(__file__)
+        connector_name = f"{prefix}-connector"
+        stable_connector_id = f"{prefix}-conn"
+
+        try:
+            await client.actions.delete(id=stable_connector_id)
+        except NotFoundError:
+            pass
 
         logger.info(
             "Creating async server-log connector",
@@ -84,7 +91,10 @@ async def demonstrate_actions(client):
         )
 
         create_response = await client.actions.create(
-            name=connector_name, connector_type_id=".server-log", config={}
+            id=stable_connector_id,
+            name=connector_name,
+            connector_type_id=".server-log",
+            config={},
         )
         connector = create_response.body
         connector_id = connector["id"]
@@ -199,10 +209,16 @@ async def demonstrate_spaces(client):
         default_space = default_response.body
         print(f"   ✓ Default space: {default_space['name']}")
 
-        # Create a new space
-        print("\n➕ Creating new space...")
-        space_id = f"{resource_prefix(__file__)}-{uuid.uuid4().hex[:8]}"
-        space_name = f"Async Example Space {uuid.uuid4().hex[:4]}"
+        # Create a new space with a stable ID (own scope): clear only THIS
+        # example's own prior space, then create fresh
+        space_id = f"{resource_prefix(__file__)}-space"
+        space_name = "Async Example Space"
+
+        try:
+            await client.spaces.delete(id=space_id)
+        except NotFoundError:
+            pass
+
         create_response = await client.spaces.create(
             id=space_id,
             name=space_name,

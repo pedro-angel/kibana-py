@@ -14,8 +14,6 @@ Run this example:
     python examples/data_views_management.py
 """
 
-import uuid
-
 from utils import get_kibana_config, print_kept, resource_prefix, should_cleanup
 
 from kibana import Kibana
@@ -30,9 +28,16 @@ def main() -> None:
         client = Kibana(kibana_url, basic_auth=basic_auth)
 
     prefix = resource_prefix(__file__)  # "kbnpy-data-views"
-    view_id = f"{prefix}-{uuid.uuid4().hex[:8]}"
+    view_id = f"{prefix}-view"
     created: list[tuple[str, str]] = []
     try:
+        # 0. Idempotent start: clear only THIS example's own prior data view,
+        # then create fresh
+        try:
+            client.data_views.delete(view_id=view_id)
+        except NotFoundError:
+            pass
+
         # 1. Create a data view (allowNoIndex lets it exist without data)
         created_view = client.data_views.create(
             data_view={

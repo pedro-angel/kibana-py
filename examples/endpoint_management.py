@@ -19,7 +19,7 @@ Run this example:
 from utils import get_kibana_config, print_kept, resource_prefix, should_cleanup
 
 from kibana import Kibana
-from kibana.exceptions import BadRequestError
+from kibana.exceptions import BadRequestError, NotFoundError
 
 
 def main():
@@ -41,7 +41,23 @@ def main():
         state = client.endpoint.get_actions_state()
         print(f"Response actions can encrypt: {state.body['data']['canEncrypt']}")
 
-        # 2. Scripts library CRUD (works without enrolled endpoints)
+        # 2. Scripts library CRUD (works without enrolled endpoints).
+        # Idempotent start: this example's script gets a server-assigned ID,
+        # so there is no fixed ID to pre-delete. Instead clear this
+        # example's OWN leftover scripts from earlier kept runs by matching
+        # the name prefix (own scope only).
+        existing_scripts = client.endpoint.get_scripts(page_size=100)
+        stale_scripts = [
+            s for s in existing_scripts.body["data"] if s["name"].startswith(prefix)
+        ]
+        for s in stale_scripts:
+            try:
+                client.endpoint.delete_script(script_id=s["id"])
+            except NotFoundError:
+                pass
+        if stale_scripts:
+            print(f"Cleared {len(stale_scripts)} leftover script(s)")
+
         created_script = client.endpoint.create_script(
             name=f"{prefix}-collect-logs",
             platform=["linux"],

@@ -16,6 +16,7 @@ Run this example:
 from utils import get_kibana_config, print_kept, resource_prefix, should_cleanup
 
 from kibana import Kibana
+from kibana.exceptions import NotFoundError
 
 
 def main():
@@ -29,6 +30,22 @@ def main():
     tag = f"{prefix}-tag"
     created: list[tuple[str, str]] = []
     try:
+        # 0. Idempotent start: this example's create()'d dashboard gets a
+        # server-assigned ID, so there is no fixed ID to pre-delete. Instead
+        # clear this example's OWN leftover dashboards from earlier kept
+        # runs by matching the title prefix (own scope only — never
+        # touches dashboards another example or you created). This also
+        # catches the custom-ID dashboard from step 3 below, which will
+        # simply be upserted again.
+        leftovers = client.dashboards.get_all(query=f"{prefix}*", per_page=100)
+        for item in leftovers.body["dashboards"]:
+            try:
+                client.dashboards.delete(id=item["id"])
+            except NotFoundError:
+                pass
+        if leftovers.body["dashboards"]:
+            print(f"Cleared {len(leftovers.body['dashboards'])} leftover dashboard(s)")
+
         # 1. Create a dashboard (the server assigns the ID)
         created_dashboard = client.dashboards.create(
             title=f"{prefix} Team Overview",

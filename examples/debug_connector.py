@@ -15,6 +15,8 @@ from utils import (
     should_enable_telemetry,
 )
 
+from kibana.exceptions import NotFoundError
+
 
 def main():
     # Print configuration information
@@ -73,10 +75,19 @@ def main():
             print("❌ Index connector type not available")
             return
 
+        # Idempotent start: clear only THIS example's own prior connector,
+        # then create fresh
+        stable_connector_id = f"{prefix}-conn"
+        try:
+            client.connectors.delete(id=stable_connector_id)
+        except NotFoundError:
+            pass
+
         # Now try to create the connector
         print("\nCreating index connector...")
         try:
             response = client.connectors.create(
+                id=stable_connector_id,
                 name=f"{prefix}-connector",
                 connector_type_id=".index",
                 config={
