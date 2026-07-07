@@ -17,11 +17,15 @@ from utils import (
     configure_example_telemetry,
     create_kibana_client,
     print_config_info,
+    print_kept,
     print_telemetry_info,
+    resource_prefix,
     setup_telemetry_cleanup,
     should_cleanup,
     should_enable_telemetry,
 )
+
+from kibana.exceptions import NotFoundError
 
 # Set up logger for this example
 logger = logging.getLogger("kibana.examples.simple_space")
@@ -55,22 +59,34 @@ def main():
     # Initialize Kibana client with automatic configuration
     client = create_kibana_client()
 
+    prefix = resource_prefix(__file__)  # "kbnpy-simple-space"
+    space_id = prefix
+    created: list[tuple[str, str]] = []
+
     try:
+        # Idempotent start: clear only this example's own prior resource
+        # (from a previous --no-cleanup run), then create fresh.
+        try:
+            client.spaces.delete(id=space_id)
+        except NotFoundError:
+            pass
+
         # 1. Create a space
         print("Creating space...")
         logger.info(
             "Creating Kibana space",
-            extra={"space_id": "my-team-space", "operation": "create"},
+            extra={"space_id": space_id, "operation": "create"},
         )
 
         space_response = client.spaces.create(
-            id="my-team-space",
+            id=space_id,
             name="My Team Space",
             description="A space for my team's dashboards and visualizations",
         )
 
         space = space_response.body  # Access the body attribute
         space_id = space["id"]
+        created.append(("space", space_id))
 
         logger.info(
             "Space created successfully",
@@ -97,9 +113,16 @@ def main():
         print("\n🎉 Success! Your space is ready to use.")
         print(f"   Space ID: {space_id}")
         print(f"   Access it at: http://localhost:5601/s/{space_id}/app/home")
-
-        # Ask user about cleanup
         print(f"\nSpace '{space_info['name']}' was created for this example.")
+
+    except Exception as e:
+        print(f"❌ Error: {e}")
+        logger.error(
+            "Space example failed", extra={"error": str(e), "example": "simple_space"}
+        )
+    finally:
+        # Teardown lives here (not on the happy path inside `try`) so an
+        # exception after creation still cleans up the space.
         if should_cleanup("Delete the space? (y/N): "):
             print("Cleaning up...")
             logger.info(
@@ -112,6 +135,8 @@ def main():
                     "Space deleted successfully",
                     extra={"space_id": space_id, "operation": "delete"},
                 )
+            except NotFoundError:
+                print("✓ Space already gone (nothing to delete)")
             except Exception as e:
                 # Some DELETE operations return empty responses
                 # Check if the space was actually deleted
@@ -130,15 +155,8 @@ def main():
                         extra={"space_id": space_id, "operation": "delete"},
                     )
         else:
-            print(f"✓ Space kept (ID: {space_id})")
+            print_kept(created)
             logger.info("Space kept by user choice", extra={"space_id": space_id})
-
-    except Exception as e:
-        print(f"❌ Error: {e}")
-        logger.error(
-            "Space example failed", extra={"error": str(e), "example": "simple_space"}
-        )
-    finally:
         logger.info("Simple space example completed")
         client.close()
 

@@ -18,7 +18,13 @@ Run this example:
 
 import time
 
-from utils import create_kibana_client, print_config_info
+from utils import (
+    create_kibana_client,
+    print_config_info,
+    print_kept,
+    resource_prefix,
+    should_cleanup,
+)
 
 from kibana.exceptions import (
     ApiError,
@@ -50,30 +56,35 @@ def example_not_found_error(client):
         print(f"❌ Unexpected error: {e}")
 
 
-def example_conflict_error(client):
+def example_conflict_error(client, prefix):
     """Example 2: Handling ConflictError (409)."""
     print("\n=== Example 2: ConflictError (409) ===")
 
-    connector_id = None
+    # Tracks every connector created below (including the second,
+    # deliberately-duplicate one) so none of them leak.
+    created: list[tuple[str, str]] = []
 
     try:
         # Create a connector with a specific ID
         response = client.actions.create(
-            name="Conflict Test Connector",
+            name=f"{prefix}-conflict-test-connector",
             connector_type_id=".server-log",
             config={},
         )
         connector_id = response.body["id"]
+        created.append(("connector (.server-log)", connector_id))
         print(f"✓ Created connector: {connector_id}")
 
         # Try to create another connector with the same configuration
         # (This may or may not cause a conflict depending on Kibana version)
         response = client.actions.create(
-            name="Conflict Test Connector",
+            name=f"{prefix}-conflict-test-connector",
             connector_type_id=".server-log",
             config={},
         )
-        print(f"✓ Created second connector: {response.body['id']}")
+        second_id = response.body["id"]
+        created.append(("connector (.server-log, duplicate)", second_id))
+        print(f"✓ Created second connector: {second_id}")
 
     except ConflictError as e:
         print("✓ Caught ConflictError as expected")
@@ -82,13 +93,22 @@ def example_conflict_error(client):
     except Exception as e:
         print(f"Note: {type(e).__name__}: {e}")
     finally:
-        # Cleanup
-        if connector_id:
-            try:
-                client.actions.delete(id=connector_id)
-                print(f"✓ Cleaned up connector: {connector_id}")
-            except Exception:
-                pass
+        # Cleanup runs here (function-scoped `finally`, gated by
+        # should_cleanup()) so a raised assertion/exception above still
+        # cleans up every connector this demo created — including the
+        # second, deliberately-duplicate one that used to leak.
+        if created:
+            if should_cleanup(
+                "Delete connector(s) created by the conflict demo? (y/N): "
+            ):
+                for _, cid in created:
+                    try:
+                        client.actions.delete(id=cid)
+                        print(f"✓ Cleaned up connector: {cid}")
+                    except Exception:
+                        pass
+            else:
+                print_kept(created)
 
 
 def example_bad_request_error(client):
@@ -394,11 +414,12 @@ def main():
 
     # Initialize client
     client = create_kibana_client()
+    prefix = resource_prefix(__file__)  # "kbnpy-error-handling"
 
     try:
         # Run examples
         example_not_found_error(client)
-        example_conflict_error(client)
+        example_conflict_error(client, prefix)
         example_bad_request_error(client)
         example_authentication_error()
         example_authorization_error()
