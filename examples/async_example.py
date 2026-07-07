@@ -273,9 +273,16 @@ async def demonstrate_saved_objects(client):
     object_id = None
 
     try:
-        # Create a saved object
+        # Create a saved object with a stable ID (own scope): clear only THIS
+        # example's own prior saved object, then create fresh
         print("\n➕ Creating saved object...")
-        object_id = f"{resource_prefix(__file__)}-{uuid.uuid4().hex[:8]}"
+        object_id = f"{resource_prefix(__file__)}-obj"
+
+        try:
+            await client.saved_objects.delete(type="config", id=object_id)
+        except NotFoundError:
+            pass
+
         attributes = {
             "title": f"Async Example Config {uuid.uuid4().hex[:4]}",
             "buildNum": 99999,
