@@ -100,7 +100,11 @@ celerybeat.pid
 *.sage.py
 
 # Environments
+# Secret-bearing env files are un-committable by pattern; only templates are allowed back in.
 .env
+.env.*
+!.env.example
+!*.env.example
 .venv
 env/
 venv/
