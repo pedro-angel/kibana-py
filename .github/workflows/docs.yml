@@ -40,7 +40,6 @@ jobs:
           cache: 'pip'
           cache-dependency-path: |
             pyproject.toml
-            docs/requirements.txt
 
       - name: Set up local development environment
         run: make setup
