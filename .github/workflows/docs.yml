@@ -40,7 +40,6 @@ jobs:
           cache: 'pip'
           cache-dependency-path: |
             pyproject.toml
-            docs/requirements.txt
 
       - name: Set up local development environment
         run: make setup
@@ -74,8 +73,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -e .
-          pip install interrogate
+          pip install -e ".[dev]"
 
       - name: Check docstring coverage
         run: |

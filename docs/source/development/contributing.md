@@ -252,7 +252,7 @@ When adding or changing functionality:
 
 ```bash
 # Install documentation dependencies
-pip install -r docs/requirements.txt
+pip install -e ".[docs]"
 
 # Build HTML documentation
 cd docs

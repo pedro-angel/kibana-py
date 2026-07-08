@@ -47,43 +47,27 @@ docs = [
     "sphinx>=7.0.0",
     "furo>=2024.1.0",
     "myst-parser>=2.0.0",
-    "sphinx-copybutton>=0.5.0",
-    "sphinx-design>=0.5.0",
-    "sphinx-autobuild>=2024.0.0",
+    "sphinx-copybutton>=0.5.2",
+    "sphinx-design>=0.7.0",
+    "sphinx-autobuild>=2025.8.25",
 ]
+build = ["build", "twine>=6.2.0", "cyclonedx-bom"]
+all = ["kibana-py[async,orjson,observability]"]
 dev = [
     "pytest>=7.0",
     "pytest-cov",
     "pytest-mock",
     "pytest-asyncio",
-    "black>=24.0",
-    "isort>=5.0",
-    "ruff>=0.1.0",
     "mypy>=1.0",
     "pyright",
-    "nox",
-    "pre-commit>=3.0",
+    "types-python-dateutil",
     "pip-audit>=2.0",
     "bandit>=1.7",
-    "types-python-dateutil",
+    "interrogate",
+    "nox",
+    "pre-commit>=3.0",
     "psutil>=5.0",
-    "build",
-    "sphinx>=7.0.0",
-    "furo>=2024.1.0",
-    "myst-parser>=2.0.0",
-    "sphinx-copybutton>=0.5.0",
-    "sphinx-design>=0.5.0",
-    "sphinx-autobuild>=2024.0.0",
-    "twine>=6.2.0",
-]
-all = [
-    "aiohttp>=3,<4",
-    "orjson>=3",
-    "opentelemetry-api>=1.20.0",
-    "opentelemetry-sdk>=1.20.0",
-    "opentelemetry-exporter-otlp-proto-grpc>=1.20.0",
-    "opentelemetry-exporter-otlp-proto-http>=1.20.0",
-    "opentelemetry-instrumentation>=0.40b0",
+    "kibana-py[docs,build]",
 ]
 
 [project.urls]

@@ -330,8 +330,7 @@ docs/
 │   ├── migration-guides/          # Migration guides
 │   └── troubleshooting/           # Troubleshooting guides
 ├── Makefile                       # Build commands (Unix)
-├── make.bat                       # Build commands (Windows)
-└── requirements.txt               # Documentation dependencies
+└── make.bat                       # Build commands (Windows)
 ```
 
 ### Building Documentation Locally
@@ -340,7 +339,7 @@ To build and view the documentation locally:
 
 ```bash
 # Install documentation dependencies
-pip install -r docs/requirements.txt
+pip install -e ".[docs]"
 
 # Build HTML documentation
 cd docs
