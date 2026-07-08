@@ -10,6 +10,9 @@ VENV_BIN    = $(VENV_DIR)/bin
 
 .PHONY: setup
 setup: ## Create virtual environment and install all dependencies
+	@# Preflight: fail fast (with guidance) if $(PYTHON) is older than the
+	@# requires-python floor declared in pyproject.toml (the single source of truth).
+	@$(PYTHON) -c 'import re,sys,pathlib; spec=re.search(r"requires-python\s*=\s*\"([^\"]+)\"", pathlib.Path("pyproject.toml").read_text())[1]; need=tuple(map(int, re.search(r"(\d+)\.(\d+)", spec).groups())); sys.exit(0 if sys.version_info[:2] >= need else f"\n✗ kibana-py needs Python {spec}, but {sys.executable} is {sys.version.split()[0]}.\n  Re-run e.g.  make setup PYTHON=python3.14\n")'
 	$(PYTHON) -m venv $(VENV_DIR)
 	$(VENV_BIN)/pip install --upgrade pip
 	$(VENV_BIN)/pip install -e ".[dev,all]"
