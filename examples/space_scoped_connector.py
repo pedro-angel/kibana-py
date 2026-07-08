@@ -39,18 +39,21 @@ The example uses automatic configuration from examples/utils.py, which supports:
 - Sensible defaults (http://localhost:5601)
 """
 
-import time
 from datetime import UTC, datetime
 
 from utils import (
     configure_example_telemetry,
     create_kibana_client,
     print_config_info,
+    print_kept,
     print_telemetry_info,
+    resource_prefix,
     setup_telemetry_cleanup,
     should_cleanup,
     should_enable_telemetry,
 )
+
+from kibana.exceptions import NotFoundError
 
 
 def create_team_space(client):
@@ -65,11 +68,18 @@ def create_team_space(client):
 
     print("Creating team space...")
 
-    # Generate unique space ID with timestamp to avoid conflicts
-    timestamp = int(time.time())
-    space_id = f"team-space-{timestamp}"
+    # Stable space ID namespaced to this example (own scope)
+    space_id = f"{resource_prefix(__file__)}-team-space"
 
     try:
+        # Idempotent start: clear only THIS example's own prior space.
+        # Deleting the space cascades to any connectors created within it.
+        try:
+            client.spaces.delete(id=space_id)
+            print(f"Cleared leftover space {space_id!r}")
+        except NotFoundError:
+            pass
+
         logger.info(
             "Creating team space",
             extra={
@@ -144,8 +154,12 @@ def create_space_connector(client, space_id):
             },
         )
 
-        # Create connector using ActionsClient space support with automatic validation
+        # Create connector using ActionsClient space support with automatic validation.
+        # Stable id (own scope): the space is recreated fresh on every run (see
+        # create_team_space), so there is no risk of an ID conflict, but a
+        # fixed id keeps this connector's identity reproducible across runs.
         response = client.actions.create(
+            id=f"{resource_prefix(__file__)}-conn",
             name=f"Team Connector ({space_id})",
             connector_type_id=".index",
             config={
@@ -226,7 +240,9 @@ def execute_connector_with_sample_data(client, connector_id, space_id):
         if result.get("status") == "ok":
             print("  ✓ Connector execution completed successfully")
         else:
-            print(f"  ⚠️  Connector execution status: {result.get('status', 'unknown')}")
+            print(
+                f"  ⚠️  Connector execution status: {result.get('status', 'unknown')}"
+            )
 
     except Exception as e:
         print(f"❌ Failed to execute connector: {e}")
@@ -308,12 +324,12 @@ def interactive_cleanup(client, connector_id, space_id):
                 except Exception:
                     # If get() fails, deletion likely succeeded
                     print("✓ Primary connector deleted (confirmed)")
-            print(f"✓ Space kept (ID: {space_id})")
             print("  Note: Space-scoped connector may still exist in the space")
+            print_kept([("space", space_id)])
         else:
             # Display resource IDs if user declines cleanup
-            print(f"✓ All resources kept in space (ID: {space_id})")
             print("  You can manage them later from the Kibana UI")
+            print_kept([("space", space_id), ("primary connector", connector_id)])
 
 
 def demonstrate_space_scoped_client(client, space_id):

@@ -2,21 +2,59 @@
 
 import logging
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any
-
-if TYPE_CHECKING:
-    from kibana._sync.client.actions import ActionsClient
-    from kibana._sync.client.alerting import AlertingClient
-    from kibana._sync.client.saved_objects import SavedObjectsClient
-    from kibana._sync.client.spaces import SpacesClient
-    from kibana._sync.client.status import StatusClient
+from typing import Any
 
 from elastic_transport import NodeConfig, Transport
+from elastic_transport.client_utils import parse_cloud_id
 
 from kibana._rate_limiter import RateLimiter
 from kibana._sync.client._base import DEFAULT, BaseClient, DefaultType
+from kibana._sync.client.actions import ActionsClient
+from kibana._sync.client.agent_builder import AgentBuilderClient
+from kibana._sync.client.alerting import AlertingClient
+from kibana._sync.client.apm import ApmClient
+from kibana._sync.client.attack_discovery import AttackDiscoveryClient
+from kibana._sync.client.cases import CasesClient
+from kibana._sync.client.connectors import ConnectorsClient
+from kibana._sync.client.dashboards import DashboardsClient
+from kibana._sync.client.data_views import DataViewsClient
+from kibana._sync.client.detection_engine import DetectionEngineClient
+from kibana._sync.client.endpoint import EndpointClient
+from kibana._sync.client.entity_analytics import EntityAnalyticsClient
+from kibana._sync.client.exception_lists import ExceptionListsClient
+from kibana._sync.client.fleet import FleetClient
+from kibana._sync.client.fleet_agents import FleetAgentsClient
+from kibana._sync.client.fleet_enrollment import FleetEnrollmentClient
+from kibana._sync.client.fleet_epm import FleetEpmClient
+from kibana._sync.client.fleet_outputs import FleetOutputsClient
+from kibana._sync.client.fleet_policies import FleetPoliciesClient
+from kibana._sync.client.lists import ListsClient
+from kibana._sync.client.logstash import LogstashClient
+from kibana._sync.client.maintenance_windows import MaintenanceWindowsClient
+from kibana._sync.client.ml import MlClient
+from kibana._sync.client.observability_ai_assistant import (
+    ObservabilityAiAssistantClient,
+)
+from kibana._sync.client.osquery import OsqueryClient
+from kibana._sync.client.saved_objects import SavedObjectsClient
+from kibana._sync.client.security import SecurityClient
+from kibana._sync.client.security_ai_assistant import SecurityAiAssistantClient
+from kibana._sync.client.short_urls import ShortUrlsClient
+from kibana._sync.client.slos import SlosClient
+from kibana._sync.client.spaces import SpacesClient
+from kibana._sync.client.status import StatusClient
+from kibana._sync.client.streams import StreamsClient
+from kibana._sync.client.synthetics import SyntheticsClient
+from kibana._sync.client.task_manager import TaskManagerClient
+from kibana._sync.client.timeline import TimelineClient
+from kibana._sync.client.upgrade_assistant import UpgradeAssistantClient
+from kibana._sync.client.uptime import UptimeClient
+from kibana._sync.client.visualizations import VisualizationsClient
+from kibana._sync.client.workflows import WorkflowsClient
 from kibana.exceptions import SpaceNotFoundError
 from kibana.serializer import DEFAULT_SERIALIZERS
+
+__all__ = ["Kibana", "SpaceScopedKibana", "DEFAULT", "DefaultType"]
 
 # Set up logger
 logger = logging.getLogger("kibana")
@@ -27,6 +65,9 @@ class Kibana(BaseClient):
     Synchronous client for Kibana.
 
     Provides a Pythonic interface to interact with Kibana's REST APIs.
+    Each API group is exposed as a namespace attribute (``client.dashboards``,
+    ``client.spaces``, ``client.alerting``, ...), mirroring the structure of
+    the official Kibana API reference.
 
     Example usage:
         >>> from kibana import Kibana
@@ -42,6 +83,48 @@ class Kibana(BaseClient):
         ...     # Use the client
         ...     pass
     """
+
+    # Namespace clients (wired eagerly in __init__)
+    actions: ActionsClient
+    agent_builder: AgentBuilderClient
+    alerting: AlertingClient
+    apm: ApmClient
+    attack_discovery: AttackDiscoveryClient
+    cases: CasesClient
+    connectors: ConnectorsClient
+    dashboards: DashboardsClient
+    data_views: DataViewsClient
+    detection_engine: DetectionEngineClient
+    endpoint: EndpointClient
+    entity_analytics: EntityAnalyticsClient
+    exception_lists: ExceptionListsClient
+    fleet: FleetClient
+    fleet_agents: FleetAgentsClient
+    fleet_enrollment: FleetEnrollmentClient
+    fleet_epm: FleetEpmClient
+    fleet_outputs: FleetOutputsClient
+    fleet_policies: FleetPoliciesClient
+    lists: ListsClient
+    logstash: LogstashClient
+    maintenance_windows: MaintenanceWindowsClient
+    ml: MlClient
+    observability_ai_assistant: ObservabilityAiAssistantClient
+    osquery: OsqueryClient
+    saved_objects: SavedObjectsClient
+    security: SecurityClient
+    security_ai_assistant: SecurityAiAssistantClient
+    short_urls: ShortUrlsClient
+    slos: SlosClient
+    spaces: SpacesClient
+    status: StatusClient
+    streams: StreamsClient
+    synthetics: SyntheticsClient
+    task_manager: TaskManagerClient
+    timeline: TimelineClient
+    upgrade_assistant: UpgradeAssistantClient
+    uptime: UptimeClient
+    visualizations: VisualizationsClient
+    workflows: WorkflowsClient
 
     def __init__(
         self,
@@ -130,25 +213,33 @@ class Kibana(BaseClient):
             )
             if max_requests_per_second is not None:
                 self._rate_limiter = RateLimiter(max_requests_per_second)
+            self._wire_namespaces()
             return
 
         # Validate that either hosts or cloud_id is provided
         if hosts is None and cloud_id is None:
             raise ValueError("Either 'hosts' or 'cloud_id' must be provided")
 
-        # Build node configurations
-        node_configs = self._build_node_configs(hosts, cloud_id)
+        # Build node configurations, applying SSL/connection options
+        node_options = _build_node_options(
+            verify_certs=verify_certs,
+            ca_certs=ca_certs,
+            client_cert=client_cert,
+            client_key=client_key,
+            ssl_assert_hostname=ssl_assert_hostname,
+            ssl_assert_fingerprint=ssl_assert_fingerprint,
+            ssl_version=ssl_version,
+            ssl_context=ssl_context,
+            ssl_show_warn=ssl_show_warn,
+            connections_per_node=connections_per_node,
+        )
+        node_configs = _build_node_configs(hosts, cloud_id, node_options)
 
         # Build transport options
         transport_kwargs: dict[str, Any] = {
             "node_configs": node_configs,
             "serializers": DEFAULT_SERIALIZERS,
         }
-
-        # Note: SSL/TLS options like verify_certs, ca_certs, client_cert, client_key
-        # are configured on NodeConfig, not Transport. They are accepted here for
-        # API compatibility but stored for future use when creating SSL contexts.
-        # For now, we just accept them without error.
 
         # Add retry options (these are valid Transport parameters)
         if not isinstance(max_retries, DefaultType):
@@ -165,6 +256,10 @@ class Kibana(BaseClient):
             transport_kwargs["node_pool_class"] = node_pool_class
         if not isinstance(randomize_nodes_in_pool, DefaultType):
             transport_kwargs["randomize_nodes_in_pool"] = randomize_nodes_in_pool
+        if not isinstance(dead_node_backoff_factor, DefaultType):
+            transport_kwargs["dead_node_backoff_factor"] = dead_node_backoff_factor
+        if not isinstance(max_dead_node_backoff, DefaultType):
+            transport_kwargs["max_dead_node_backoff"] = max_dead_node_backoff
 
         # Create Transport instance
         transport = Transport(**transport_kwargs)
@@ -194,80 +289,50 @@ class Kibana(BaseClient):
                 "Rate limiting enabled: %.1f requests/sec", max_requests_per_second
             )
 
-    def _build_node_configs(
-        self,
-        hosts: str | list[str | dict[str, Any]] | None,
-        cloud_id: str | None,
-    ) -> list[NodeConfig]:
-        """
-        Build NodeConfig objects from hosts or cloud_id.
+        self._wire_namespaces()
 
-        :param hosts: Host specifications
-        :param cloud_id: Cloud ID for Elastic Cloud
-        :return: List of NodeConfig objects
-        """
-        if cloud_id is not None:
-            # Parse cloud_id and create NodeConfig
-            # Cloud ID format: cluster_name:base64_encoded_data
-            # The base64 data contains: cloud_host$es_uuid$kibana_uuid
-            import base64
-
-            try:
-                _, encoded = cloud_id.split(":", 1)
-                decoded = base64.b64decode(encoded).decode("utf-8")
-                parts = decoded.split("$")
-
-                if len(parts) >= 3:
-                    cloud_host = parts[0]
-                    kibana_uuid = parts[2]
-
-                    # Construct Kibana URL
-                    return [
-                        NodeConfig(
-                            scheme="https", host=f"{kibana_uuid}.{cloud_host}", port=443
-                        )
-                    ]
-                else:
-                    raise ValueError(f"Invalid cloud_id format: {cloud_id}")
-            except Exception as e:
-                raise ValueError(f"Failed to parse cloud_id: {e}")
-
-        # Parse hosts
-        if isinstance(hosts, str):
-            hosts = [hosts]
-
-        if hosts is None:
-            raise ValueError("hosts cannot be None when cloud_id is not provided")
-
-        node_configs = []
-        for host in hosts:
-            if isinstance(host, str):
-                # Parse URL string manually
-                from urllib.parse import urlparse
-
-                parsed = urlparse(host)
-
-                scheme = parsed.scheme or "http"
-                hostname = parsed.hostname or "localhost"
-                port = parsed.port or (443 if scheme == "https" else 5601)
-
-                node_config = NodeConfig(
-                    scheme=scheme,
-                    host=hostname,
-                    port=port,
-                    path_prefix=(
-                        parsed.path if parsed.path and parsed.path != "/" else ""
-                    ),
-                )
-                node_configs.append(node_config)
-            elif isinstance(host, dict):
-                # Create NodeConfig from dict
-                node_config = NodeConfig(**host)
-                node_configs.append(node_config)
-            else:
-                raise ValueError(f"Invalid host specification: {host}")
-
-        return node_configs
+    def _wire_namespaces(self) -> None:
+        """Attach one client instance per Kibana API namespace."""
+        self.actions = ActionsClient(self)
+        self.agent_builder = AgentBuilderClient(self)
+        self.alerting = AlertingClient(self)
+        self.apm = ApmClient(self)
+        self.attack_discovery = AttackDiscoveryClient(self)
+        self.cases = CasesClient(self)
+        self.connectors = ConnectorsClient(self)
+        self.dashboards = DashboardsClient(self)
+        self.data_views = DataViewsClient(self)
+        self.detection_engine = DetectionEngineClient(self)
+        self.endpoint = EndpointClient(self)
+        self.entity_analytics = EntityAnalyticsClient(self)
+        self.exception_lists = ExceptionListsClient(self)
+        self.fleet = FleetClient(self)
+        self.fleet_agents = FleetAgentsClient(self)
+        self.fleet_enrollment = FleetEnrollmentClient(self)
+        self.fleet_epm = FleetEpmClient(self)
+        self.fleet_outputs = FleetOutputsClient(self)
+        self.fleet_policies = FleetPoliciesClient(self)
+        self.lists = ListsClient(self)
+        self.logstash = LogstashClient(self)
+        self.maintenance_windows = MaintenanceWindowsClient(self)
+        self.ml = MlClient(self)
+        self.observability_ai_assistant = ObservabilityAiAssistantClient(self)
+        self.osquery = OsqueryClient(self)
+        self.saved_objects = SavedObjectsClient(self)
+        self.security = SecurityClient(self)
+        self.security_ai_assistant = SecurityAiAssistantClient(self)
+        self.short_urls = ShortUrlsClient(self)
+        self.slos = SlosClient(self)
+        self.spaces = SpacesClient(self)
+        self.status = StatusClient(self)
+        self.streams = StreamsClient(self)
+        self.synthetics = SyntheticsClient(self)
+        self.task_manager = TaskManagerClient(self)
+        self.timeline = TimelineClient(self)
+        self.upgrade_assistant = UpgradeAssistantClient(self)
+        self.uptime = UptimeClient(self)
+        self.visualizations = VisualizationsClient(self)
+        self.workflows = WorkflowsClient(self)
 
     def close(self) -> None:
         """
@@ -282,7 +347,7 @@ class Kibana(BaseClient):
         except Exception as e:
             logger.warning("Error closing Kibana client: %s", e)
 
-    def __enter__(self) -> "Kibana":
+    def __enter__(self) -> Kibana:
         """Enter context manager."""
         return self
 
@@ -294,7 +359,7 @@ class Kibana(BaseClient):
         """Return string representation of client."""
         return "<Kibana()>"
 
-    def space(self, space_id: str, validate: bool = True) -> "SpaceScopedKibana":
+    def space(self, space_id: str, validate: bool = True) -> SpaceScopedKibana:
         """
         Create a space-scoped client instance.
 
@@ -312,11 +377,9 @@ class Kibana(BaseClient):
             >>> # Create a space-scoped client with validation
             >>> marketing_client = client.space("marketing")
             >>>
-            >>> # Create connector in the marketing space
-            >>> connector = marketing_client.actions.create(
-            ...     name="Marketing Webhook",
-            ...     connector_type_id=".webhook",
-            ...     config={"url": "https://marketing.example.com/webhook"}
+            >>> # Create a dashboard in the marketing space
+            >>> dashboard = marketing_client.dashboards.create(
+            ...     title="Marketing KPIs"
             ... )
             >>>
             >>> # Create space-scoped client without validation (for performance)
@@ -324,163 +387,110 @@ class Kibana(BaseClient):
         """
         return SpaceScopedKibana(self, space_id, validate)
 
-    @property
-    def actions(self) -> "ActionsClient":
-        """
-        Access the Actions API for managing Kibana action connectors.
 
-        Actions in Kibana are connectors that enable integration with external systems
-        for alerting, notifications, and automation.
+def _build_node_options(
+    *,
+    verify_certs: DefaultType | bool,
+    ca_certs: DefaultType | str,
+    client_cert: DefaultType | str,
+    client_key: DefaultType | str,
+    ssl_assert_hostname: DefaultType | str,
+    ssl_assert_fingerprint: DefaultType | str,
+    ssl_version: DefaultType | int,
+    ssl_context: DefaultType | Any,
+    ssl_show_warn: DefaultType | bool,
+    connections_per_node: DefaultType | int,
+) -> dict[str, Any]:
+    """Collect per-node (SSL/connection) options into NodeConfig kwargs."""
+    options: dict[str, Any] = {}
+    candidates = {
+        "verify_certs": verify_certs,
+        "ca_certs": ca_certs,
+        "client_cert": client_cert,
+        "client_key": client_key,
+        "ssl_assert_hostname": ssl_assert_hostname,
+        "ssl_assert_fingerprint": ssl_assert_fingerprint,
+        "ssl_version": ssl_version,
+        "ssl_context": ssl_context,
+        "ssl_show_warn": ssl_show_warn,
+        "connections_per_node": connections_per_node,
+    }
+    for key, value in candidates.items():
+        if not isinstance(value, DefaultType):
+            options[key] = value
+    return options
 
-        :return: ActionsClient instance for managing action connectors
 
-        Example:
-            >>> # Create a webhook connector
-            >>> connector = client.actions.create(
-            ...     name="Alert Webhook",
-            ...     connector_type_id=".webhook",
-            ...     config={"url": "https://example.com/webhook"}
-            ... )
+def _build_node_configs(
+    hosts: str | list[str | dict[str, Any]] | None,
+    cloud_id: str | None,
+    node_options: dict[str, Any] | None = None,
+) -> list[NodeConfig]:
+    """
+    Build NodeConfig objects from hosts or cloud_id.
 
-            >>> # List all connectors
-            >>> connectors = client.actions.get_all()
+    :param hosts: Host specifications
+    :param cloud_id: Cloud ID for Elastic Cloud
+    :param node_options: Extra NodeConfig options (SSL, connection pool)
+    :return: List of NodeConfig objects
+    """
+    node_options = node_options or {}
 
-            >>> # Execute a connector
-            >>> result = client.actions.execute(
-            ...     id=connector["id"],
-            ...     params={"message": "Test alert"}
-            ... )
-        """
-        # Lazy initialization of ActionsClient
-        if not hasattr(self, "_actions_client"):
-            from kibana._sync.client.actions import ActionsClient
+    if cloud_id is not None:
+        # Use the canonical elastic-transport parser: it handles ports
+        # embedded in the cloud host (e.g. "host:9243$es_uuid$kibana_uuid")
+        try:
+            parsed = parse_cloud_id(cloud_id)
+        except Exception as e:
+            raise ValueError(f"Failed to parse cloud_id: {e}") from e
+        if parsed.kibana_address is None:
+            raise ValueError(f"Cloud ID does not contain a Kibana address: {cloud_id}")
+        kibana_host, kibana_port = parsed.kibana_address
+        return [
+            NodeConfig(
+                scheme="https", host=kibana_host, port=kibana_port, **node_options
+            )
+        ]
 
-            self._actions_client = ActionsClient(self)
-        return self._actions_client
+    # Parse hosts
+    if isinstance(hosts, str):
+        hosts = [hosts]
 
-    @property
-    def spaces(self) -> "SpacesClient":
-        """
-        Access the Spaces API for managing Kibana Spaces.
+    if hosts is None:
+        raise ValueError("hosts cannot be None when cloud_id is not provided")
 
-        Spaces allow you to organize your Kibana objects (dashboards, visualizations, etc.)
-        into separate, isolated areas. Each space can have its own set of saved objects
-        and can be used to implement multi-tenancy.
+    node_configs = []
+    for host in hosts:
+        if isinstance(host, str):
+            # Parse URL string manually
+            from urllib.parse import urlparse
 
-        :return: SpacesClient instance for managing spaces
+            parsed_url = urlparse(host)
 
-        Example:
-            >>> # Create a new space
-            >>> space = client.spaces.create(
-            ...     id="marketing",
-            ...     name="Marketing Team",
-            ...     description="Space for marketing team"
-            ... )
+            scheme = parsed_url.scheme or "http"
+            hostname = parsed_url.hostname or "localhost"
+            port = parsed_url.port or (443 if scheme == "https" else 5601)
 
-            >>> # List all spaces
-            >>> spaces = client.spaces.get_all()
+            node_config = NodeConfig(
+                scheme=scheme,
+                host=hostname,
+                port=port,
+                path_prefix=(
+                    parsed_url.path
+                    if parsed_url.path and parsed_url.path != "/"
+                    else ""
+                ),
+                **node_options,
+            )
+            node_configs.append(node_config)
+        elif isinstance(host, dict):
+            # Create NodeConfig from dict (explicit keys win over shared options)
+            node_config = NodeConfig(**{**node_options, **host})
+            node_configs.append(node_config)
+        else:
+            raise ValueError(f"Invalid host specification: {host}")
 
-            >>> # Update a space
-            >>> updated = client.spaces.update(
-            ...     id="marketing",
-            ...     name="Marketing Department"
-            ... )
-
-            >>> # Delete a space
-            >>> client.spaces.delete(id="marketing")
-        """
-        # Lazy initialization of SpacesClient
-        if not hasattr(self, "_spaces_client"):
-            from kibana._sync.client.spaces import SpacesClient
-
-            self._spaces_client = SpacesClient(self)
-        return self._spaces_client
-
-    @property
-    def saved_objects(self) -> "SavedObjectsClient":
-        """
-        Access the Saved Objects API for managing Kibana saved objects.
-
-        Saved Objects in Kibana are entities like dashboards, visualizations, index patterns,
-        and other configuration items. This API provides methods to create, read, update,
-        and delete saved objects.
-
-        :return: SavedObjectsClient instance for managing saved objects
-
-        Example:
-            >>> # Create a dashboard
-            >>> dashboard = client.saved_objects.create(
-            ...     type="dashboard",
-            ...     attributes={"title": "My Dashboard"}
-            ... )
-
-            >>> # Get a saved object
-            >>> obj = client.saved_objects.get(
-            ...     type="dashboard",
-            ...     id="my-dashboard-id"
-            ... )
-
-            >>> # Update a saved object
-            >>> updated = client.saved_objects.update(
-            ...     type="dashboard",
-            ...     id="my-dashboard-id",
-            ...     attributes={"title": "Updated Dashboard"}
-            ... )
-
-            >>> # Delete a saved object
-            >>> client.saved_objects.delete(
-            ...     type="dashboard",
-            ...     id="my-dashboard-id"
-            ... )
-        """
-        # Lazy initialization of SavedObjectsClient
-        if not hasattr(self, "_saved_objects_client"):
-            from kibana._sync.client.saved_objects import SavedObjectsClient
-
-            self._saved_objects_client = SavedObjectsClient(self)
-        return self._saved_objects_client
-
-    @property
-    def status(self) -> "StatusClient":
-        """
-        Access the Status API for monitoring Kibana server health and statistics.
-
-        The Status API provides information about the Kibana server's operational state,
-        including overall health status, individual service statuses, and detailed
-        operational metrics.
-
-        :return: StatusClient instance for monitoring server status
-
-        Example:
-            >>> # Get current Kibana status
-            >>> status = client.status.get_status()
-            >>> print(status.body["status"]["overall"]["level"])  # available, degraded, or unavailable
-
-            >>> # Get operational statistics
-            >>> stats = client.status.get_stats()
-            >>> print(stats.body["process"]["uptime_in_millis"])
-            >>> print(stats.body["os"]["load"])
-        """
-        # Lazy initialization of StatusClient
-        if not hasattr(self, "_status_client"):
-            from kibana._sync.client.status import StatusClient
-
-            self._status_client = StatusClient(self)
-        return self._status_client
-
-    @property
-    def alerting(self) -> "AlertingClient":
-        """
-        Access the Alerting API for managing rules.
-
-        :return: AlertingClient instance for managing rules.
-        """
-        # Lazy initialization of AlertingClient
-        if not hasattr(self, "_alerting_client"):
-            from kibana._sync.client.alerting import AlertingClient
-
-            self._alerting_client = AlertingClient(self)
-        return self._alerting_client
+    return node_configs
 
 
 class SpaceScopedKibana:
@@ -489,23 +499,59 @@ class SpaceScopedKibana:
 
     This class provides the same API surface as the main Kibana client but
     automatically scopes all operations to a specific space. All child clients
-    (actions, saved_objects, etc.) created through this instance will inherit
-    the space context and validation settings.
+    (dashboards, saved_objects, alerting, etc.) created through this instance
+    inherit the space context and validation settings. Namespaces that are not
+    space-aware (spaces, status, security, task_manager, upgrade_assistant,
+    logstash) delegate to the parent client unscoped.
 
     Example:
         >>> # Create space-scoped client with validation
         >>> marketing_client = client.space("marketing")
         >>>
         >>> # All operations are automatically scoped to "marketing" space
-        >>> connector = marketing_client.actions.create(
-        ...     name="Marketing Webhook",
-        ...     connector_type_id=".webhook",
-        ...     config={"url": "https://marketing.example.com/webhook"}
+        >>> dashboard = marketing_client.dashboards.create(
+        ...     title="Marketing KPIs"
         ... )
         >>>
         >>> # Create space-scoped client without validation for performance
         >>> fast_client = client.space("marketing", validate=False)
     """
+
+    # Space-scoped namespace clients (wired eagerly in __init__)
+    actions: ActionsClient
+    agent_builder: AgentBuilderClient
+    alerting: AlertingClient
+    apm: ApmClient
+    attack_discovery: AttackDiscoveryClient
+    cases: CasesClient
+    connectors: ConnectorsClient
+    dashboards: DashboardsClient
+    data_views: DataViewsClient
+    detection_engine: DetectionEngineClient
+    endpoint: EndpointClient
+    entity_analytics: EntityAnalyticsClient
+    exception_lists: ExceptionListsClient
+    fleet: FleetClient
+    fleet_agents: FleetAgentsClient
+    fleet_enrollment: FleetEnrollmentClient
+    fleet_epm: FleetEpmClient
+    fleet_outputs: FleetOutputsClient
+    fleet_policies: FleetPoliciesClient
+    lists: ListsClient
+    maintenance_windows: MaintenanceWindowsClient
+    ml: MlClient
+    observability_ai_assistant: ObservabilityAiAssistantClient
+    osquery: OsqueryClient
+    saved_objects: SavedObjectsClient
+    security_ai_assistant: SecurityAiAssistantClient
+    short_urls: ShortUrlsClient
+    slos: SlosClient
+    streams: StreamsClient
+    synthetics: SyntheticsClient
+    timeline: TimelineClient
+    uptime: UptimeClient
+    visualizations: VisualizationsClient
+    workflows: WorkflowsClient
 
     def __init__(self, client: Kibana, space_id: str, validate: bool = True) -> None:
         """
@@ -523,6 +569,49 @@ class SpaceScopedKibana:
         # Validate space exists immediately if validation is enabled
         if validate:
             self._validate_space_on_creation()
+
+        # Wire space-scoped namespace clients
+        def scoped(cls: type) -> Any:
+            return cls(
+                client,
+                default_space_id=space_id,
+                validate_spaces=validate,
+            )
+
+        self.actions = scoped(ActionsClient)
+        self.agent_builder = scoped(AgentBuilderClient)
+        self.alerting = scoped(AlertingClient)
+        self.apm = scoped(ApmClient)
+        self.attack_discovery = scoped(AttackDiscoveryClient)
+        self.cases = scoped(CasesClient)
+        self.connectors = scoped(ConnectorsClient)
+        self.dashboards = scoped(DashboardsClient)
+        self.data_views = scoped(DataViewsClient)
+        self.detection_engine = scoped(DetectionEngineClient)
+        self.endpoint = scoped(EndpointClient)
+        self.entity_analytics = scoped(EntityAnalyticsClient)
+        self.exception_lists = scoped(ExceptionListsClient)
+        self.fleet = scoped(FleetClient)
+        self.fleet_agents = scoped(FleetAgentsClient)
+        self.fleet_enrollment = scoped(FleetEnrollmentClient)
+        self.fleet_epm = scoped(FleetEpmClient)
+        self.fleet_outputs = scoped(FleetOutputsClient)
+        self.fleet_policies = scoped(FleetPoliciesClient)
+        self.lists = scoped(ListsClient)
+        self.maintenance_windows = scoped(MaintenanceWindowsClient)
+        self.ml = scoped(MlClient)
+        self.observability_ai_assistant = scoped(ObservabilityAiAssistantClient)
+        self.osquery = scoped(OsqueryClient)
+        self.saved_objects = scoped(SavedObjectsClient)
+        self.security_ai_assistant = scoped(SecurityAiAssistantClient)
+        self.short_urls = scoped(ShortUrlsClient)
+        self.slos = scoped(SlosClient)
+        self.streams = scoped(StreamsClient)
+        self.synthetics = scoped(SyntheticsClient)
+        self.timeline = scoped(TimelineClient)
+        self.uptime = scoped(UptimeClient)
+        self.visualizations = scoped(VisualizationsClient)
+        self.workflows = scoped(WorkflowsClient)
 
     def _validate_space_on_creation(self) -> None:
         """
@@ -542,87 +631,34 @@ class SpaceScopedKibana:
                 raise
 
     @property
-    def actions(self) -> "ActionsClient":
-        """
-        Get ActionsClient with space scope.
-
-        Returns an ActionsClient instance that automatically operates within
-        the space context of this SpaceScopedKibana instance.
-
-        :return: ActionsClient scoped to this space
-
-        Example:
-            >>> marketing_client = client.space("marketing")
-            >>> # This connector will be created in the "marketing" space
-            >>> connector = marketing_client.actions.create(
-            ...     name="Marketing Webhook",
-            ...     connector_type_id=".webhook",
-            ...     config={"url": "https://marketing.example.com/webhook"}
-            ... )
-        """
-        if not hasattr(self, "_actions_client"):
-            from kibana._sync.client.actions import ActionsClient
-
-            self._actions_client = ActionsClient(
-                self._client,
-                default_space_id=self._space_id,
-                validate_spaces=self._validate,
-            )
-        return self._actions_client
-
-    @property
-    def saved_objects(self) -> "SavedObjectsClient":
-        """
-        Get SavedObjectsClient with space scope.
-
-        Returns a SavedObjectsClient instance that automatically operates within
-        the space context of this SpaceScopedKibana instance.
-
-        :return: SavedObjectsClient scoped to this space
-
-        Example:
-            >>> marketing_client = client.space("marketing")
-            >>> # This dashboard will be created in the "marketing" space
-            >>> dashboard = marketing_client.saved_objects.create(
-            ...     type="dashboard",
-            ...     attributes={"title": "Marketing Dashboard"}
-            ... )
-        """
-        if not hasattr(self, "_saved_objects_client"):
-            from kibana._sync.client.saved_objects import SavedObjectsClient
-
-            self._saved_objects_client = SavedObjectsClient(
-                self._client,
-                default_space_id=self._space_id,
-                validate_spaces=self._validate,
-            )
-        return self._saved_objects_client
-
-    @property
-    def spaces(self) -> "SpacesClient":
-        """
-        Get SpacesClient (not space-scoped).
-
-        The SpacesClient is used for managing spaces themselves and is not
-        scoped to a particular space. It uses the same client as the parent
-        Kibana instance.
-
-        :return: SpacesClient for managing spaces
-        """
+    def spaces(self) -> SpacesClient:
+        """Get SpacesClient (not space-scoped; manages spaces themselves)."""
         return self._client.spaces
 
     @property
-    def status(self) -> "StatusClient":
-        """
-        Get StatusClient (not space-scoped).
-
-        The StatusClient provides server-wide status information and is not
-        scoped to a particular space. It uses the same client as the parent
-        Kibana instance.
-
-        :return: StatusClient for monitoring server status
-        """
+    def status(self) -> StatusClient:
+        """Get StatusClient (not space-scoped; server-wide status)."""
         return self._client.status
+
+    @property
+    def security(self) -> SecurityClient:
+        """Get SecurityClient (not space-scoped; roles and sessions are global)."""
+        return self._client.security
+
+    @property
+    def task_manager(self) -> TaskManagerClient:
+        """Get TaskManagerClient (not space-scoped; server-wide health)."""
+        return self._client.task_manager
+
+    @property
+    def upgrade_assistant(self) -> UpgradeAssistantClient:
+        """Get UpgradeAssistantClient (not space-scoped; cluster-wide status)."""
+        return self._client.upgrade_assistant
+
+    @property
+    def logstash(self) -> LogstashClient:
+        """Get LogstashClient (not space-scoped; pipelines are global)."""
+        return self._client.logstash
 
     def close(self) -> None:
         """
@@ -632,7 +668,7 @@ class SpaceScopedKibana:
         """
         self._client.close()
 
-    def __enter__(self) -> "SpaceScopedKibana":
+    def __enter__(self) -> SpaceScopedKibana:
         """Enter context manager."""
         return self
 

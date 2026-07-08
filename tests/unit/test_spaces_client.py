@@ -1,452 +1,458 @@
 """Unit tests for SpacesClient."""
 
-from unittest.mock import Mock
-
 import pytest
-from elastic_transport import ApiResponseMeta, ObjectApiResponse
 
+from kibana._sync.client import Kibana
 from kibana._sync.client.spaces import SpacesClient
 from kibana.exceptions import ConflictError, NotFoundError
 
 
-class TestSpacesClientInitialization:
-    """Test SpacesClient initialization."""
+def _space_body(**overrides) -> dict:
+    """A Kibana 9.4.3 space object response body."""
+    body = {
+        "id": "marketing",
+        "name": "Marketing Team",
+        "description": "Space for marketing analytics",
+        "color": "#FF6B6B",
+        "initials": "MK",
+        "disabledFeatures": [],
+        "solution": "classic",
+    }
+    body.update(overrides)
+    return body
 
-    def test_spaces_client_initialization(self):
+
+class TestSpacesClientInitialization:
+    """Test SpacesClient initialization and wiring."""
+
+    def test_spaces_client_initialization(self, mock_transport):
         """Test that SpacesClient can be initialized with a parent client."""
-        mock_client = Mock()
-        spaces_client = SpacesClient(mock_client)
-        assert spaces_client._client == mock_client
+        client = Kibana(_transport=mock_transport)
+        spaces_client = SpacesClient(client)
+        assert spaces_client._client is client
+
+    def test_spaces_property_returns_spaces_client(self, mock_transport):
+        """Test that client.spaces returns a SpacesClient instance."""
+        client = Kibana(_transport=mock_transport)
+        assert isinstance(client.spaces, SpacesClient)
 
 
 class TestSpacesClientCreate:
-    """Test SpacesClient create method."""
+    """Test SpacesClient.create() method."""
 
-    def test_create_space_minimal(self):
-        """Test creating a space with minimal required parameters."""
-        mock_client = Mock()
-        spaces_client = SpacesClient(mock_client)
-
-        mock_response = ObjectApiResponse(
-            body={
-                "id": "marketing",
-                "name": "Marketing",
-                "disabledFeatures": [],
-            },
-            meta=ApiResponseMeta(
-                status=200,
-                headers={},
-                http_version="1.1",
-                duration=0.1,
-                node=None,
-            ),
-        )
-        mock_client.perform_request.return_value = mock_response
-
-        result = spaces_client.create(
-            id="marketing",
-            name="Marketing",
+    def test_create_space_minimal(self, mock_transport, mock_response):
+        """Test creating a space with only required parameters."""
+        mock_transport.perform_request.return_value = mock_response(
+            body=_space_body(id="kbnpy-spaces-a", name="Test")
         )
 
-        assert result.body["id"] == "marketing"
-        assert result.body["name"] == "Marketing"
+        client = Kibana(_transport=mock_transport)
+        result = client.spaces.create(id="kbnpy-spaces-a", name="Test")
 
-        # Verify the request was made correctly
-        mock_client.perform_request.assert_called_once()
-        call_args = mock_client.perform_request.call_args
-        assert call_args[1]["method"] == "POST"
-        assert call_args[1]["path"] == "/api/spaces/space"
-        assert call_args[1]["body"] == {
-            "id": "marketing",
-            "name": "Marketing",
-        }
+        assert result.body["id"] == "kbnpy-spaces-a"
+        call_kwargs = mock_transport.perform_request.call_args[1]
+        assert call_kwargs["method"] == "POST"
+        assert call_kwargs["target"] == "/api/spaces/space"
+        assert call_kwargs["body"] == {"id": "kbnpy-spaces-a", "name": "Test"}
+        # Kibana CSRF + JSON content-type headers are injected automatically
+        assert call_kwargs["headers"]["kbn-xsrf"] == "true"
+        assert call_kwargs["headers"]["content-type"] == "application/json"
 
-    def test_create_space_with_all_parameters(self):
-        """Test creating a space with all optional parameters."""
-        mock_client = Mock()
-        spaces_client = SpacesClient(mock_client)
+    def test_create_space_with_all_parameters(self, mock_transport, mock_response):
+        """Test creating a space with the full 9.4.3 body surface."""
+        mock_transport.perform_request.return_value = mock_response(body=_space_body())
 
-        mock_response = ObjectApiResponse(
-            body={
-                "id": "marketing",
-                "name": "Marketing Team",
-                "description": "Marketing department space",
-                "color": "#FF0000",
-                "initials": "MK",
-                "disabledFeatures": ["dev_tools", "advancedSettings"],
-            },
-            meta=ApiResponseMeta(
-                status=200,
-                headers={},
-                http_version="1.1",
-                duration=0.1,
-                node=None,
-            ),
-        )
-        mock_client.perform_request.return_value = mock_response
-
-        result = spaces_client.create(
+        client = Kibana(_transport=mock_transport)
+        client.spaces.create(
             id="marketing",
             name="Marketing Team",
-            description="Marketing department space",
-            color="#FF0000",
+            description="Space for marketing analytics",
+            color="#FF6B6B",
             initials="MK",
-            disabled_features=["dev_tools", "advancedSettings"],
+            image_url="data:image/png;base64,iVBOR",
+            disabled_features=["ml", "apm"],
+            solution="oblt",
         )
 
-        assert result.body["id"] == "marketing"
-        assert result.body["description"] == "Marketing department space"
-
-        # Verify the request was made correctly
-        mock_client.perform_request.assert_called_once()
-        call_args = mock_client.perform_request.call_args
-        assert call_args[1]["method"] == "POST"
-        assert call_args[1]["path"] == "/api/spaces/space"
-        assert call_args[1]["body"] == {
+        call_kwargs = mock_transport.perform_request.call_args[1]
+        assert call_kwargs["body"] == {
             "id": "marketing",
             "name": "Marketing Team",
-            "description": "Marketing department space",
-            "color": "#FF0000",
+            "description": "Space for marketing analytics",
+            "color": "#FF6B6B",
             "initials": "MK",
-            "disabledFeatures": ["dev_tools", "advancedSettings"],
+            "imageUrl": "data:image/png;base64,iVBOR",
+            "disabledFeatures": ["ml", "apm"],
+            "solution": "oblt",
         }
 
-    def test_create_space_missing_id(self):
-        """Test that creating a space without id raises ValueError."""
-        mock_client = Mock()
-        spaces_client = SpacesClient(mock_client)
+    def test_create_space_missing_id(self, mock_transport):
+        """Test that an empty id raises ValueError before any request."""
+        client = Kibana(_transport=mock_transport)
+        with pytest.raises(ValueError, match="'id' is required"):
+            client.spaces.create(id="", name="Test")
+        mock_transport.perform_request.assert_not_called()
 
-        with pytest.raises(ValueError, match="Parameter 'id' is required"):
-            spaces_client.create(id="", name="Marketing")
+    def test_create_space_missing_name(self, mock_transport):
+        """Test that an empty name raises ValueError before any request."""
+        client = Kibana(_transport=mock_transport)
+        with pytest.raises(ValueError, match="'name' is required"):
+            client.spaces.create(id="test", name="")
+        mock_transport.perform_request.assert_not_called()
 
-    def test_create_space_missing_name(self):
-        """Test that creating a space without name raises ValueError."""
-        mock_client = Mock()
-        spaces_client = SpacesClient(mock_client)
-
-        with pytest.raises(ValueError, match="Parameter 'name' is required"):
-            spaces_client.create(id="marketing", name="")
-
-    def test_create_space_conflict(self):
-        """Test that creating a duplicate space raises ConflictError."""
-        mock_client = Mock()
-        spaces_client = SpacesClient(mock_client)
-
-        mock_client.perform_request.side_effect = ConflictError(
-            message="Space already exists",
-            meta=ApiResponseMeta(
-                status=409,
-                headers={},
-                http_version="1.1",
-                duration=0.1,
-                node=None,
-            ),
-            body={"error": "Conflict"},
+    def test_create_space_conflict(self, mock_transport, mock_response):
+        """Test that a 409 response maps to ConflictError."""
+        mock_transport.perform_request.return_value = mock_response(
+            body={
+                "statusCode": 409,
+                "error": "Conflict",
+                "message": "A space with the identifier marketing already exists.",
+            },
+            status=409,
         )
 
+        client = Kibana(_transport=mock_transport)
         with pytest.raises(ConflictError):
-            spaces_client.create(id="marketing", name="Marketing")
+            client.spaces.create(id="marketing", name="Marketing")
 
 
 class TestSpacesClientGet:
-    """Test SpacesClient get method."""
+    """Test SpacesClient.get() method."""
 
-    def test_get_space(self):
-        """Test getting a space by ID."""
-        mock_client = Mock()
-        spaces_client = SpacesClient(mock_client)
+    def test_get_space(self, mock_transport, mock_response):
+        """Test retrieving a space by ID."""
+        mock_transport.perform_request.return_value = mock_response(body=_space_body())
 
-        mock_response = ObjectApiResponse(
+        client = Kibana(_transport=mock_transport)
+        result = client.spaces.get(id="marketing")
+
+        assert result.body["name"] == "Marketing Team"
+        call_kwargs = mock_transport.perform_request.call_args[1]
+        assert call_kwargs["method"] == "GET"
+        assert call_kwargs["target"] == "/api/spaces/space/marketing"
+
+    def test_get_space_id_is_url_quoted(self, mock_transport, mock_response):
+        """Test that unsafe characters in the space id are percent-encoded."""
+        mock_transport.perform_request.return_value = mock_response(body={})
+
+        client = Kibana(_transport=mock_transport)
+        client.spaces.get(id="odd id?#/x")
+
+        call_kwargs = mock_transport.perform_request.call_args[1]
+        assert call_kwargs["target"] == "/api/spaces/space/odd%20id%3F%23%2Fx"
+
+    def test_get_space_not_found(self, mock_transport, mock_response):
+        """Test that a 404 response maps to NotFoundError."""
+        mock_transport.perform_request.return_value = mock_response(
             body={
-                "id": "marketing",
-                "name": "Marketing",
-                "description": "Marketing space",
-                "disabledFeatures": [],
+                "statusCode": 404,
+                "error": "Not Found",
+                "message": "Saved object [space/nope] not found",
             },
-            meta=ApiResponseMeta(
-                status=200,
-                headers={},
-                http_version="1.1",
-                duration=0.1,
-                node=None,
-            ),
-        )
-        mock_client.perform_request.return_value = mock_response
-
-        result = spaces_client.get(id="marketing")
-
-        assert result.body["id"] == "marketing"
-        assert result.body["name"] == "Marketing"
-
-        # Verify the request was made correctly
-        mock_client.perform_request.assert_called_once()
-        call_args = mock_client.perform_request.call_args
-        assert call_args[1]["method"] == "GET"
-        assert call_args[1]["path"] == "/api/spaces/space/marketing"
-
-    def test_get_space_not_found(self):
-        """Test that getting a non-existent space raises NotFoundError."""
-        mock_client = Mock()
-        spaces_client = SpacesClient(mock_client)
-
-        mock_client.perform_request.side_effect = NotFoundError(
-            message="Space not found",
-            meta=ApiResponseMeta(
-                status=404,
-                headers={},
-                http_version="1.1",
-                duration=0.1,
-                node=None,
-            ),
-            body={"error": "Not Found"},
+            status=404,
         )
 
+        client = Kibana(_transport=mock_transport)
         with pytest.raises(NotFoundError):
-            spaces_client.get(id="nonexistent")
+            client.spaces.get(id="nope")
 
-    def test_get_space_missing_id(self):
-        """Test that getting a space without id raises ValueError."""
-        mock_client = Mock()
-        spaces_client = SpacesClient(mock_client)
-
-        with pytest.raises(ValueError, match="Parameter 'id' is required"):
-            spaces_client.get(id="")
+    def test_get_space_missing_id(self, mock_transport):
+        """Test that an empty id raises ValueError."""
+        client = Kibana(_transport=mock_transport)
+        with pytest.raises(ValueError, match="'id' is required"):
+            client.spaces.get(id="")
 
 
 class TestSpacesClientGetAll:
-    """Test SpacesClient get_all method."""
+    """Test SpacesClient.get_all() method."""
 
-    def test_get_all_spaces(self):
-        """Test getting all spaces."""
-        mock_client = Mock()
-        spaces_client = SpacesClient(mock_client)
-
-        mock_response = ObjectApiResponse(
-            body=[
-                {"id": "default", "name": "Default", "disabledFeatures": []},
-                {"id": "marketing", "name": "Marketing", "disabledFeatures": []},
-            ],
-            meta=ApiResponseMeta(
-                status=200,
-                headers={},
-                http_version="1.1",
-                duration=0.1,
-                node=None,
-            ),
+    def test_get_all_spaces(self, mock_transport, mock_response):
+        """Test retrieving all spaces without filters."""
+        mock_transport.perform_request.return_value = mock_response(
+            body=[_space_body(), _space_body(id="default", name="Default")]
         )
-        mock_client.perform_request.return_value = mock_response
 
-        result = spaces_client.get_all()
+        client = Kibana(_transport=mock_transport)
+        result = client.spaces.get_all()
 
         assert len(result.body) == 2
-        assert result.body[0]["id"] == "default"
-        assert result.body[1]["id"] == "marketing"
+        call_kwargs = mock_transport.perform_request.call_args[1]
+        assert call_kwargs["method"] == "GET"
+        assert call_kwargs["target"] == "/api/spaces/space"
 
-        # Verify the request was made correctly
-        mock_client.perform_request.assert_called_once()
-        call_args = mock_client.perform_request.call_args
-        assert call_args[1]["method"] == "GET"
-        assert call_args[1]["path"] == "/api/spaces/space"
+    def test_get_all_spaces_with_purpose(self, mock_transport, mock_response):
+        """Test the purpose query parameter is encoded."""
+        mock_transport.perform_request.return_value = mock_response(body=[])
 
-    def test_get_all_spaces_empty(self):
-        """Test getting all spaces when none exist."""
-        mock_client = Mock()
-        spaces_client = SpacesClient(mock_client)
+        client = Kibana(_transport=mock_transport)
+        client.spaces.get_all(purpose="copySavedObjectsIntoSpace")
 
-        mock_response = ObjectApiResponse(
-            body=[],
-            meta=ApiResponseMeta(
-                status=200,
-                headers={},
-                http_version="1.1",
-                duration=0.1,
-                node=None,
-            ),
+        call_kwargs = mock_transport.perform_request.call_args[1]
+        assert (
+            call_kwargs["target"]
+            == "/api/spaces/space?purpose=copySavedObjectsIntoSpace"
         )
-        mock_client.perform_request.return_value = mock_response
 
-        result = spaces_client.get_all()
+    def test_get_all_spaces_with_include_authorized_purposes(
+        self, mock_transport, mock_response
+    ):
+        """Test the include_authorized_purposes bool encodes as true/false."""
+        mock_transport.perform_request.return_value = mock_response(body=[])
 
-        assert len(result.body) == 0
+        client = Kibana(_transport=mock_transport)
+        client.spaces.get_all(include_authorized_purposes=True)
 
-        # Verify the request was made correctly
-        mock_client.perform_request.assert_called_once()
-        call_args = mock_client.perform_request.call_args
-        assert call_args[1]["method"] == "GET"
-        assert call_args[1]["path"] == "/api/spaces/space"
+        call_kwargs = mock_transport.perform_request.call_args[1]
+        assert (
+            call_kwargs["target"]
+            == "/api/spaces/space?include_authorized_purposes=true"
+        )
 
 
 class TestSpacesClientUpdate:
-    """Test SpacesClient update method."""
+    """Test SpacesClient.update() method."""
 
-    def test_update_space_name(self):
-        """Test updating a space's name."""
-        mock_client = Mock()
-        spaces_client = SpacesClient(mock_client)
-
-        mock_response = ObjectApiResponse(
-            body={
-                "id": "marketing",
-                "name": "Marketing Team",
-                "disabledFeatures": [],
-            },
-            meta=ApiResponseMeta(
-                status=200,
-                headers={},
-                http_version="1.1",
-                duration=0.1,
-                node=None,
-            ),
+    def test_update_space(self, mock_transport, mock_response):
+        """Test a full-replace update sends id and name in the PUT body."""
+        mock_transport.perform_request.return_value = mock_response(
+            body=_space_body(name="Marketing & Sales")
         )
-        mock_client.perform_request.return_value = mock_response
 
-        result = spaces_client.update(
+        client = Kibana(_transport=mock_transport)
+        result = client.spaces.update(
             id="marketing",
-            name="Marketing Team",
-        )
-
-        assert result.body["name"] == "Marketing Team"
-
-        # Verify the request was made correctly
-        mock_client.perform_request.assert_called_once()
-        call_args = mock_client.perform_request.call_args
-        assert call_args[1]["method"] == "PUT"
-        assert call_args[1]["path"] == "/api/spaces/space/marketing"
-        assert call_args[1]["body"] == {"id": "marketing", "name": "Marketing Team"}
-
-    def test_update_space_all_fields(self):
-        """Test updating all fields of a space."""
-        mock_client = Mock()
-        spaces_client = SpacesClient(mock_client)
-
-        mock_response = ObjectApiResponse(
-            body={
-                "id": "marketing",
-                "name": "Marketing Team",
-                "description": "Updated description",
-                "color": "#00FF00",
-                "initials": "MT",
-                "disabledFeatures": ["dev_tools"],
-            },
-            meta=ApiResponseMeta(
-                status=200,
-                headers={},
-                http_version="1.1",
-                duration=0.1,
-                node=None,
-            ),
-        )
-        mock_client.perform_request.return_value = mock_response
-
-        result = spaces_client.update(
-            id="marketing",
-            name="Marketing Team",
-            description="Updated description",
+            name="Marketing & Sales",
             color="#00FF00",
-            initials="MT",
-            disabled_features=["dev_tools"],
+            solution="es",
         )
 
-        assert result.body["name"] == "Marketing Team"
-        assert result.body["description"] == "Updated description"
-
-        # Verify the request was made correctly
-        mock_client.perform_request.assert_called_once()
-        call_args = mock_client.perform_request.call_args
-        assert call_args[1]["method"] == "PUT"
-        assert call_args[1]["path"] == "/api/spaces/space/marketing"
-        assert call_args[1]["body"] == {
+        assert result.body["name"] == "Marketing & Sales"
+        call_kwargs = mock_transport.perform_request.call_args[1]
+        assert call_kwargs["method"] == "PUT"
+        assert call_kwargs["target"] == "/api/spaces/space/marketing"
+        assert call_kwargs["body"] == {
             "id": "marketing",
-            "name": "Marketing Team",
-            "description": "Updated description",
+            "name": "Marketing & Sales",
             "color": "#00FF00",
-            "initials": "MT",
-            "disabledFeatures": ["dev_tools"],
+            "solution": "es",
         }
 
-    def test_update_space_missing_id(self):
-        """Test that updating a space without id raises ValueError."""
-        mock_client = Mock()
-        spaces_client = SpacesClient(mock_client)
+    def test_update_space_name_is_required(self, mock_transport):
+        """Test that update() cannot be called without name (PUT is full replace)."""
+        client = Kibana(_transport=mock_transport)
+        with pytest.raises(TypeError):
+            client.spaces.update(id="marketing")  # type: ignore[call-arg]
+        with pytest.raises(ValueError, match="'name' is required"):
+            client.spaces.update(id="marketing", name="")
+        mock_transport.perform_request.assert_not_called()
 
-        with pytest.raises(ValueError, match="Parameter 'id' is required"):
-            spaces_client.update(id="", name="Marketing")
+    def test_update_space_id_is_url_quoted(self, mock_transport, mock_response):
+        """Test that unsafe characters in the space id are percent-encoded."""
+        mock_transport.perform_request.return_value = mock_response(body={})
 
-    def test_update_space_not_found(self):
-        """Test that updating a non-existent space raises NotFoundError."""
-        mock_client = Mock()
-        spaces_client = SpacesClient(mock_client)
+        client = Kibana(_transport=mock_transport)
+        client.spaces.update(id="odd id", name="Odd")
 
-        mock_client.perform_request.side_effect = NotFoundError(
-            message="Space not found",
-            meta=ApiResponseMeta(
-                status=404,
-                headers={},
-                http_version="1.1",
-                duration=0.1,
-                node=None,
-            ),
-            body={"error": "Not Found"},
-        )
+        call_kwargs = mock_transport.perform_request.call_args[1]
+        assert call_kwargs["target"] == "/api/spaces/space/odd%20id"
 
-        with pytest.raises(NotFoundError):
-            spaces_client.update(id="nonexistent", name="New Name")
+    def test_update_space_missing_id(self, mock_transport):
+        """Test that an empty id raises ValueError."""
+        client = Kibana(_transport=mock_transport)
+        with pytest.raises(ValueError, match="'id' is required"):
+            client.spaces.update(id="", name="X")
 
 
 class TestSpacesClientDelete:
-    """Test SpacesClient delete method."""
+    """Test SpacesClient.delete() method."""
 
-    def test_delete_space(self):
+    def test_delete_space(self, mock_transport, mock_response):
         """Test deleting a space."""
-        mock_client = Mock()
-        spaces_client = SpacesClient(mock_client)
+        mock_transport.perform_request.return_value = mock_response(body={}, status=204)
 
-        mock_response = ObjectApiResponse(
-            body={},
-            meta=ApiResponseMeta(
-                status=204,
-                headers={},
-                http_version="1.1",
-                duration=0.1,
-                node=None,
-            ),
-        )
-        mock_client.perform_request.return_value = mock_response
+        client = Kibana(_transport=mock_transport)
+        client.spaces.delete(id="marketing")
 
-        result = spaces_client.delete(id="marketing")
+        call_kwargs = mock_transport.perform_request.call_args[1]
+        assert call_kwargs["method"] == "DELETE"
+        assert call_kwargs["target"] == "/api/spaces/space/marketing"
 
-        assert result.meta.status == 204
+    def test_delete_space_id_is_url_quoted(self, mock_transport, mock_response):
+        """Test that unsafe characters in the space id are percent-encoded."""
+        mock_transport.perform_request.return_value = mock_response(body={}, status=204)
 
-        # Verify the request was made correctly
-        mock_client.perform_request.assert_called_once()
-        call_args = mock_client.perform_request.call_args
-        assert call_args[1]["method"] == "DELETE"
-        assert call_args[1]["path"] == "/api/spaces/space/marketing"
+        client = Kibana(_transport=mock_transport)
+        client.spaces.delete(id="odd/id")
 
-    def test_delete_space_missing_id(self):
-        """Test that deleting a space without id raises ValueError."""
-        mock_client = Mock()
-        spaces_client = SpacesClient(mock_client)
+        call_kwargs = mock_transport.perform_request.call_args[1]
+        assert call_kwargs["target"] == "/api/spaces/space/odd%2Fid"
 
-        with pytest.raises(ValueError, match="Parameter 'id' is required"):
-            spaces_client.delete(id="")
+    def test_delete_space_missing_id(self, mock_transport):
+        """Test that an empty id raises ValueError."""
+        client = Kibana(_transport=mock_transport)
+        with pytest.raises(ValueError, match="'id' is required"):
+            client.spaces.delete(id="")
 
-    def test_delete_space_not_found(self):
-        """Test that deleting a non-existent space raises NotFoundError."""
-        mock_client = Mock()
-        spaces_client = SpacesClient(mock_client)
 
-        mock_client.perform_request.side_effect = NotFoundError(
-            message="Space not found",
-            meta=ApiResponseMeta(
-                status=404,
-                headers={},
-                http_version="1.1",
-                duration=0.1,
-                node=None,
-            ),
-            body={"error": "Not Found"},
+class TestSpacesClientCopySavedObjects:
+    """Test SpacesClient.copy_saved_objects() method."""
+
+    def test_copy_saved_objects_minimal(self, mock_transport, mock_response):
+        """Test copy with only the required body fields."""
+        mock_transport.perform_request.return_value = mock_response(
+            body={"target": {"success": True, "successCount": 1}}
         )
 
-        with pytest.raises(NotFoundError):
-            spaces_client.delete(id="nonexistent")
+        client = Kibana(_transport=mock_transport)
+        result = client.spaces.copy_saved_objects(
+            spaces=["target"],
+            objects=[{"type": "dashboard", "id": "dash-1"}],
+        )
+
+        assert result.body["target"]["success"] is True
+        call_kwargs = mock_transport.perform_request.call_args[1]
+        assert call_kwargs["method"] == "POST"
+        assert call_kwargs["target"] == "/api/spaces/_copy_saved_objects"
+        assert call_kwargs["body"] == {
+            "spaces": ["target"],
+            "objects": [{"type": "dashboard", "id": "dash-1"}],
+        }
+
+    def test_copy_saved_objects_with_options(self, mock_transport, mock_response):
+        """Test option kwargs map to the camelCase body fields."""
+        mock_transport.perform_request.return_value = mock_response(body={})
+
+        client = Kibana(_transport=mock_transport)
+        client.spaces.copy_saved_objects(
+            spaces=["a", "b"],
+            objects=[{"type": "index-pattern", "id": "ip-1"}],
+            include_references=True,
+            create_new_copies=False,
+            overwrite=True,
+            compatibility_mode=False,
+        )
+
+        call_kwargs = mock_transport.perform_request.call_args[1]
+        assert call_kwargs["body"] == {
+            "spaces": ["a", "b"],
+            "objects": [{"type": "index-pattern", "id": "ip-1"}],
+            "includeReferences": True,
+            "createNewCopies": False,
+            "overwrite": True,
+            "compatibilityMode": False,
+        }
+
+
+class TestSpacesClientResolveCopySavedObjectsErrors:
+    """Test SpacesClient.resolve_copy_saved_objects_errors() method."""
+
+    def test_resolve_copy_errors(self, mock_transport, mock_response):
+        """Test the retries/objects body and camelCase options."""
+        mock_transport.perform_request.return_value = mock_response(
+            body={"target": {"success": True, "successCount": 1}}
+        )
+
+        client = Kibana(_transport=mock_transport)
+        retries = {"target": [{"type": "dashboard", "id": "dash-1", "overwrite": True}]}
+        result = client.spaces.resolve_copy_saved_objects_errors(
+            retries=retries,
+            objects=[{"type": "dashboard", "id": "dash-1"}],
+            include_references=True,
+            create_new_copies=False,
+        )
+
+        assert result.body["target"]["success"] is True
+        call_kwargs = mock_transport.perform_request.call_args[1]
+        assert call_kwargs["method"] == "POST"
+        assert call_kwargs["target"] == "/api/spaces/_resolve_copy_saved_objects_errors"
+        assert call_kwargs["body"] == {
+            "retries": retries,
+            "objects": [{"type": "dashboard", "id": "dash-1"}],
+            "includeReferences": True,
+            "createNewCopies": False,
+        }
+
+
+class TestSpacesClientDisableLegacyUrlAliases:
+    """Test SpacesClient.disable_legacy_url_aliases() method."""
+
+    def test_disable_legacy_url_aliases(self, mock_transport, mock_response):
+        """Test the aliases body is sent as-is."""
+        mock_transport.perform_request.return_value = mock_response(body={}, status=204)
+
+        client = Kibana(_transport=mock_transport)
+        aliases = [
+            {
+                "targetSpace": "marketing",
+                "targetType": "dashboard",
+                "sourceId": "legacy-id",
+            }
+        ]
+        client.spaces.disable_legacy_url_aliases(aliases=aliases)
+
+        call_kwargs = mock_transport.perform_request.call_args[1]
+        assert call_kwargs["method"] == "POST"
+        assert call_kwargs["target"] == "/api/spaces/_disable_legacy_url_aliases"
+        assert call_kwargs["body"] == {"aliases": aliases}
+
+
+class TestSpacesClientGetShareableReferences:
+    """Test SpacesClient.get_shareable_references() method."""
+
+    def test_get_shareable_references(self, mock_transport, mock_response):
+        """Test the objects body and response passthrough."""
+        mock_transport.perform_request.return_value = mock_response(
+            body={
+                "objects": [
+                    {"type": "dashboard", "id": "dash-1", "spaces": ["default"]}
+                ]
+            }
+        )
+
+        client = Kibana(_transport=mock_transport)
+        result = client.spaces.get_shareable_references(
+            objects=[{"type": "dashboard", "id": "dash-1"}]
+        )
+
+        assert result.body["objects"][0]["spaces"] == ["default"]
+        call_kwargs = mock_transport.perform_request.call_args[1]
+        assert call_kwargs["method"] == "POST"
+        assert call_kwargs["target"] == "/api/spaces/_get_shareable_references"
+        assert call_kwargs["body"] == {
+            "objects": [{"type": "dashboard", "id": "dash-1"}]
+        }
+
+
+class TestSpacesClientUpdateObjectsSpaces:
+    """Test SpacesClient.update_objects_spaces() method."""
+
+    def test_update_objects_spaces(self, mock_transport, mock_response):
+        """Test the objects/spacesToAdd/spacesToRemove body mapping."""
+        mock_transport.perform_request.return_value = mock_response(
+            body={
+                "objects": [
+                    {
+                        "type": "dashboard",
+                        "id": "dash-1",
+                        "spaces": ["default", "marketing"],
+                    }
+                ]
+            }
+        )
+
+        client = Kibana(_transport=mock_transport)
+        result = client.spaces.update_objects_spaces(
+            objects=[{"type": "dashboard", "id": "dash-1"}],
+            spaces_to_add=["marketing"],
+            spaces_to_remove=[],
+        )
+
+        assert result.body["objects"][0]["spaces"] == ["default", "marketing"]
+        call_kwargs = mock_transport.perform_request.call_args[1]
+        assert call_kwargs["method"] == "POST"
+        assert call_kwargs["target"] == "/api/spaces/_update_objects_spaces"
+        assert call_kwargs["body"] == {
+            "objects": [{"type": "dashboard", "id": "dash-1"}],
+            "spacesToAdd": ["marketing"],
+            "spacesToRemove": [],
+        }

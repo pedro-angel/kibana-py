@@ -19,7 +19,7 @@ Run this example:
 
 import json
 import logging
-import uuid
+from contextlib import nullcontext
 
 from utils import (
     configure_example_telemetry,
@@ -27,11 +27,15 @@ from utils import (
     demonstrate_log_trace_correlation,
     demonstrate_structured_logging,
     print_config_info,
+    print_kept,
     print_telemetry_info,
+    resource_prefix,
     setup_telemetry_cleanup,
     should_cleanup,
     should_enable_telemetry,
 )
+
+from kibana.exceptions import NotFoundError
 
 # Set up logger for this example
 logger = logging.getLogger("kibana.examples.debug_saved_objects")
@@ -52,8 +56,8 @@ def main():
     # Set up automatic telemetry cleanup
     setup_telemetry_cleanup()
 
-    # Generate unique ID for test object
-    test_id = f"debug-test-{uuid.uuid4().hex[:8]}"
+    # Stable ID for the test object (own scope for this example)
+    test_id = f"{resource_prefix(__file__)}-obj"
 
     # Log example start with detailed context
     logger.info(
@@ -83,11 +87,25 @@ def main():
         print("KIBANA SAVED OBJECTS DEBUG INFORMATION")
         print("=" * 80)
 
-        # Create a span for the entire saved objects debug operation
+        # Create a span for the entire saved objects debug operation.
+        #
+        # NOTE: `create_span()` returns a raw Span|None — it is NOT itself a
+        # context manager — so `with create_span(...) as span:` used to raise
+        # a bare TypeError whenever OTel tracing wasn't configured (the
+        # common case), which a blanket `except Exception: pass` around this
+        # whole block then silently swallowed. That meant the create() call
+        # below never ran, and the very next step (get()) failed instead with
+        # a confusing NotFoundError. Use `span_context`, the actual context
+        # manager for this (a no-op yielding None when tracing is disabled),
+        # and only catch ImportError around the optional observability
+        # import — a real create() failure below must propagate normally.
         try:
-            from kibana.observability import create_span
+            from kibana.observability import span_context
+        except ImportError:
+            span_context = None
 
-            with create_span(
+        span_cm = (
+            span_context(
                 "kibana_debug_saved_objects",
                 attributes={
                     "operation.type": "debug",
@@ -96,45 +114,54 @@ def main():
                     "saved_object.type": "visualization",
                     "saved_object.id": test_id,
                 },
-            ) as span:
-                logger.info(
-                    "Starting saved objects debug lifecycle within trace span",
-                    extra={
-                        "operation": "saved_objects_debug_start",
-                        "test_object_id": test_id,
-                        "span_active": span is not None,
-                    },
-                )
+            )
+            if span_context is not None
+            else nullcontext()
+        )
 
-                # 1. Create a test visualization
-                print("\n📝 Creating test visualization...")
-                logger.info(
-                    "Creating test visualization",
-                    extra={
-                        "operation": "create_saved_object",
-                        "object_type": "visualization",
-                        "object_id": test_id,
-                        "api_endpoint": "/api/saved_objects/visualization",
-                    },
-                )
+        with span_cm as span:
+            logger.info(
+                "Starting saved objects debug lifecycle within trace span",
+                extra={
+                    "operation": "saved_objects_debug_start",
+                    "test_object_id": test_id,
+                    "span_active": span is not None,
+                },
+            )
 
-                client.saved_objects.create(
-                    type="visualization",
-                    attributes={
-                        "title": "Debug Test Visualization",
-                        "visState": json.dumps({"type": "line"}),
-                        "uiStateJSON": "{}",
-                        "description": "Test visualization for debugging",
-                        "version": 1,
-                        "kibanaSavedObjectMeta": {
-                            "searchSourceJSON": json.dumps({"query": "", "filter": []})
-                        },
-                    },
-                    id=test_id,
-                )
+            # 0. Idempotent start: clear only THIS example's own prior test
+            # object, then create fresh
+            try:
+                client.saved_objects.delete(type="visualization", id=test_id)
+            except NotFoundError:
+                pass
 
-        except Exception:
-            pass
+            # 1. Create a test visualization
+            print("\n📝 Creating test visualization...")
+            logger.info(
+                "Creating test visualization",
+                extra={
+                    "operation": "create_saved_object",
+                    "object_type": "visualization",
+                    "object_id": test_id,
+                    "api_endpoint": "/api/saved_objects/visualization",
+                },
+            )
+
+            client.saved_objects.create(
+                type="visualization",
+                attributes={
+                    "title": "Debug Test Visualization",
+                    "visState": json.dumps({"type": "line"}),
+                    "uiStateJSON": "{}",
+                    "description": "Test visualization for debugging",
+                    "version": 1,
+                    "kibanaSavedObjectMeta": {
+                        "searchSourceJSON": json.dumps({"query": "", "filter": []})
+                    },
+                },
+                id=test_id,
+            )
 
         # 2. Retrieve the object
         print(f"\n{'=' * 80}")
@@ -243,7 +270,7 @@ def main():
                 except Exception:
                     print("✓ Test visualization deleted (confirmed)")
         else:
-            print(f"✓ Test visualization kept (ID: {test_id})")
+            print_kept([("saved object", test_id)])
 
     except Exception as e:
         print(f"❌ Error: {e}")

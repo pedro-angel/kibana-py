@@ -7,16 +7,22 @@ Welcome to the kibana-py user guide. This guide provides comprehensive documenta
 If you're new to kibana-py, start with these topics:
 
 - [Authentication](authentication.md) - Learn how to authenticate with Kibana
+- [Dashboards](dashboards.md) - Manage dashboards as code with the new Dashboards HTTP API
 - [Connectors](connectors.md) - Create and manage connectors for alerting and automation
 
 ## Core Features
 
 ### Resource Management
 
-- [Connectors](connectors.md) - Manage Kibana connectors (actions) for alerting and automation
+- [Dashboards](dashboards.md) - The new (tech preview) Dashboards and Visualizations HTTP APIs
+- [Alerting](alerting.md) - Rule lifecycle: create, enable/disable, mute, snooze, and backfill
+- [Data Views](data-views.md) - Data views (index patterns) and runtime fields
+- [Cases](cases.md) - Open and track issues with comments, alerts, and external incident systems
+- [Connectors](connectors.md) - Manage Kibana connectors for alerting and automation
 - [Spaces](spaces.md) - Organize resources with Kibana Spaces for multi-tenancy
-- [Saved Objects](saved-objects.md) - Manage dashboards, visualizations, and other saved objects
+- [Saved Objects](saved-objects.md) - Import/export and legacy saved object management
 - [Status Monitoring](status-monitoring.md) - Monitor Kibana health and operational statistics
+- [Platform APIs](platform-apis.md) - Tour of the remaining namespaces: security, SLOs, synthetics, streams, workflows, agent builder, APM, ML, and more
 
 ### Advanced Topics
 

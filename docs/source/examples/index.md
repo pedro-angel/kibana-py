@@ -14,12 +14,50 @@ async/index
 observability
 ```
 
+## Per-Namespace Management Scripts
+
+Every API namespace ships with a runnable, end-to-end management script in the repository's [`examples/` directory](https://github.com/pedro-angel/kibana-py/tree/main/examples). Each script demonstrates the full lifecycle for its namespace (create, read, update, delete, plus namespace-specific operations) against a live Kibana instance, with automatic configuration and cleanup:
+
+| Script | Namespace |
+|--------|-----------|
+| `dashboards_management.py` | `client.dashboards` — the new Dashboards HTTP API (tech preview) |
+| `visualizations_management.py` | `client.visualizations` — Lens visualizations (tech preview) |
+| `alerting_management.py` | `client.alerting` — rules, snooze, backfills |
+| `data_views_management.py` | `client.data_views` — data views and runtime fields |
+| `cases_management.py` | `client.cases` — cases, comments, files |
+| `connectors_management.py` | `client.connectors` — connector CRUD and execution |
+| `spaces_management.py` | `client.spaces` — space CRUD |
+| `saved_objects_management.py` | `client.saved_objects` — export/import and legacy CRUD |
+| `status_management.py` | `client.status` — status and stats |
+| `security_management.py` | `client.security` — roles and sessions |
+| `short_urls_management.py` | `client.short_urls` — short URL create/resolve |
+| `slos_management.py` | `client.slos` — SLO lifecycle |
+| `synthetics_management.py` | `client.synthetics` — monitors, params, private locations |
+| `uptime_management.py` | `client.uptime` — Uptime settings |
+| `streams_management.py` | `client.streams` — wired streams, queries, attachments |
+| `workflows_management.py` | `client.workflows` — workflows and executions |
+| `agent_builder_management.py` | `client.agent_builder` — agents, tools, conversations |
+| `apm_management.py` | `client.apm` — agent configs, annotations, source maps |
+| `maintenance_windows_management.py` | `client.maintenance_windows` — window lifecycle |
+| `ml_management.py` | `client.ml` — ML saved object sync and spaces |
+| `logstash_management.py` | `client.logstash` — centralized pipeline management |
+| `task_manager_management.py` | `client.task_manager` — health monitoring |
+| `upgrade_assistant_management.py` | `client.upgrade_assistant` — upgrade readiness |
+| `observability_ai_assistant_management.py` | `client.observability_ai_assistant` — LLM chat completion |
+| `actions_management.py` | `client.actions` — deprecated alias of `client.connectors` |
+
+Run any of them directly once your stack is up:
+
+```bash
+python examples/dashboards_management.py
+```
+
 ## Getting Started
 
 New to kibana-py? Start here:
 
 1. **[Basic Usage](basic-usage.md)** - Client initialization, authentication, and fundamental patterns
-2. **[Connectors](connectors/index.md)** - Create and manage Kibana connectors (actions)
+2. **[Connectors](connectors/index.md)** - Create and manage Kibana connectors
 3. **[Spaces](spaces/index.md)** - Organize resources with Kibana Spaces
 4. **[Saved Objects](saved-objects/index.md)** - Manage dashboards, visualizations, and more
 
@@ -33,7 +71,7 @@ Learn the fundamentals of using the Kibana client:
 
 **Start here if you're new to kibana-py.**
 
-### Connectors (Actions)
+### Connectors
 
 Create and manage connectors for alerting and automation:
 
@@ -170,7 +208,7 @@ with Kibana("http://localhost:5601") as client:
 
 ```python
 # Always access .body attribute
-response = client.actions.list_types()
+response = client.connectors.list_types()
 types = response.body  # This is the actual data
 
 # Access metadata
@@ -183,7 +221,7 @@ print(f"Status: {response.meta.status}")
 from kibana.exceptions import ConflictError, NotFoundError
 
 try:
-    connector = client.actions.create(...)
+    connector = client.connectors.create(...)
 except ConflictError:
     print("Already exists")
 except NotFoundError:
@@ -194,7 +232,7 @@ except NotFoundError:
 
 ```python
 # Method 1: space_id parameter
-connector = client.actions.create(
+connector = client.connectors.create(
     name="Test",
     connector_type_id=".index",
     config={},
@@ -203,7 +241,7 @@ connector = client.actions.create(
 
 # Method 2: Space-scoped client
 marketing_client = client.space("marketing")
-connector = marketing_client.actions.create(
+connector = marketing_client.connectors.create(
     name="Test",
     connector_type_id=".index",
     config={}

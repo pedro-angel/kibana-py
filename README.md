@@ -4,12 +4,14 @@
 [![Documentation Build](https://github.com/pedro-angel/kibana-py/workflows/Documentation/badge.svg)](https://github.com/pedro-angel/kibana-py/actions/workflows/docs.yml)
 [![PyPI version](https://img.shields.io/pypi/v/kibana-py.svg)](https://pypi.org/project/kibana-py/)
 [![PyPI downloads](https://img.shields.io/pypi/dm/kibana-py.svg)](https://pypi.org/project/kibana-py/)
-[![Python Version](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![Python Version](https://img.shields.io/badge/python-3.14+-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
 > **Disclaimer:** This is an independent, community-driven project and is **not** officially affiliated with, endorsed by, or supported by Elastic N.V. or any of its subsidiaries. "Kibana" and "Elasticsearch" are trademarks of Elastic N.V. This project is provided "as is", without warranty of any kind. Use it at your own risk. See the [Disclaimer](#disclaimer) section and the [LICENSE](LICENSE) for full details.
 
-A Python client library for interacting with Kibana's REST API. Built following the design patterns of the [elasticsearch-py](https://github.com/elastic/elasticsearch-py) client.
+A Python client library for the Kibana REST API with **complete Kibana 9.4.3 platform, Fleet, and Security Solution API coverage** — 39 namespaces, 610 endpoints, sync and async. Built following the design patterns of the [elasticsearch-py](https://github.com/elastic/elasticsearch-py) client, and verified live against Kibana 9.4.3.
+
+Headline feature: first-class support for the **new Kibana Dashboards HTTP API** (`client.dashboards`, technical preview in 9.4) and its sibling **Visualizations HTTP API** (`client.visualizations`) — manage dashboards and Lens visualizations through a real, documented data model instead of opaque saved objects.
 
 ## 📚 Documentation
 
@@ -23,20 +25,25 @@ A Python client library for interacting with Kibana's REST API. Built following 
 
 ## Features
 
-- **Dual API Support**: Both synchronous (`Kibana`) and asynchronous (`AsyncKibana`) clients
-- **Type Safety**: Comprehensive type hints throughout for better IDE support and type checking
-- **Reliable Transport**: Built on elastic-transport for connection pooling, retries, and node management
-- **Flexible Authentication**: Support for API keys, basic auth, and bearer tokens
-- **Space Support**: Multi-tenancy with Kibana Spaces
-- **Comprehensive Error Handling**: Specific exception types for different HTTP status codes
-- **Pythonic API**: Clean, idiomatic Python interface to Kibana's REST APIs
-- **Observability**: Built-in OpenTelemetry support for distributed tracing
+- **Complete API coverage**: 39 namespaces, 610 endpoints spanning the Kibana 9.4.3 platform, Fleet, and Security Solution REST APIs, every one live-tested against a real Kibana 9.4.3
+- **Fleet & Security Solution**: full clients for Fleet (agents, policies, integrations/EPM, outputs, enrollment) and Security Solution (detection engine, exceptions, value lists, timelines, endpoint response actions, entity analytics, osquery, AI assistant, attack discovery)
+- **New Dashboards & Visualizations APIs**: first-class clients for the tech-preview Dashboards and Lens Visualizations HTTP APIs introduced in Kibana 9.4
+- **Dual API support**: synchronous (`Kibana`) and asynchronous (`AsyncKibana`) clients with full method parity
+- **NDJSON & multipart**: saved-object export (`application/x-ndjson`) parsing and multipart/form-data uploads (saved-object import, APM source maps)
+- **Type safety**: comprehensive type hints throughout, `py.typed` marker (PEP 561)
+- **Reliable transport**: built on elastic-transport for connection pooling, retries, and node management; SSL/TLS options (`verify_certs`, `ca_certs`, client certs, custom contexts) fully honored
+- **Flexible authentication**: API keys, basic auth, and bearer tokens
+- **Space support**: multi-tenancy with Kibana Spaces — space-scoped clients and per-call `space_id`
+- **Comprehensive error handling**: specific exception types per HTTP status, carrying Kibana's detailed error message
+- **Observability**: built-in OpenTelemetry support for distributed tracing
 
 ## Installation
 
 ```bash
 pip install kibana-py
 ```
+
+**Requires Python 3.14+.**
 
 **Optional dependencies:**
 - `kibana-py[async]` - Async client support
@@ -47,33 +54,58 @@ For detailed installation instructions, see the [Installation Guide](https://kib
 
 ## Quick Start
 
-### Basic Usage
+### Dashboards (new HTTP API, Kibana 9.4+)
 
 ```python
 from kibana import Kibana
 
-# Initialize client with authentication
 client = Kibana(
     "http://localhost:5601",
-    basic_auth=("elastic", "password")
+    basic_auth=("elastic", "password"),
 )
 
-# Get Kibana status
-status = client.status.get_status()
-print(f"Kibana status: {status.body['status']['overall']['level']}")
-
-# Create a connector
-connector = client.actions.create(
-    name="My Webhook",
-    connector_type_id=".webhook",
-    config={"url": "https://example.com/webhook"}
+# Create a dashboard with a markdown panel and a relative time range
+dashboard = client.dashboards.create(
+    title="Service health",
+    description="Ops overview",
+    time_range={"from": "now-24h", "to": "now"},
+    panels=[
+        {
+            "type": "markdown",
+            "grid": {"x": 0, "y": 0, "w": 48, "h": 6},
+            "config": {"content": "## Runbook links"},
+        }
+    ],
 )
+dashboard_id = dashboard.body["id"]
 
-print(f"Created connector: {connector.body['id']}")
+# Search dashboards, then fetch the full panel layout of one
+results = client.dashboards.get_all(query="service*", per_page=10)
+print(f"Found {results.body['total']} dashboards")
 
-# Close the client
+full = client.dashboards.get(id=dashboard_id)
+print(full.body["data"]["title"])
+
+# Clean up
+client.dashboards.delete(id=dashboard_id)
 client.close()
 ```
+
+### Connectors
+
+```python
+from kibana import Kibana
+
+with Kibana("http://localhost:5601", basic_auth=("elastic", "password")) as client:
+    connector = client.connectors.create(
+        name="My Webhook",
+        connector_type_id=".webhook",
+        config={"url": "https://example.com/webhook"},
+    )
+    print(f"Created connector: {connector.body['id']}")
+```
+
+> **Deprecation note:** the connectors namespace was previously exposed as `client.actions`. `client.actions` still works as a deprecated alias of `client.connectors` and will be removed in a future release — new code should use `client.connectors`.
 
 ### Async Client
 
@@ -87,7 +119,7 @@ async def main():
         basic_auth=("elastic", "password")
     ) as client:
         status = await client.status.get_status()
-        print(status.body)
+        print(status.body["status"]["overall"]["level"])
 
 asyncio.run(main())
 ```
@@ -99,13 +131,67 @@ For more examples and detailed usage, see:
 
 ## API Coverage
 
-The client currently supports the following Kibana APIs:
+Full coverage of the Kibana 9.4.3 platform, Fleet, and Security Solution REST APIs — 39 namespaces, 610 endpoints, identical sync and async surfaces.
 
-- ✅ **Actions API** - Manage connectors for alerting and automation
-- ✅ **Spaces API** - Multi-tenancy with Kibana Spaces
-- ✅ **Saved Objects API** - Manage dashboards, visualizations, and other saved objects
-- ✅ **Status API** - Check Kibana health and operational status
-- ✅ **Alerting API** - Create, manage, and monitor alerting rules
+### Platform (24 namespaces, 269 endpoints)
+
+| Client namespace | Kibana API | Endpoints | Status |
+|---|---|---|---|
+| `client.dashboards` | Dashboards HTTP API | 5 | Tech preview |
+| `client.visualizations` | Visualizations (Lens) HTTP API | 5 | Tech preview |
+| `client.agent_builder` | Agent Builder (agents, tools, converse, MCP, A2A) | 37 | GA¹ |
+| `client.alerting` | Alerting (`alerting.rule.*`, `alerting.backfill.*`, health, rule types) | 21 | GA |
+| `client.apm` | APM (agent configuration, agent keys, annotations, source maps) | 14 | GA |
+| `client.cases` | Cases (cases, comments, files, configuration, activity) | 22 | GA¹ |
+| `client.connectors` | Connectors (formerly "actions"; `client.actions` is a deprecated alias) | 9 | GA |
+| `client.data_views` | Data views (fields, runtime fields, default, swap references) | 15 | GA |
+| `client.logstash` | Logstash centralized pipeline management | 4 | Tech preview |
+| `client.maintenance_windows` | Maintenance windows | 7 | GA |
+| `client.ml` | Machine learning saved objects (sync, space assignment) | 3 | GA |
+| `client.observability_ai_assistant` | Observability AI Assistant chat completion | 1 | Tech preview |
+| `client.saved_objects` | Saved objects (export/import + deprecated CRUD²) | 16 | GA² |
+| `client.security` | Security (roles, sessions) | 7 | GA |
+| `client.short_urls` | Short URLs | 4 | Tech preview |
+| `client.slos` | SLOs (service level objectives) | 13 | GA |
+| `client.spaces` | Spaces (CRUD, copy/share saved objects between spaces) | 10 | GA |
+| `client.status` | Status, stats, and features | 3 | GA¹ |
+| `client.streams` | Streams (wired streams, significant events, content packs) | 25 | Tech preview |
+| `client.synthetics` | Synthetics (monitors, private locations, parameters, test-now) | 18 | GA |
+| `client.task_manager` | Task Manager health | 1 | GA |
+| `client.upgrade_assistant` | Upgrade Assistant readiness | 1 | Tech preview |
+| `client.uptime` | Uptime settings | 2 | GA |
+| `client.workflows` | Workflows (definitions, executions, logs) | 26 | GA |
+
+### Fleet (6 namespaces, 140 endpoints)
+
+| Client namespace | Kibana API | Endpoints | Status |
+|---|---|---|---|
+| `client.fleet` | Fleet setup, settings, space settings, health check, permissions | 7 | GA |
+| `client.fleet_agents` | Elastic Agents (list, actions, bulk actions, status, uploads, tags) | 33 | GA |
+| `client.fleet_policies` | Agent policies, package policies, agentless policies | 23 | GA |
+| `client.fleet_epm` | Elastic Package Manager (integrations, installs, assets, custom integrations) | 37 | GA |
+| `client.fleet_outputs` | Outputs, Fleet Server hosts, proxies, download sources, cloud connectors | 29 | GA |
+| `client.fleet_enrollment` | Enrollment keys, service/logstash tokens, uninstall tokens, signing, kubernetes | 11 | GA |
+
+### Security Solution (9 namespaces, 201 endpoints)
+
+| Client namespace | Kibana API | Endpoints | Status |
+|---|---|---|---|
+| `client.detection_engine` | Detection rules, alerts (signals), prepackaged rules, migrations | 25 | GA |
+| `client.exception_lists` | Exception lists & items, shared/rule exceptions, endpoint exceptions | 22 | GA |
+| `client.lists` | Value lists & items (index, import/export) | 18 | GA |
+| `client.timeline` | Timelines, notes, pinned events, drafts, import/export | 17 | GA |
+| `client.endpoint` | Endpoint metadata, response actions, scripts library | 29 | GA |
+| `client.entity_analytics` | Asset criticality, risk score, entity store, monitoring, watchlists³ | 42 | GA³ |
+| `client.osquery` | Osquery packs, saved queries, live queries | 14 | GA |
+| `client.security_ai_assistant` | AI Assistant conversations, prompts, knowledge base, chat complete | 21 | GA |
+| `client.attack_discovery` | AI attack discoveries, generations, schedules | 13 | Tech preview |
+
+¹ Some endpoints in this namespace are technical preview in Kibana 9.4 (e.g. Agent Builder consumption/skills/plugins, cases custom-field/template features, `status.get_features()`).
+
+² Most single-object and bulk saved-object CRUD endpoints are deprecated by Kibana 9.4.3 in favor of the type-specific APIs (dashboards, data views, ...) and the export/import APIs; the client methods carry deprecation notes with replacements.
+
+³ Entity analytics spans several maturity levels in Kibana 9.4: asset-criticality endpoints are deprecated (superseded by the entity store), watchlists and privileged-user monitoring are technical preview, and the risk-score engine and entity store are GA. Method docstrings note the per-endpoint state and any live-server behavior that differs from the OpenAPI spec.
 
 For detailed API documentation, see the [API Reference](https://kibana-py.readthedocs.io/en/latest/api-reference/index.html).
 
@@ -122,7 +208,7 @@ client = Kibana("http://localhost:5601", api_key="...")
 def is_kibana_ready() -> bool:
     """Return True if Kibana is green/ready."""
     try:
-        status = client.status()
+        status = client.status.get_status()
         return status.body["status"]["overall"]["level"] == "available"
     except Exception:
         return False
@@ -154,13 +240,7 @@ For more details, see the [Authentication Guide](https://kibana-py.readthedocs.i
 
 ## Examples
 
-The [examples/](examples/) directory contains working examples for all major features:
-
-- **Connectors** - Create and manage Kibana connectors
-- **Spaces** - Multi-tenancy with Kibana Spaces
-- **Saved Objects** - Manage dashboards and visualizations
-- **Async Operations** - Asynchronous client usage
-- **Error Handling** - Exception handling patterns
+The [examples/](examples/) directory contains a runnable `<namespace>_management.py` walkthrough for every namespace — dashboards, visualizations, alerting, cases, connectors, streams, workflows, agent builder, and the rest — plus quick-start, async, and error-handling examples. See [examples/README.md](examples/README.md) for the full catalog.
 
 See the [Examples Documentation](https://kibana-py.readthedocs.io/en/latest/examples/index.html) for detailed explanations.
 
@@ -177,8 +257,8 @@ For more information, see the [Development Documentation](https://kibana-py.read
 
 ## Requirements
 
-- Python 3.10+
-- Kibana 9.x
+- Python 3.14+
+- Kibana 9.4.x (developed and live-tested against 9.4.3)
 - elastic-transport >= 9.1.0
 
 ## Resources
@@ -190,7 +270,7 @@ For more information, see the [Development Documentation](https://kibana-py.read
 - **[Code of Conduct](CODE_OF_CONDUCT.md)** - Community participation standards
 - **[Changelog](CHANGELOG.md)** - Release history
 - **[Issue Tracker](https://github.com/pedro-angel/kibana-py/issues)** - Report bugs or request features
-- **[Kibana API Docs](https://www.elastic.co/guide/en/kibana/current/api.html)** - Official Kibana API documentation
+- **[Kibana API Docs](https://www.elastic.co/docs/api/doc/kibana/)** - Official Kibana API documentation
 
 ## Disclaimer
 

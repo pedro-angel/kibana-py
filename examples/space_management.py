@@ -25,7 +25,9 @@ from utils import (
     configure_example_telemetry,
     create_kibana_client,
     print_config_info,
+    print_kept,
     print_telemetry_info,
+    resource_prefix,
     setup_telemetry_cleanup,
     should_cleanup,
     should_enable_telemetry,
@@ -300,6 +302,13 @@ def main():
     client = create_kibana_client()
     manager = SpaceManager(client)
 
+    # Namespaced, fixed space ids so this example is idempotent: re-running
+    # it (e.g. after choosing to keep the spaces) reuses the same identities
+    # instead of 409-ing on the literal "marketing-team"/"engineering-team".
+    prefix = resource_prefix(__file__)
+    marketing_id = f"{prefix}-marketing-team"
+    engineering_id = f"{prefix}-engineering-team"
+
     try:
         print("\n" + "=" * 80)
         print("KIBANA SPACE MANAGEMENT EXAMPLE")
@@ -314,19 +323,25 @@ def main():
 
         # 2. Create a new space
         print("\n2️⃣  Creating a new space...")
+        # Idempotent start: remove this example's own space from a prior run,
+        # if any, so re-running doesn't 409 on the fixed id below.
+        try:
+            client.spaces.delete(id=marketing_id)
+        except NotFoundError:
+            pass
         manager.create_space(
-            space_id="marketing-team",
+            space_id=marketing_id,
             name="Marketing Team",
             description="Space for marketing team's dashboards and reports",
             color="#FF6B6B",
             initials="MK",
             disabled_features=["dev_tools", "advancedSettings"],
         )
-        print("   Space URL: http://localhost:5601/s/marketing-team/app/home")
+        print(f"   Space URL: http://localhost:5601/s/{marketing_id}/app/home")
 
         # 3. Retrieve the space
         print("\n3️⃣  Retrieving the created space...")
-        retrieved_space = manager.get_space("marketing-team")
+        retrieved_space = manager.get_space(marketing_id)
         print(f"   Name: {retrieved_space['name']}")
         print(f"   Description: {retrieved_space.get('description', 'N/A')}")
         print(f"   Color: {retrieved_space.get('color', 'N/A')}")
@@ -337,7 +352,7 @@ def main():
         # 4. Update the space
         print("\n4️⃣  Updating the space...")
         updated_space = manager.update_space(
-            space_id="marketing-team",
+            space_id=marketing_id,
             name="Marketing & Sales Team",
             description="Updated: Combined marketing and sales team space",
             color="#4ECDC4",
@@ -348,8 +363,12 @@ def main():
 
         # 5. Create another space
         print("\n5️⃣  Creating another space...")
+        try:
+            client.spaces.delete(id=engineering_id)
+        except NotFoundError:
+            pass
         manager.create_space(
-            space_id="engineering-team",
+            space_id=engineering_id,
             name="Engineering Team",
             description="Space for engineering team",
             color="#95E1D3",
@@ -373,7 +392,7 @@ def main():
 
         try:
             manager.create_space(
-                space_id="marketing-team",
+                space_id=marketing_id,
                 name="Duplicate Space",
             )
         except ConflictError:
@@ -395,6 +414,7 @@ def main():
             print("✓ Cleanup complete")
         else:
             print("✓ Spaces kept. You can delete them later from Kibana UI.")
+            print_kept([("space", sid) for sid in manager.created_spaces])
 
     except Exception as e:
         logger.error(f"❌ Example failed: {e}")

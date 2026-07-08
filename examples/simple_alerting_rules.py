@@ -19,11 +19,15 @@ from utils import (
     configure_example_telemetry,
     create_kibana_client,
     print_config_info,
+    print_kept,
     print_telemetry_info,
+    resource_prefix,
     setup_telemetry_cleanup,
     should_cleanup,
     should_enable_telemetry,
 )
+
+from kibana.exceptions import NotFoundError
 
 # Set up logger for this example
 logger = logging.getLogger("kibana.examples.alerting_rules")
@@ -57,16 +61,31 @@ def main():
     # Initialize Kibana client with automatic configuration
     client = create_kibana_client()
 
+    # Namespace the display name and use a STABLE rule id so repeated runs
+    # replace this example's own rule instead of accumulating a new one.
+    prefix = resource_prefix(__file__)
+    rule_name = f"{prefix} High Request Count"
+    rule_id = f"{prefix}-rule"
+
     try:
+        # 0. Idempotent start: clear this example's own leftover rule (own
+        # scope only, by stable id) from a previous kept run.
+        try:
+            client.alerting.rule.delete(id=rule_id)
+            print(f"Cleared leftover rule {rule_id!r}")
+        except NotFoundError:
+            pass
+
         # 1. Create an index-threshold rule
         print("Creating alerting rule...")
         logger.info(
             "Creating alerting rule",
-            extra={"rule_name": "High Request Count", "operation": "create"},
+            extra={"rule_name": rule_name, "operation": "create"},
         )
 
         create_response = client.alerting.rule.create(
-            name="High Request Count",
+            id=rule_id,
+            name=rule_name,
             consumer="alerts",
             rule_type_id=".index-threshold",
             schedule={"interval": "1m"},
@@ -137,7 +156,7 @@ def main():
         )
         update_response = client.alerting.rule.update(
             id=rule_id,
-            name="High Request Count (updated)",
+            name=f"{rule_name} (updated)",
             schedule={"interval": "5m"},
             params={
                 "index": ["*"],
@@ -201,8 +220,8 @@ def main():
                         extra={"rule_id": rule_id, "operation": "delete"},
                     )
         else:
-            print(f"✓ Rule kept (ID: {rule_id})")
             logger.info("Rule kept by user choice", extra={"rule_id": rule_id})
+            print_kept([("alerting rule", rule_id)])
 
     except Exception as e:
         print(f"❌ Error: {e}")

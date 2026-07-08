@@ -46,11 +46,14 @@ class IndexConnectorManager:
             configure_example_telemetry,
             create_kibana_client,
             get_kibana_config,
+            resource_prefix,
             setup_telemetry_cleanup,
             should_enable_telemetry,
         )
 
-        self.index_name = "miconnectedindex"
+        # Namespaced per-example index so re-runs (and other examples that
+        # also target ".index" connectors) don't collide on a shared name.
+        self.index_name = f"{resource_prefix(__file__)}-index"
         self.connector_name = f"Index Connector - {self.index_name}"
         self.connector_id: str | None = None
 
@@ -484,7 +487,7 @@ def main():
 
         # Interactive cleanup
         if manager and manager.connector_id:
-            from utils import should_cleanup
+            from utils import print_kept, should_cleanup
 
             print(f"\nConnector '{connector['name']}' was created for this example.")
             if should_cleanup("Delete the connector? (y/N): "):
@@ -499,7 +502,7 @@ def main():
                     except Exception:
                         print("✓ Connector deleted (confirmed)")
             else:
-                print(f"✓ Connector kept (ID: {manager.connector_id})")
+                print_kept([("connector", manager.connector_id)])
 
     except KeyboardInterrupt:
         print("\nExample interrupted by user")

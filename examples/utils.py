@@ -320,26 +320,17 @@ def _get_python_version() -> str:
 
 def _get_opentelemetry_version() -> str:
     """Get the OpenTelemetry SDK version."""
-    try:
-        # Try to get the version from the opentelemetry-sdk package
+    import importlib.metadata
+
+    for pkg in ("opentelemetry-sdk", "opentelemetry-api"):
         try:
-            import importlib.metadata
+            return importlib.metadata.version(pkg)
+        except Exception:
+            continue
+    try:
+        from opentelemetry import __version__
 
-            return importlib.metadata.version("opentelemetry-sdk")
-        except (ImportError, Exception):
-            # Fallback: try to get from opentelemetry-api
-            try:
-                import importlib.metadata
-
-                return importlib.metadata.version("opentelemetry-api")
-            except (ImportError, Exception):
-                # Last resort: try to get from the module itself
-                try:
-                    from opentelemetry import __version__
-
-                    return __version__
-                except (ImportError, AttributeError):
-                    return "unknown"
+        return __version__
     except Exception:
         return "unknown"
 
@@ -689,7 +680,35 @@ def should_cleanup(prompt: str = "Delete created resources? (y/N): ") -> bool:
         return True
     if "--no-cleanup" in sys.argv:
         return False
+    if not sys.stdin.isatty():
+        print(
+            "Non-interactive (no TTY): keeping created resources. "
+            "Pass --cleanup to delete them."
+        )
+        return False
     return input(prompt).lower().strip() == "y"
+
+
+def resource_prefix(file: str) -> str:
+    """Return the per-example resource namespace ``kbnpy-<stem>`` derived from a filename.
+
+    The stem is the filename without extension, with a trailing ``_management``
+    removed and underscores normalised to hyphens, so ``lists_management.py`` →
+    ``kbnpy-lists``. This is the single source of the example's resource namespace.
+    """
+    stem = Path(file).stem
+    if stem.endswith("_management"):
+        stem = stem[: -len("_management")]
+    return "kbnpy-" + stem.replace("_", "-")
+
+
+def print_kept(created: list[tuple[str, str]]) -> None:
+    """Print a consistent summary of resources left behind when the user keeps them."""
+    if not created:
+        return
+    print("\nKept the following resources (re-run with --cleanup to remove):")
+    for kind, ident in created:
+        print(f"  - {kind}: {ident}")
 
 
 def create_kibana_client():

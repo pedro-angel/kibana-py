@@ -23,7 +23,9 @@ from examples.utils import (
     configure_example_telemetry,
     create_async_kibana_client,
     print_config_info,
+    print_kept,
     print_telemetry_info,
+    resource_prefix,
     setup_telemetry_cleanup,
     should_cleanup,
     should_enable_telemetry,
@@ -67,9 +69,16 @@ async def demonstrate_actions(client):
             },
         )
 
-        # Create a server-log connector
-        print("\n➕ Creating server-log connector...")
-        connector_name = f"async-example-{uuid.uuid4().hex[:8]}"
+        # Create a server-log connector with a stable ID (own scope): clear
+        # only THIS example's own prior connector, then create fresh
+        prefix = resource_prefix(__file__)
+        connector_name = f"{prefix}-connector"
+        stable_connector_id = f"{prefix}-conn"
+
+        try:
+            await client.actions.delete(id=stable_connector_id)
+        except NotFoundError:
+            pass
 
         logger.info(
             "Creating async server-log connector",
@@ -82,7 +91,10 @@ async def demonstrate_actions(client):
         )
 
         create_response = await client.actions.create(
-            name=connector_name, connector_type_id=".server-log", config={}
+            id=stable_connector_id,
+            name=connector_name,
+            connector_type_id=".server-log",
+            config={},
         )
         connector = create_response.body
         connector_id = connector["id"]
@@ -163,7 +175,7 @@ async def demonstrate_actions(client):
                     print("   ✓ Connector deleted (confirmed)")
             connector_id = None
         else:
-            print(f"   ✓ Connector kept (ID: {connector_id})")
+            print_kept([("connector", connector_id)])
 
     except Exception as e:
         print(f"\n❌ Error in actions demo: {e}")
@@ -197,10 +209,16 @@ async def demonstrate_spaces(client):
         default_space = default_response.body
         print(f"   ✓ Default space: {default_space['name']}")
 
-        # Create a new space
-        print("\n➕ Creating new space...")
-        space_id = f"async-example-{uuid.uuid4().hex[:8]}"
-        space_name = f"Async Example Space {uuid.uuid4().hex[:4]}"
+        # Create a new space with a stable ID (own scope): clear only THIS
+        # example's own prior space, then create fresh
+        space_id = f"{resource_prefix(__file__)}-space"
+        space_name = "Async Example Space"
+
+        try:
+            await client.spaces.delete(id=space_id)
+        except NotFoundError:
+            pass
+
         create_response = await client.spaces.create(
             id=space_id,
             name=space_name,
@@ -235,7 +253,7 @@ async def demonstrate_spaces(client):
             print("   ✓ Space deleted")
             space_id = None
         else:
-            print(f"   ✓ Space kept (ID: {space_id})")
+            print_kept([("space", space_id)])
 
     except Exception as e:
         print(f"\n❌ Error in spaces demo: {e}")
@@ -255,9 +273,16 @@ async def demonstrate_saved_objects(client):
     object_id = None
 
     try:
-        # Create a saved object
+        # Create a saved object with a stable ID (own scope): clear only THIS
+        # example's own prior saved object, then create fresh
         print("\n➕ Creating saved object...")
-        object_id = f"async-example-{uuid.uuid4().hex[:8]}"
+        object_id = f"{resource_prefix(__file__)}-obj"
+
+        try:
+            await client.saved_objects.delete(type="config", id=object_id)
+        except NotFoundError:
+            pass
+
         attributes = {
             "title": f"Async Example Config {uuid.uuid4().hex[:4]}",
             "buildNum": 99999,
@@ -297,7 +322,7 @@ async def demonstrate_saved_objects(client):
             print("   ✓ Saved object deleted")
             object_id = None
         else:
-            print(f"   ✓ Saved object kept (ID: {object_id})")
+            print_kept([("saved object", object_id)])
 
     except Exception as e:
         print(f"\n❌ Error in saved objects demo: {e}")

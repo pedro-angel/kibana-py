@@ -2,23 +2,59 @@
 
 import logging
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
-from elastic_transport import AsyncTransport, NodeConfig
+from elastic_transport import AsyncTransport
 
 from kibana._async.client._base import DEFAULT, AsyncBaseClient, DefaultType
+from kibana._async.client.actions import AsyncActionsClient
+from kibana._async.client.agent_builder import AsyncAgentBuilderClient
+from kibana._async.client.alerting import AsyncAlertingClient
+from kibana._async.client.apm import AsyncApmClient
+from kibana._async.client.attack_discovery import AsyncAttackDiscoveryClient
+from kibana._async.client.cases import AsyncCasesClient
+from kibana._async.client.connectors import AsyncConnectorsClient
+from kibana._async.client.dashboards import AsyncDashboardsClient
+from kibana._async.client.data_views import AsyncDataViewsClient
+from kibana._async.client.detection_engine import AsyncDetectionEngineClient
+from kibana._async.client.endpoint import AsyncEndpointClient
+from kibana._async.client.entity_analytics import AsyncEntityAnalyticsClient
+from kibana._async.client.exception_lists import AsyncExceptionListsClient
+from kibana._async.client.fleet import AsyncFleetClient
+from kibana._async.client.fleet_agents import AsyncFleetAgentsClient
+from kibana._async.client.fleet_enrollment import AsyncFleetEnrollmentClient
+from kibana._async.client.fleet_epm import AsyncFleetEpmClient
+from kibana._async.client.fleet_outputs import AsyncFleetOutputsClient
+from kibana._async.client.fleet_policies import AsyncFleetPoliciesClient
+from kibana._async.client.lists import AsyncListsClient
+from kibana._async.client.logstash import AsyncLogstashClient
+from kibana._async.client.maintenance_windows import AsyncMaintenanceWindowsClient
+from kibana._async.client.ml import AsyncMlClient
+from kibana._async.client.observability_ai_assistant import (
+    AsyncObservabilityAiAssistantClient,
+)
+from kibana._async.client.osquery import AsyncOsqueryClient
+from kibana._async.client.saved_objects import AsyncSavedObjectsClient
+from kibana._async.client.security import AsyncSecurityClient
+from kibana._async.client.security_ai_assistant import AsyncSecurityAiAssistantClient
+from kibana._async.client.short_urls import AsyncShortUrlsClient
+from kibana._async.client.slos import AsyncSlosClient
+from kibana._async.client.spaces import AsyncSpacesClient
+from kibana._async.client.status import AsyncStatusClient
+from kibana._async.client.streams import AsyncStreamsClient
+from kibana._async.client.synthetics import AsyncSyntheticsClient
+from kibana._async.client.task_manager import AsyncTaskManagerClient
+from kibana._async.client.timeline import AsyncTimelineClient
+from kibana._async.client.upgrade_assistant import AsyncUpgradeAssistantClient
+from kibana._async.client.uptime import AsyncUptimeClient
+from kibana._async.client.visualizations import AsyncVisualizationsClient
+from kibana._async.client.workflows import AsyncWorkflowsClient
 from kibana._rate_limiter import AsyncRateLimiter
+from kibana._sync.client import _build_node_configs, _build_node_options
 from kibana.exceptions import SpaceNotFoundError
 from kibana.serializer import DEFAULT_SERIALIZERS
 
 __all__ = ["AsyncKibana", "AsyncSpaceScopedKibana", "DEFAULT", "DefaultType"]
-
-if TYPE_CHECKING:
-    from kibana._async.client.actions import AsyncActionsClient
-    from kibana._async.client.alerting import AsyncAlertingClient
-    from kibana._async.client.saved_objects import AsyncSavedObjectsClient
-    from kibana._async.client.spaces import AsyncSpacesClient
-    from kibana._async.client.status import AsyncStatusClient
 
 # Set up logger
 logger = logging.getLogger("kibana")
@@ -29,6 +65,9 @@ class AsyncKibana(AsyncBaseClient):
     Asynchronous client for Kibana.
 
     Provides a Pythonic async interface to interact with Kibana's REST APIs.
+    Each API group is exposed as a namespace attribute (``client.dashboards``,
+    ``client.spaces``, ``client.alerting``, ...), mirroring the structure of
+    the official Kibana API reference.
 
     Example usage:
         >>> from kibana import AsyncKibana
@@ -44,6 +83,48 @@ class AsyncKibana(AsyncBaseClient):
         ...     # Use the client
         ...     pass
     """
+
+    # Namespace clients (wired eagerly in __init__)
+    actions: AsyncActionsClient
+    agent_builder: AsyncAgentBuilderClient
+    alerting: AsyncAlertingClient
+    apm: AsyncApmClient
+    attack_discovery: AsyncAttackDiscoveryClient
+    cases: AsyncCasesClient
+    connectors: AsyncConnectorsClient
+    dashboards: AsyncDashboardsClient
+    data_views: AsyncDataViewsClient
+    detection_engine: AsyncDetectionEngineClient
+    endpoint: AsyncEndpointClient
+    entity_analytics: AsyncEntityAnalyticsClient
+    exception_lists: AsyncExceptionListsClient
+    fleet: AsyncFleetClient
+    fleet_agents: AsyncFleetAgentsClient
+    fleet_enrollment: AsyncFleetEnrollmentClient
+    fleet_epm: AsyncFleetEpmClient
+    fleet_outputs: AsyncFleetOutputsClient
+    fleet_policies: AsyncFleetPoliciesClient
+    lists: AsyncListsClient
+    logstash: AsyncLogstashClient
+    maintenance_windows: AsyncMaintenanceWindowsClient
+    ml: AsyncMlClient
+    observability_ai_assistant: AsyncObservabilityAiAssistantClient
+    osquery: AsyncOsqueryClient
+    saved_objects: AsyncSavedObjectsClient
+    security: AsyncSecurityClient
+    security_ai_assistant: AsyncSecurityAiAssistantClient
+    short_urls: AsyncShortUrlsClient
+    slos: AsyncSlosClient
+    spaces: AsyncSpacesClient
+    status: AsyncStatusClient
+    streams: AsyncStreamsClient
+    synthetics: AsyncSyntheticsClient
+    task_manager: AsyncTaskManagerClient
+    timeline: AsyncTimelineClient
+    upgrade_assistant: AsyncUpgradeAssistantClient
+    uptime: AsyncUptimeClient
+    visualizations: AsyncVisualizationsClient
+    workflows: AsyncWorkflowsClient
 
     def __init__(
         self,
@@ -132,25 +213,33 @@ class AsyncKibana(AsyncBaseClient):
             )
             if max_requests_per_second is not None:
                 self._rate_limiter = AsyncRateLimiter(max_requests_per_second)
+            self._wire_namespaces()
             return
 
         # Validate that either hosts or cloud_id is provided
         if hosts is None and cloud_id is None:
             raise ValueError("Either 'hosts' or 'cloud_id' must be provided")
 
-        # Build node configurations
-        node_configs = self._build_node_configs(hosts, cloud_id)
+        # Build node configurations, applying SSL/connection options
+        node_options = _build_node_options(
+            verify_certs=verify_certs,
+            ca_certs=ca_certs,
+            client_cert=client_cert,
+            client_key=client_key,
+            ssl_assert_hostname=ssl_assert_hostname,
+            ssl_assert_fingerprint=ssl_assert_fingerprint,
+            ssl_version=ssl_version,
+            ssl_context=ssl_context,
+            ssl_show_warn=ssl_show_warn,
+            connections_per_node=connections_per_node,
+        )
+        node_configs = _build_node_configs(hosts, cloud_id, node_options)
 
         # Build transport options
         transport_kwargs: dict[str, Any] = {
             "node_configs": node_configs,
             "serializers": DEFAULT_SERIALIZERS,
         }
-
-        # Note: SSL/TLS options like verify_certs, ca_certs, client_cert, client_key
-        # are configured on NodeConfig, not Transport. They are accepted here for
-        # API compatibility but stored for future use when creating SSL contexts.
-        # For now, we just accept them without error.
 
         # Add retry options (these are valid Transport parameters)
         if not isinstance(max_retries, DefaultType):
@@ -167,6 +256,10 @@ class AsyncKibana(AsyncBaseClient):
             transport_kwargs["node_pool_class"] = node_pool_class
         if not isinstance(randomize_nodes_in_pool, DefaultType):
             transport_kwargs["randomize_nodes_in_pool"] = randomize_nodes_in_pool
+        if not isinstance(dead_node_backoff_factor, DefaultType):
+            transport_kwargs["dead_node_backoff_factor"] = dead_node_backoff_factor
+        if not isinstance(max_dead_node_backoff, DefaultType):
+            transport_kwargs["max_dead_node_backoff"] = max_dead_node_backoff
 
         # Create AsyncTransport instance
         transport = AsyncTransport(**transport_kwargs)
@@ -196,80 +289,50 @@ class AsyncKibana(AsyncBaseClient):
                 "Rate limiting enabled: %.1f requests/sec", max_requests_per_second
             )
 
-    def _build_node_configs(
-        self,
-        hosts: str | list[str | dict[str, Any]] | None,
-        cloud_id: str | None,
-    ) -> list[NodeConfig]:
-        """
-        Build NodeConfig objects from hosts or cloud_id.
+        self._wire_namespaces()
 
-        :param hosts: Host specifications
-        :param cloud_id: Cloud ID for Elastic Cloud
-        :return: List of NodeConfig objects
-        """
-        if cloud_id is not None:
-            # Parse cloud_id and create NodeConfig
-            # Cloud ID format: cluster_name:base64_encoded_data
-            # The base64 data contains: cloud_host$es_uuid$kibana_uuid
-            import base64
-
-            try:
-                _, encoded = cloud_id.split(":", 1)
-                decoded = base64.b64decode(encoded).decode("utf-8")
-                parts = decoded.split("$")
-
-                if len(parts) >= 3:
-                    cloud_host = parts[0]
-                    kibana_uuid = parts[2]
-
-                    # Construct Kibana URL
-                    return [
-                        NodeConfig(
-                            scheme="https", host=f"{kibana_uuid}.{cloud_host}", port=443
-                        )
-                    ]
-                else:
-                    raise ValueError(f"Invalid cloud_id format: {cloud_id}")
-            except Exception as e:
-                raise ValueError(f"Failed to parse cloud_id: {e}")
-
-        # Parse hosts
-        if isinstance(hosts, str):
-            hosts = [hosts]
-
-        if hosts is None:
-            raise ValueError("hosts cannot be None when cloud_id is not provided")
-
-        node_configs = []
-        for host in hosts:
-            if isinstance(host, str):
-                # Parse URL string manually
-                from urllib.parse import urlparse
-
-                parsed = urlparse(host)
-
-                scheme = parsed.scheme or "http"
-                hostname = parsed.hostname or "localhost"
-                port = parsed.port or (443 if scheme == "https" else 5601)
-
-                node_config = NodeConfig(
-                    scheme=scheme,
-                    host=hostname,
-                    port=port,
-                    path_prefix=(
-                        parsed.path if parsed.path and parsed.path != "/" else ""
-                    ),
-                )
-                node_configs.append(node_config)
-            elif isinstance(host, dict):
-                # Create NodeConfig from dict
-                node_config = NodeConfig(**host)
-                node_configs.append(node_config)
-            else:
-                raise ValueError(f"Invalid host specification: {host}")
-
-        return node_configs
+    def _wire_namespaces(self) -> None:
+        """Attach one client instance per Kibana API namespace."""
+        self.actions = AsyncActionsClient(self)
+        self.agent_builder = AsyncAgentBuilderClient(self)
+        self.alerting = AsyncAlertingClient(self)
+        self.apm = AsyncApmClient(self)
+        self.attack_discovery = AsyncAttackDiscoveryClient(self)
+        self.cases = AsyncCasesClient(self)
+        self.connectors = AsyncConnectorsClient(self)
+        self.dashboards = AsyncDashboardsClient(self)
+        self.data_views = AsyncDataViewsClient(self)
+        self.detection_engine = AsyncDetectionEngineClient(self)
+        self.endpoint = AsyncEndpointClient(self)
+        self.entity_analytics = AsyncEntityAnalyticsClient(self)
+        self.exception_lists = AsyncExceptionListsClient(self)
+        self.fleet = AsyncFleetClient(self)
+        self.fleet_agents = AsyncFleetAgentsClient(self)
+        self.fleet_enrollment = AsyncFleetEnrollmentClient(self)
+        self.fleet_epm = AsyncFleetEpmClient(self)
+        self.fleet_outputs = AsyncFleetOutputsClient(self)
+        self.fleet_policies = AsyncFleetPoliciesClient(self)
+        self.lists = AsyncListsClient(self)
+        self.logstash = AsyncLogstashClient(self)
+        self.maintenance_windows = AsyncMaintenanceWindowsClient(self)
+        self.ml = AsyncMlClient(self)
+        self.observability_ai_assistant = AsyncObservabilityAiAssistantClient(self)
+        self.osquery = AsyncOsqueryClient(self)
+        self.saved_objects = AsyncSavedObjectsClient(self)
+        self.security = AsyncSecurityClient(self)
+        self.security_ai_assistant = AsyncSecurityAiAssistantClient(self)
+        self.short_urls = AsyncShortUrlsClient(self)
+        self.slos = AsyncSlosClient(self)
+        self.spaces = AsyncSpacesClient(self)
+        self.status = AsyncStatusClient(self)
+        self.streams = AsyncStreamsClient(self)
+        self.synthetics = AsyncSyntheticsClient(self)
+        self.task_manager = AsyncTaskManagerClient(self)
+        self.timeline = AsyncTimelineClient(self)
+        self.upgrade_assistant = AsyncUpgradeAssistantClient(self)
+        self.uptime = AsyncUptimeClient(self)
+        self.visualizations = AsyncVisualizationsClient(self)
+        self.workflows = AsyncWorkflowsClient(self)
 
     async def close(self) -> None:
         """
@@ -284,7 +347,7 @@ class AsyncKibana(AsyncBaseClient):
         except Exception as e:
             logger.warning("Error closing AsyncKibana client: %s", e)
 
-    async def __aenter__(self) -> "AsyncKibana":
+    async def __aenter__(self) -> AsyncKibana:
         """Enter async context manager."""
         return self
 
@@ -292,131 +355,20 @@ class AsyncKibana(AsyncBaseClient):
         """Exit async context manager and close client."""
         await self.close()
 
-    @property
-    def actions(self) -> "AsyncActionsClient":
-        """
-        Access the Actions API for managing Kibana action connectors.
-
-        Actions in Kibana are connectors that enable integration with external systems
-        for alerting, notifications, and automation.
-
-        :return: AsyncActionsClient instance for managing action connectors
-
-        Example:
-            >>> # Create a webhook connector
-            >>> connector = await client.actions.create(
-            ...     name="Alert Webhook",
-            ...     connector_type_id=".webhook",
-            ...     config={"url": "https://example.com/webhook"}
-            ... )
-
-            >>> # List all connectors
-            >>> connectors = await client.actions.get_all()
-
-            >>> # Execute a connector
-            >>> result = await client.actions.execute(
-            ...     id=connector.body["id"],
-            ...     params={"message": "Test alert"}
-            ... )
-        """
-        # Lazy initialization of AsyncActionsClient
-        if not hasattr(self, "_actions_client"):
-            from kibana._async.client.actions import AsyncActionsClient
-
-            self._actions_client = AsyncActionsClient(self)
-        return self._actions_client
-
-    @property
-    def spaces(self) -> "AsyncSpacesClient":
-        """
-        Get the Spaces client for managing Kibana Spaces.
-
-        :return: AsyncSpacesClient instance
-        """
-        if not hasattr(self, "_spaces_client"):
-            from kibana._async.client.spaces import AsyncSpacesClient
-
-            self._spaces_client = AsyncSpacesClient(self)
-        return self._spaces_client
-
-    @property
-    def status(self) -> "AsyncStatusClient":
-        """
-        Get the Status client for checking Kibana status.
-
-        :return: AsyncStatusClient instance
-        """
-        if not hasattr(self, "_status_client"):
-            from kibana._async.client.status import AsyncStatusClient
-
-            self._status_client = AsyncStatusClient(self)
-        return self._status_client
-
-    @property
-    def saved_objects(self) -> "AsyncSavedObjectsClient":
-        """
-        Access the Saved Objects API for managing Kibana saved objects.
-
-        Saved Objects in Kibana are entities like dashboards, visualizations, index patterns,
-        and other configuration items. This API provides methods to create, read, update,
-        and delete saved objects.
-
-        :return: AsyncSavedObjectsClient instance for managing saved objects
-
-        Example:
-            >>> # Create a dashboard
-            >>> dashboard = await client.saved_objects.create(
-            ...     type="dashboard",
-            ...     attributes={"title": "My Dashboard"}
-            ... )
-
-            >>> # Get a saved object
-            >>> obj = await client.saved_objects.get(
-            ...     type="dashboard",
-            ...     id="my-dashboard-id"
-            ... )
-
-            >>> # Update a saved object
-            >>> updated = await client.saved_objects.update(
-            ...     type="dashboard",
-            ...     id="my-dashboard-id",
-            ...     attributes={"title": "Updated Dashboard"}
-            ... )
-
-            >>> # Delete a saved object
-            >>> await client.saved_objects.delete(
-            ...     type="dashboard",
-            ...     id="my-dashboard-id"
-            ... )
-        """
-        # Lazy initialization of AsyncSavedObjectsClient
-        if not hasattr(self, "_saved_objects_client"):
-            from kibana._async.client.saved_objects import AsyncSavedObjectsClient
-
-            self._saved_objects_client = AsyncSavedObjectsClient(self)
-        return self._saved_objects_client
-
-    @property
-    def alerting(self) -> "AsyncAlertingClient":
-        """
-        Access the Alerting API for managing rules.
-
-        :return: AsyncAlertingClient instance for managing rules.
-        """
-        # Lazy initialization of AsyncAlertingClient
-        if not hasattr(self, "_alerting_client"):
-            from kibana._async.client.alerting import AsyncAlertingClient
-
-            self._alerting_client = AsyncAlertingClient(self)
-        return self._alerting_client
-
-    def space(self, space_id: str, validate: bool = True) -> "AsyncSpaceScopedKibana":
+    async def space(
+        self, space_id: str, validate: bool = True
+    ) -> AsyncSpaceScopedKibana:
         """
         Create a space-scoped client instance.
 
         This method creates a new client instance that automatically operates within
         the specified space context. All operations performed through the returned
         client will be scoped to the specified space.
+
+        .. versionchanged:: 0.2.0
+            This method is now a coroutine so that ``validate=True`` can
+            actually check the space against the server (previously the check
+            was silently skipped). Call it as ``await client.space("id")``.
 
         :param space_id: The ID of the space to scope operations to
         :param validate: Whether to validate that the space exists (default: True)
@@ -428,17 +380,18 @@ class AsyncKibana(AsyncBaseClient):
             >>> # Create a space-scoped client with validation
             >>> marketing_client = await client.space("marketing")
             >>>
-            >>> # Create connector in the marketing space
-            >>> connector = await marketing_client.actions.create(
-            ...     name="Marketing Webhook",
-            ...     connector_type_id=".webhook",
-            ...     config={"url": "https://marketing.example.com/webhook"}
+            >>> # Create a dashboard in the marketing space
+            >>> dashboard = await marketing_client.dashboards.create(
+            ...     title="Marketing KPIs"
             ... )
             >>>
             >>> # Create space-scoped client without validation (for performance)
             >>> fast_client = await client.space("marketing", validate=False)
         """
-        return AsyncSpaceScopedKibana(self, space_id, validate)
+        scoped = AsyncSpaceScopedKibana(self, space_id, validate)
+        if validate:
+            await scoped._validate_space_on_creation()
+        return scoped
 
     def __repr__(self) -> str:
         """Return string representation of client."""
@@ -451,23 +404,59 @@ class AsyncSpaceScopedKibana:
 
     This class provides the same API surface as the main AsyncKibana client but
     automatically scopes all operations to a specific space. All child clients
-    (actions, saved_objects, etc.) created through this instance will inherit
-    the space context and validation settings.
+    (dashboards, saved_objects, alerting, etc.) created through this instance
+    inherit the space context and validation settings. Namespaces that are not
+    space-aware (spaces, status, security, task_manager, upgrade_assistant,
+    logstash) delegate to the parent client unscoped.
 
     Example:
         >>> # Create space-scoped client with validation
-        >>> marketing_client = client.space("marketing")
+        >>> marketing_client = await client.space("marketing")
         >>>
         >>> # All operations are automatically scoped to "marketing" space
-        >>> connector = await marketing_client.actions.create(
-        ...     name="Marketing Webhook",
-        ...     connector_type_id=".webhook",
-        ...     config={"url": "https://marketing.example.com/webhook"}
+        >>> dashboard = await marketing_client.dashboards.create(
+        ...     title="Marketing KPIs"
         ... )
         >>>
         >>> # Create space-scoped client without validation for performance
-        >>> fast_client = client.space("marketing", validate=False)
+        >>> fast_client = await client.space("marketing", validate=False)
     """
+
+    # Space-scoped namespace clients (wired eagerly in __init__)
+    actions: AsyncActionsClient
+    agent_builder: AsyncAgentBuilderClient
+    alerting: AsyncAlertingClient
+    apm: AsyncApmClient
+    attack_discovery: AsyncAttackDiscoveryClient
+    cases: AsyncCasesClient
+    connectors: AsyncConnectorsClient
+    dashboards: AsyncDashboardsClient
+    data_views: AsyncDataViewsClient
+    detection_engine: AsyncDetectionEngineClient
+    endpoint: AsyncEndpointClient
+    entity_analytics: AsyncEntityAnalyticsClient
+    exception_lists: AsyncExceptionListsClient
+    fleet: AsyncFleetClient
+    fleet_agents: AsyncFleetAgentsClient
+    fleet_enrollment: AsyncFleetEnrollmentClient
+    fleet_epm: AsyncFleetEpmClient
+    fleet_outputs: AsyncFleetOutputsClient
+    fleet_policies: AsyncFleetPoliciesClient
+    lists: AsyncListsClient
+    maintenance_windows: AsyncMaintenanceWindowsClient
+    ml: AsyncMlClient
+    observability_ai_assistant: AsyncObservabilityAiAssistantClient
+    osquery: AsyncOsqueryClient
+    saved_objects: AsyncSavedObjectsClient
+    security_ai_assistant: AsyncSecurityAiAssistantClient
+    short_urls: AsyncShortUrlsClient
+    slos: AsyncSlosClient
+    streams: AsyncStreamsClient
+    synthetics: AsyncSyntheticsClient
+    timeline: AsyncTimelineClient
+    uptime: AsyncUptimeClient
+    visualizations: AsyncVisualizationsClient
+    workflows: AsyncWorkflowsClient
 
     def __init__(
         self, client: AsyncKibana, space_id: str, validate: bool = True
@@ -475,17 +464,59 @@ class AsyncSpaceScopedKibana:
         """
         Initialize space-scoped async client.
 
+        Note: space existence validation is performed by
+        ``AsyncKibana.space()`` (a coroutine), not by this constructor.
+
         :param client: The main AsyncKibana client to delegate to
         :param space_id: The space ID to scope operations to
-        :param validate: Whether to validate that the space exists
-        :raises SpaceNotFoundError: If validate=True and the space doesn't exist
+        :param validate: Whether space validation is enabled for namespaces
         """
         self._client = client
         self._space_id = space_id
         self._validate = validate
 
-        # Note: For async, we can't validate synchronously in __init__
-        # Validation will happen on first use if enabled
+        # Wire space-scoped namespace clients
+        def scoped(cls: type) -> Any:
+            return cls(
+                client,
+                default_space_id=space_id,
+                validate_spaces=validate,
+            )
+
+        self.actions = scoped(AsyncActionsClient)
+        self.agent_builder = scoped(AsyncAgentBuilderClient)
+        self.alerting = scoped(AsyncAlertingClient)
+        self.apm = scoped(AsyncApmClient)
+        self.attack_discovery = scoped(AsyncAttackDiscoveryClient)
+        self.cases = scoped(AsyncCasesClient)
+        self.connectors = scoped(AsyncConnectorsClient)
+        self.dashboards = scoped(AsyncDashboardsClient)
+        self.data_views = scoped(AsyncDataViewsClient)
+        self.detection_engine = scoped(AsyncDetectionEngineClient)
+        self.endpoint = scoped(AsyncEndpointClient)
+        self.entity_analytics = scoped(AsyncEntityAnalyticsClient)
+        self.exception_lists = scoped(AsyncExceptionListsClient)
+        self.fleet = scoped(AsyncFleetClient)
+        self.fleet_agents = scoped(AsyncFleetAgentsClient)
+        self.fleet_enrollment = scoped(AsyncFleetEnrollmentClient)
+        self.fleet_epm = scoped(AsyncFleetEpmClient)
+        self.fleet_outputs = scoped(AsyncFleetOutputsClient)
+        self.fleet_policies = scoped(AsyncFleetPoliciesClient)
+        self.lists = scoped(AsyncListsClient)
+        self.maintenance_windows = scoped(AsyncMaintenanceWindowsClient)
+        self.ml = scoped(AsyncMlClient)
+        self.observability_ai_assistant = scoped(AsyncObservabilityAiAssistantClient)
+        self.osquery = scoped(AsyncOsqueryClient)
+        self.saved_objects = scoped(AsyncSavedObjectsClient)
+        self.security_ai_assistant = scoped(AsyncSecurityAiAssistantClient)
+        self.short_urls = scoped(AsyncShortUrlsClient)
+        self.slos = scoped(AsyncSlosClient)
+        self.streams = scoped(AsyncStreamsClient)
+        self.synthetics = scoped(AsyncSyntheticsClient)
+        self.timeline = scoped(AsyncTimelineClient)
+        self.uptime = scoped(AsyncUptimeClient)
+        self.visualizations = scoped(AsyncVisualizationsClient)
+        self.workflows = scoped(AsyncWorkflowsClient)
 
     async def _validate_space_on_creation(self) -> None:
         """
@@ -505,87 +536,34 @@ class AsyncSpaceScopedKibana:
                 raise
 
     @property
-    def actions(self) -> "AsyncActionsClient":
-        """
-        Get AsyncActionsClient with space scope.
-
-        Returns an AsyncActionsClient instance that automatically operates within
-        the space context of this AsyncSpaceScopedKibana instance.
-
-        :return: AsyncActionsClient scoped to this space
-
-        Example:
-            >>> marketing_client = client.space("marketing")
-            >>> # This connector will be created in the "marketing" space
-            >>> connector = await marketing_client.actions.create(
-            ...     name="Marketing Webhook",
-            ...     connector_type_id=".webhook",
-            ...     config={"url": "https://marketing.example.com/webhook"}
-            ... )
-        """
-        if not hasattr(self, "_actions_client"):
-            from kibana._async.client.actions import AsyncActionsClient
-
-            self._actions_client = AsyncActionsClient(
-                self._client,
-                default_space_id=self._space_id,
-                validate_spaces=self._validate,
-            )
-        return self._actions_client
-
-    @property
-    def saved_objects(self) -> "AsyncSavedObjectsClient":
-        """
-        Get AsyncSavedObjectsClient with space scope.
-
-        Returns an AsyncSavedObjectsClient instance that automatically operates within
-        the space context of this AsyncSpaceScopedKibana instance.
-
-        :return: AsyncSavedObjectsClient scoped to this space
-
-        Example:
-            >>> marketing_client = client.space("marketing")
-            >>> # This dashboard will be created in the "marketing" space
-            >>> dashboard = await marketing_client.saved_objects.create(
-            ...     type="dashboard",
-            ...     attributes={"title": "Marketing Dashboard"}
-            ... )
-        """
-        if not hasattr(self, "_saved_objects_client"):
-            from kibana._async.client.saved_objects import AsyncSavedObjectsClient
-
-            self._saved_objects_client = AsyncSavedObjectsClient(
-                self._client,
-                default_space_id=self._space_id,
-                validate_spaces=self._validate,
-            )
-        return self._saved_objects_client
-
-    @property
-    def spaces(self) -> "AsyncSpacesClient":
-        """
-        Get AsyncSpacesClient (not space-scoped).
-
-        The AsyncSpacesClient is used for managing spaces themselves and is not
-        scoped to a particular space. It uses the same client as the parent
-        AsyncKibana instance.
-
-        :return: AsyncSpacesClient for managing spaces
-        """
+    def spaces(self) -> AsyncSpacesClient:
+        """Get AsyncSpacesClient (not space-scoped; manages spaces themselves)."""
         return self._client.spaces
 
     @property
-    def status(self) -> "AsyncStatusClient":
-        """
-        Get AsyncStatusClient (not space-scoped).
-
-        The AsyncStatusClient provides server-wide status information and is not
-        scoped to a particular space. It uses the same client as the parent
-        AsyncKibana instance.
-
-        :return: AsyncStatusClient for monitoring server status
-        """
+    def status(self) -> AsyncStatusClient:
+        """Get AsyncStatusClient (not space-scoped; server-wide status)."""
         return self._client.status
+
+    @property
+    def security(self) -> AsyncSecurityClient:
+        """Get AsyncSecurityClient (not space-scoped; roles and sessions are global)."""
+        return self._client.security
+
+    @property
+    def task_manager(self) -> AsyncTaskManagerClient:
+        """Get AsyncTaskManagerClient (not space-scoped; server-wide health)."""
+        return self._client.task_manager
+
+    @property
+    def upgrade_assistant(self) -> AsyncUpgradeAssistantClient:
+        """Get AsyncUpgradeAssistantClient (not space-scoped; cluster-wide status)."""
+        return self._client.upgrade_assistant
+
+    @property
+    def logstash(self) -> AsyncLogstashClient:
+        """Get AsyncLogstashClient (not space-scoped; pipelines are global)."""
+        return self._client.logstash
 
     async def close(self) -> None:
         """
@@ -595,7 +573,7 @@ class AsyncSpaceScopedKibana:
         """
         await self._client.close()
 
-    async def __aenter__(self) -> "AsyncSpaceScopedKibana":
+    async def __aenter__(self) -> AsyncSpaceScopedKibana:
         """Enter async context manager."""
         return self
 

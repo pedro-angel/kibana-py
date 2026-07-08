@@ -312,15 +312,18 @@ class TestAsyncRulesFind:
 
     @pytest.mark.asyncio
     async def test_find_defaults(self):
+        """A bare find() must send no query params at all.
+
+        Kibana 9.4.3 rejects ``sort_order`` without ``sort_field`` (406), so
+        no default query parameters may be sent; server defaults apply.
+        """
         rules, mock = _rules_client()
         await rules.find()
 
         method, path, _, params = _last_call(mock)
         assert method == "GET"
         assert path == "/api/alerting/rules/_find"
-        assert params["page"] == 1
-        assert params["per_page"] == 20
-        assert params["sort_order"] == "asc"
+        assert not params
 
     @pytest.mark.asyncio
     async def test_find_with_search(self):

@@ -7,7 +7,7 @@ name = "kibana-py"
 description = "Python client for Kibana"
 readme = "README.md"
 license = "Apache-2.0"
-requires-python = ">=3.10"
+requires-python = ">=3.14"
 keywords = ["kibana", "elastic", "api-client", "observability", "python"]
 authors = [
     { name = "Kibana Python Client Contributors" },
@@ -22,10 +22,7 @@ classifiers = [
     "Operating System :: OS Independent",
     "Programming Language :: Python",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
-    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Software Development :: Libraries :: Python Modules",
     "Topic :: System :: Monitoring",
 ]
@@ -98,7 +95,7 @@ Issues = "https://github.com/pedro-angel/kibana-py/issues"
 
 [tool.hatch.version]
 path = "kibana/_version.py"
-pattern = "__versionstr__ = \"(?P<version>[^']+)\""
+pattern = "__versionstr__ = \"(?P<version>[^\"]+)\""
 
 [tool.hatch.build.targets.wheel]
 packages = ["kibana"]
@@ -153,10 +150,10 @@ line_length = 88
 
 [tool.black]
 line-length = 88
-target-version = ["py310"]
+target-version = ["py314"]
 
 [tool.mypy]
-python_version = "3.10"
+python_version = "3.14"
 strict = false
 warn_return_any = true
 warn_unused_configs = true
@@ -164,7 +161,7 @@ ignore_missing_imports = true
 
 [tool.ruff]
 line-length = 88
-target-version = "py310"
+target-version = "py314"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "N", "UP"]

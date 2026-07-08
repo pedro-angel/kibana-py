@@ -101,6 +101,10 @@ myst_enable_extensions = [
     "html_admonition",
 ]
 
+# Auto-generate slug anchors for headings so cross-document links such as
+# ``platform-apis.md#maintenance-windows`` resolve.
+myst_heading_anchors = 3
+
 # Source file suffixes
 source_suffix = {
     ".rst": "restructuredtext",
@@ -115,4 +119,9 @@ linkcheck_ignore = [
     r"https://localhost(:\d+)?(/.*)?$",
     r"http://127\.0\.0\.1(:\d+)?(/.*)?$",
     r"https://127\.0\.0\.1(:\d+)?(/.*)?$",
+    # This repo's own release-tag and compare links resolve only *after* a
+    # release is published (the tag is created at publish time). Don't gate a
+    # pre-release branch's docs build on them.
+    r"https://github\.com/pedro-angel/kibana-py/releases/tag/v.*$",
+    r"https://github\.com/pedro-angel/kibana-py/compare/.*$",
 ]

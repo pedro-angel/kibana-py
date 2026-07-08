@@ -35,29 +35,28 @@ class RateLimiter:
             raise ValueError("max_per_second must be positive")
 
         self._max_per_second = max_per_second
-        self._interval = 1.0 / max_per_second
         self._tokens = max_per_second  # Start full
         self._max_tokens = max_per_second
         self._last_refill = time.monotonic()
         self._lock = threading.Lock()
 
     def acquire(self) -> None:
-        """Acquire a token, blocking until one is available."""
-        with self._lock:
-            self._refill()
-            if self._tokens >= 1.0:
-                self._tokens -= 1.0
-                return
+        """Acquire a token, blocking until one is available.
 
-            # Calculate wait time for next token
-            wait = self._interval - (time.monotonic() - self._last_refill)
+        Loops until a full token can actually be consumed so concurrent
+        callers cannot slip through after a single shared wait.
+        """
+        while True:
+            with self._lock:
+                self._refill()
+                if self._tokens >= 1.0:
+                    self._tokens -= 1.0
+                    return
 
-        if wait > 0:
-            time.sleep(wait)
+                # Time until the next full token accrues
+                wait = (1.0 - self._tokens) / self._max_per_second
 
-        with self._lock:
-            self._refill()
-            self._tokens = max(0.0, self._tokens - 1.0)
+            time.sleep(max(wait, 0.0))
 
     def _refill(self) -> None:
         """Add tokens based on elapsed time."""
@@ -88,28 +87,28 @@ class AsyncRateLimiter:
             raise ValueError("max_per_second must be positive")
 
         self._max_per_second = max_per_second
-        self._interval = 1.0 / max_per_second
         self._tokens = max_per_second
         self._max_tokens = max_per_second
         self._last_refill = time.monotonic()
         self._lock = asyncio.Lock()
 
     async def acquire(self) -> None:
-        """Acquire a token, awaiting until one is available."""
-        async with self._lock:
-            self._refill()
-            if self._tokens >= 1.0:
-                self._tokens -= 1.0
-                return
+        """Acquire a token, awaiting until one is available.
 
-            wait = self._interval - (time.monotonic() - self._last_refill)
+        Loops until a full token can actually be consumed so concurrent
+        callers cannot slip through after a single shared wait.
+        """
+        while True:
+            async with self._lock:
+                self._refill()
+                if self._tokens >= 1.0:
+                    self._tokens -= 1.0
+                    return
 
-        if wait > 0:
-            await asyncio.sleep(wait)
+                # Time until the next full token accrues
+                wait = (1.0 - self._tokens) / self._max_per_second
 
-        async with self._lock:
-            self._refill()
-            self._tokens = max(0.0, self._tokens - 1.0)
+            await asyncio.sleep(max(wait, 0.0))
 
     def _refill(self) -> None:
         """Add tokens based on elapsed time."""

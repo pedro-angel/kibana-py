@@ -31,7 +31,8 @@ def test_api_error_with_meta_and_body():
     assert exc.meta == meta
     assert exc.body == body
     assert exc.status_code == 404
-    assert str(exc) == "Resource not found"
+    # str() surfaces the HTTP status alongside the message
+    assert str(exc) == "[404] Resource not found"
 
 
 def test_transport_error_inheritance():

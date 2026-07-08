@@ -1,6 +1,6 @@
 """KibanaInstrumentor singleton and span helpers."""
 
-from typing import Any, Optional
+from typing import Any
 
 from kibana.observability._imports import (
     OTEL_AVAILABLE,
@@ -48,7 +48,7 @@ def _get_opentelemetry_version() -> str:
                         from opentelemetry import __version__  # type: ignore
 
                         return str(__version__)
-                    except (ImportError, AttributeError):
+                    except ImportError, AttributeError:
                         return "unknown"
         else:
             return "not-installed"
@@ -90,7 +90,7 @@ class KibanaInstrumentor:
     Uses the singleton pattern — access via ``get_instance()``.
     """
 
-    _instance: Optional["KibanaInstrumentor"] = None
+    _instance: KibanaInstrumentor | None = None
 
     def __init__(self) -> None:
         """Initialize the instrumentor."""
@@ -98,7 +98,7 @@ class KibanaInstrumentor:
         self._tracer: Any | None = None
 
     @classmethod
-    def get_instance(cls) -> "KibanaInstrumentor":
+    def get_instance(cls) -> KibanaInstrumentor:
         """Get or create the singleton instance."""
         if cls._instance is None:
             cls._instance = cls()
@@ -150,7 +150,7 @@ class KibanaInstrumentor:
 
         return self._enabled and _obs.OTEL_AVAILABLE
 
-    def get_tracer(self) -> Optional["Tracer"]:
+    def get_tracer(self) -> Tracer | None:
         """Get the tracer instance."""
         return self._tracer if self._enabled else None
 
@@ -197,7 +197,7 @@ def create_span(
         return None
 
 
-def set_span_error(span: Optional["Span"], error: Exception) -> None:
+def set_span_error(span: Span | None, error: Exception) -> None:
     """Mark a span as error with enhanced error handling."""
     import kibana.observability as _obs
 
@@ -212,7 +212,7 @@ def set_span_error(span: Optional["Span"], error: Exception) -> None:
 
 
 def safe_span_operation(
-    span: Optional["Span"], operation: str, func, *args, **kwargs
+    span: Span | None, operation: str, func, *args, **kwargs
 ) -> Any:
     """Safely execute a span operation without interrupting main execution."""
     import kibana.observability as _obs

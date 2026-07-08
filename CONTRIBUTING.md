@@ -148,15 +148,26 @@ nox -s lint
 # Stage your changes
 git add .
 
-# Commit with a descriptive message
-git commit -m "Add feature: description of your changes"
+# Commit with a Conventional-Commit subject and a provenance trailer
+git commit -s -m "feat: description of your change"
 ```
 
-Follow these commit message guidelines:
-- Use present tense ("Add feature" not "Added feature")
-- Use imperative mood ("Move cursor to..." not "Moves cursor to...")
-- Limit first line to 72 characters
-- Reference issues and pull requests when relevant
+Commit messages are machine-checked by pre-commit (`conventional-pre-commit` + a
+trailer hook). Each commit must:
+
+- Start with a Conventional-Commit type prefix — one of
+  `feat, fix, docs, chore, refactor, test, build, ci, perf, style, revert`
+  (e.g. `fix(examples): repair cleanup ordering`).
+- Use present tense, imperative mood; keep the subject under ~72 characters.
+- Carry a provenance trailer in the body — the simplest is `git commit -s`
+  (a `Signed-off-by:`), which also satisfies the [DCO](https://developercertificate.org/).
+  `Co-Authored-By:`, `Refs:`, and `Evidence:` (a link to a captured test/run) also
+  satisfy it. When a commit's correctness rests on a run, add
+  `Evidence: <path-or-url>` so the proof travels with the commit.
+- Reference issues/PRs when relevant.
+
+Run `./bootstrap.sh` once to install the hooks locally; CI re-runs the same
+config (`.github/workflows/checks.yml`).
 
 ### 6. Push and Create Pull Request
 

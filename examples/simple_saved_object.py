@@ -19,11 +19,15 @@ from utils import (
     configure_example_telemetry,
     create_kibana_client,
     print_config_info,
+    print_kept,
     print_telemetry_info,
+    resource_prefix,
     setup_telemetry_cleanup,
     should_cleanup,
     should_enable_telemetry,
 )
+
+from kibana.exceptions import NotFoundError
 
 # Set up logger for this example
 logger = logging.getLogger("kibana.examples.simple_saved_object")
@@ -57,9 +61,25 @@ def main():
     # Initialize Kibana client with automatic configuration
     client = create_kibana_client()
 
+    prefix = resource_prefix(__file__)  # "kbnpy-simple-saved-object"
+    data_view_id = f"{prefix}-apm-traces"
+    viz_id = f"{prefix}-viz"
+    created: list[tuple[str, str]] = []
+
     try:
+        # Idempotent start: clear only THIS example's own prior resources.
+        # Dependency order matters: the visualization references the data
+        # view, so it must be deleted first.
+        try:
+            client.saved_objects.delete(type="visualization", id=viz_id)
+        except NotFoundError:
+            pass
+        try:
+            client.saved_objects.delete(type="index-pattern", id=data_view_id)
+        except NotFoundError:
+            pass
+
         # 1. Create a data view (index pattern) for APM traces
-        data_view_id = "kibana-py-apm-traces"
         print("Creating data view...")
         logger.info(
             "Creating data view saved object",
@@ -80,6 +100,7 @@ def main():
         )
 
         dv_object = dv_response.body
+        created.append(("data view (index-pattern)", data_view_id))
         print(f"✓ Created data view: {dv_object['id']}")
         print(f"  Pattern: {dv_object['attributes']['title']}")
         logger.info(
@@ -98,7 +119,7 @@ def main():
             "Creating visualization saved object",
             extra={
                 "object_type": "visualization",
-                "object_id": "my-test-viz",
+                "object_id": viz_id,
                 "operation": "create",
             },
         )
@@ -161,7 +182,7 @@ def main():
                 "version": 1,
                 "kibanaSavedObjectMeta": {"searchSourceJSON": search_source},
             },
-            id="my-test-viz",
+            id=viz_id,
             references=[
                 {
                     "id": data_view_id,
@@ -173,6 +194,7 @@ def main():
 
         saved_object = create_response.body  # Access the body attribute
         obj_id = saved_object["id"]
+        created.append(("visualization", obj_id))
 
         logger.info(
             "Visualization created successfully",
@@ -203,41 +225,46 @@ def main():
         print(f"   Object ID: {obj_id}")
         print("   Access it in Kibana's Visualize app")
 
-        # Ask user about cleanup
-        print(
-            f"\nVisualization '{retrieved['attributes']['title']}' was created for this example."
+    except Exception as e:
+        print(f"❌ Error: {e}")
+        logger.error(
+            "Saved object example failed",
+            extra={"error": str(e), "example": "simple_saved_object"},
         )
+    finally:
+        # 4. Clean up (or keep). Delete ordering matters: the visualization
+        # references the data view, so it must be deleted first.
         if should_cleanup("Delete the visualization and data view? (y/N): "):
             print("Cleaning up...")
             logger.info(
                 "Deleting saved objects",
                 extra={
-                    "object_id": obj_id,
+                    "object_id": viz_id,
                     "data_view_id": data_view_id,
                     "operation": "delete",
                 },
             )
             try:
-                client.saved_objects.delete(type="visualization", id=obj_id)
+                client.saved_objects.delete(type="visualization", id=viz_id)
                 print("✓ Visualization deleted")
                 logger.info(
                     "Visualization deleted successfully",
-                    extra={"object_id": obj_id, "operation": "delete"},
+                    extra={"object_id": viz_id, "operation": "delete"},
                 )
             except Exception as e:
                 # Check if the object was actually deleted
                 try:
-                    client.saved_objects.get(type="visualization", id=obj_id)
+                    client.saved_objects.get(type="visualization", id=viz_id)
                     print(f"❌ Failed to delete visualization: {e}")
                     logger.error(
                         "Failed to delete visualization",
-                        extra={"object_id": obj_id, "error": str(e)},
+                        extra={"object_id": viz_id, "error": str(e)},
                     )
                 except Exception:
                     print("✓ Visualization deleted (confirmed)")
                     logger.info(
                         "Visualization deletion confirmed",
-                        extra={"object_id": obj_id, "operation": "delete"},
+                        extra={"object_id": viz_id, "operation": "delete"},
                     )
             try:
                 client.saved_objects.delete(type="index-pattern", id=data_view_id)
@@ -261,20 +288,11 @@ def main():
                         extra={"object_id": data_view_id, "operation": "delete"},
                     )
         else:
-            print(f"✓ Visualization kept (ID: {obj_id})")
-            print(f"✓ Data view kept (ID: {data_view_id})")
+            print_kept(created)
             logger.info(
                 "Saved objects kept by user choice",
-                extra={"object_id": obj_id, "data_view_id": data_view_id},
+                extra={"object_id": viz_id, "data_view_id": data_view_id},
             )
-
-    except Exception as e:
-        print(f"❌ Error: {e}")
-        logger.error(
-            "Saved object example failed",
-            extra={"error": str(e), "example": "simple_saved_object"},
-        )
-    finally:
         logger.info("Simple saved object example completed")
         client.close()
 

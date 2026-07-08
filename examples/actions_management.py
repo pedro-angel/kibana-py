@@ -23,11 +23,15 @@ from utils import (
     configure_example_telemetry,
     create_kibana_client,
     print_config_info,
+    print_kept,
     print_telemetry_info,
+    resource_prefix,
     setup_telemetry_cleanup,
     should_cleanup,
     should_enable_telemetry,
 )
+
+from kibana.exceptions import NotFoundError
 
 
 def list_connector_types(client):
@@ -78,13 +82,26 @@ def list_existing_connectors(client):
         return []
 
 
-def create_index_connector(client):
+def _delete_if_exists(client, connector_id):
+    """Idempotent start: clear this example's OWN prior connector (stable id)
+    from an earlier kept run before creating a fresh one (own scope only)."""
+    try:
+        client.actions.delete(id=connector_id)
+        print(f"  (cleared leftover connector {connector_id!r})")
+    except NotFoundError:
+        pass
+
+
+def create_index_connector(client, prefix):
     """Create an index connector for writing to Elasticsearch."""
     import logging
 
     logger = logging.getLogger(__name__)
 
     print("\n=== Creating Index Connector ===")
+
+    connector_id = f"{prefix}-index"
+    _delete_if_exists(client, connector_id)
 
     try:
         logger.info(
@@ -97,7 +114,8 @@ def create_index_connector(client):
         )
 
         connector_response = client.actions.create(
-            name="Example Index Connector",
+            id=connector_id,
+            name=f"{prefix}-index-connector",
             connector_type_id=".index",
             config={
                 "index": "kibana-connector-example",
@@ -139,13 +157,17 @@ def create_index_connector(client):
         return None
 
 
-def create_webhook_connector(client):
+def create_webhook_connector(client, prefix):
     """Create a webhook connector for HTTP requests."""
     print("\n=== Creating Webhook Connector ===")
 
+    connector_id = f"{prefix}-webhook"
+    _delete_if_exists(client, connector_id)
+
     try:
         connector_response = client.actions.create(
-            name="Example Webhook Connector",
+            id=connector_id,
+            name=f"{prefix}-webhook-connector",
             connector_type_id=".webhook",
             config={
                 "url": "https://httpbin.org/post",
@@ -168,13 +190,17 @@ def create_webhook_connector(client):
         return None
 
 
-def create_server_log_connector(client):
+def create_server_log_connector(client, prefix):
     """Create a server log connector for logging."""
     print("\n=== Creating Server Log Connector ===")
 
+    connector_id = f"{prefix}-log"
+    _delete_if_exists(client, connector_id)
+
     try:
         connector_response = client.actions.create(
-            name="Example Server Log Connector",
+            id=connector_id,
+            name=f"{prefix}-server-log-connector",
             connector_type_id=".server-log",
             config={},  # Server log connector has no configuration
         )
@@ -245,7 +271,12 @@ def update_connector(client, connector_id):
 
 
 def execute_index_connector(client, connector_id):
-    """Execute an index connector to write documents."""
+    """Execute an index connector to write documents.
+
+    Note: this writes real documents into the Elasticsearch index
+    ``kibana-connector-example`` as a side effect. There is no delete API for
+    that index in this example — it is intentionally NOT cleaned up.
+    """
     import logging
 
     logger = logging.getLogger(__name__)
@@ -387,25 +418,26 @@ def delete_connector(client, connector_id):
             print("✓ Connector deleted (confirmed)")
 
 
-def cleanup_connectors(client, connector_ids):
-    """Clean up created connectors."""
-    if not connector_ids:
+def cleanup_connectors(client, created):
+    """Clean up created connectors.
+
+    Called from ``finally`` (gated by ``should_cleanup()``) so a mid-run
+    exception still tears down whatever connectors were already created.
+    """
+    if not created:
         return
 
-    print("\n=== Cleanup ===")
-    print(f"Created {len(connector_ids)} connectors during this example.")
-
     if should_cleanup("Delete all created connectors? (y/N): "):
+        print("\n=== Cleanup ===")
+        print(f"Created {len(created)} connectors during this example.")
         print("Cleaning up...")
-        for connector_id in connector_ids:
+        for _, connector_id in created:
             try:
                 delete_connector(client, connector_id)
             except Exception as e:
                 print(f"❌ Error deleting {connector_id}: {e}")
     else:
-        print("✓ Connectors kept:")
-        for connector_id in connector_ids:
-            print(f"  - {connector_id}")
+        print_kept(created)
 
 
 def main():
@@ -455,7 +487,8 @@ def main():
 
     # Initialize client
     client = create_kibana_client()
-    created_connector_ids = []
+    prefix = resource_prefix(__file__)  # "kbnpy-actions"
+    created: list[tuple[str, str]] = []
 
     try:
         # List available connector types
@@ -464,18 +497,18 @@ def main():
         # List existing connectors
         list_existing_connectors(client)
 
-        # Create different types of connectors
-        index_connector_id = create_index_connector(client)
+        # Create different types of connectors (server-generated ids)
+        index_connector_id = create_index_connector(client, prefix)
         if index_connector_id:
-            created_connector_ids.append(index_connector_id)
+            created.append(("connector (.index)", index_connector_id))
 
-        webhook_connector_id = create_webhook_connector(client)
+        webhook_connector_id = create_webhook_connector(client, prefix)
         if webhook_connector_id:
-            created_connector_ids.append(webhook_connector_id)
+            created.append(("connector (.webhook)", webhook_connector_id))
 
-        server_log_connector_id = create_server_log_connector(client)
+        server_log_connector_id = create_server_log_connector(client, prefix)
         if server_log_connector_id:
-            created_connector_ids.append(server_log_connector_id)
+            created.append(("connector (.server-log)", server_log_connector_id))
 
         # Get detailed info about the first connector
         if index_connector_id:
@@ -499,9 +532,15 @@ def main():
         print("\n" + "=" * 70)
         print("✅ Actions Management Example Completed!")
         print("=" * 70)
-        print(f"\nCreated {len(created_connector_ids)} connectors:")
-        for connector_id in created_connector_ids:
+        print(f"\nCreated {len(created)} connectors:")
+        for _, connector_id in created:
             print(f"  - {connector_id}")
+        if index_connector_id:
+            print(
+                "\nNote: executing the index connector wrote documents to the "
+                "Elasticsearch index 'kibana-connector-example'; that index is "
+                "NOT deleted by this example."
+            )
 
         print("\nYou can view these connectors in Kibana:")
         print("  Stack Management → Connectors")
@@ -509,15 +548,15 @@ def main():
             "  URL: http://localhost:5601/app/management/insightsAndAlerting/connectors"
         )
 
-        # Cleanup
-        cleanup_connectors(client, created_connector_ids)
-
     except Exception as e:
         print(f"\n❌ Unexpected error: {e}")
         import traceback
 
         traceback.print_exc()
     finally:
+        # Cleanup runs here (not on the happy path inside `try`) so a
+        # mid-run exception still tears down whatever was created.
+        cleanup_connectors(client, created)
         client.close()
 
 

@@ -1,13 +1,14 @@
 # Quick Start
 
-This guide will help you get started with kibana-py quickly. We'll cover basic client initialization, authentication, and a simple example of working with connectors.
+This guide will help you get started with kibana-py quickly. We'll cover basic client initialization, authentication, and first examples with dashboards and connectors.
 
 ## Prerequisites
 
 Before you begin, make sure you have:
 
+- **Python 3.14 or newer** — kibana-py requires Python >= 3.14
 - Installed kibana-py (see {doc}`installation`)
-- A running Kibana instance (version 9.x)
+- A running Kibana instance (version 9.4.x recommended; kibana-py is tested against Kibana 9.4.3)
 - Valid credentials for authentication
 
 ## Basic Usage
@@ -105,6 +106,54 @@ with Kibana("http://localhost:5601", basic_auth=("elastic", "password")) as clie
     # Client is automatically closed when exiting the context
 ```
 
+## Your First Dashboard
+
+Kibana 9.4 ships a new Dashboards HTTP API (technical preview) for managing dashboards as code — the headline feature of this release. Here's a complete round trip:
+
+```python
+from kibana import Kibana
+
+with Kibana("http://localhost:5601", basic_auth=("elastic", "password")) as client:
+    # Create a dashboard with a markdown panel
+    dashboard = client.dashboards.create(
+        title="My First Dashboard",
+        description="Created with kibana-py",
+        panels=[
+            {
+                "type": "markdown",
+                "grid": {"x": 0, "y": 0, "w": 24, "h": 15},
+                "config": {
+                    "content": "# Hello from kibana-py",
+                    "settings": {},
+                },
+            }
+        ],
+        time_range={"from": "now-7d", "to": "now"},
+    )
+    dashboard_id = dashboard.body["id"]
+    print(f"✓ Created dashboard: {dashboard_id}")
+
+    # Read it back — responses use an {id, data, meta} envelope
+    fetched = client.dashboards.get(id=dashboard_id)
+    print(f"✓ Title: {fetched.body['data']['title']}")
+
+    # Search dashboards by title
+    results = client.dashboards.get_all(query="My First*")
+    print(f"✓ Found {results.body['total']} dashboard(s)")
+
+    # Clean up
+    client.dashboards.delete(id=dashboard_id)
+    print("✓ Dashboard deleted")
+```
+
+To create a dashboard with a custom, stable ID (great for dashboards managed in version control), use `update()`, which upserts:
+
+```python
+client.dashboards.update(id="team-overview", title="Team Overview")
+```
+
+See {doc}`user-guide/dashboards` for the full guide, including panels, search filters, space-scoped usage, and live-server caveats.
+
 ## Complete Example: Working with Connectors
 
 Here's a complete example that demonstrates creating, using, and cleaning up a connector:
@@ -122,7 +171,7 @@ client = Kibana(
 try:
     # Create a webhook connector
     print("Creating webhook connector...")
-    connector = client.actions.create(
+    connector = client.connectors.create(
         name="My Webhook",
         connector_type_id=".webhook",
         config={
@@ -137,18 +186,18 @@ try:
 
     # List all connectors
     print("\nListing all connectors...")
-    connectors = client.actions.get_all()
+    connectors = client.connectors.get_all()
     for conn in connectors.body:
         print(f"  - {conn['name']} ({conn['connector_type_id']})")
 
     # Get the specific connector
     print(f"\nRetrieving connector {connector_id}...")
-    retrieved = client.actions.get(id=connector_id)
+    retrieved = client.connectors.get(id=connector_id)
     print(f"✓ Connector name: {retrieved.body['name']}")
 
     # Execute the connector
     print("\nExecuting connector...")
-    result = client.actions.execute(
+    result = client.connectors.execute(
         id=connector_id,
         params={"body": '{"message": "Hello from Kibana!"}'}
     )
@@ -156,7 +205,7 @@ try:
 
     # Clean up: delete the connector
     print(f"\nDeleting connector {connector_id}...")
-    client.actions.delete(id=connector_id)
+    client.connectors.delete(id=connector_id)
     print("✓ Connector deleted")
 
 except NotFoundError as e:
@@ -187,7 +236,7 @@ client = Kibana("http://localhost:5601", basic_auth=("elastic", "password"))
 
 try:
     # Try to get a non-existent connector
-    connector = client.actions.get(id="non-existent-id")
+    connector = client.connectors.get(id="non-existent-id")
 except NotFoundError as e:
     print(f"Connector not found: {e.message}")
 except AuthenticationException as e:
@@ -223,7 +272,7 @@ async def main():
         print(f"Kibana status: {status.body['status']['overall']['level']}")
 
         # Create a connector
-        connector = await client.actions.create(
+        connector = await client.connectors.create(
             name="Async Webhook",
             connector_type_id=".webhook",
             config={"url": "https://example.com/webhook"}
@@ -251,15 +300,15 @@ from kibana import Kibana
 client = Kibana("http://localhost:5601", basic_auth=("elastic", "password"))
 
 # Set a longer timeout for a specific request
-result = client.options(request_timeout=60).actions.get_all()
+result = client.options(request_timeout=60).connectors.get_all()
 
 # Use different authentication for a specific request
-result = client.options(api_key="different_key").actions.get_all()
+result = client.options(api_key="different_key").connectors.get_all()
 
 # Add custom headers
 result = client.options(
     headers={"X-Custom-Header": "value"}
-).actions.get_all()
+).connectors.get_all()
 
 client.close()
 ```
@@ -274,7 +323,7 @@ from kibana import Kibana
 client = Kibana("http://localhost:5601", basic_auth=("elastic", "password"))
 
 # Create a connector in a specific space
-connector = client.actions.create(
+connector = client.connectors.create(
     name="Marketing Webhook",
     connector_type_id=".webhook",
     config={"url": "https://example.com/webhook"},
@@ -283,7 +332,7 @@ connector = client.actions.create(
 
 # Or use a space-scoped client for multiple operations
 marketing_client = client.space("marketing")
-connector = marketing_client.actions.create(
+connector = marketing_client.connectors.create(
     name="Marketing Webhook",
     connector_type_id=".webhook",
     config={"url": "https://example.com/webhook"}
@@ -298,10 +347,14 @@ See {doc}`user-guide/spaces` for comprehensive space management.
 
 Now that you've learned the basics, explore these topics:
 
+- **{doc}`user-guide/dashboards`** - The new Dashboards HTTP API (tech preview)
+- **{doc}`user-guide/alerting`** - Alerting rule lifecycle, snooze, and backfills
+- **{doc}`user-guide/data-views`** - Data views and runtime fields
+- **{doc}`user-guide/cases`** - Case management
 - **{doc}`user-guide/authentication`** - Detailed authentication configuration
 - **{doc}`user-guide/connectors`** - Complete guide to working with connectors
 - **{doc}`user-guide/spaces`** - Multi-tenancy with Kibana Spaces
-- **{doc}`user-guide/saved-objects`** - Managing dashboards and visualizations
+- **{doc}`user-guide/platform-apis`** - Tour of all remaining API namespaces
 - **{doc}`user-guide/error-handling`** - Comprehensive error handling
 - **{doc}`user-guide/observability`** - OpenTelemetry integration
 - **{doc}`examples/index`** - More code examples
@@ -330,7 +383,7 @@ with Kibana("http://localhost:5601") as client:
 from kibana import Kibana
 
 with Kibana("http://localhost:5601", basic_auth=("elastic", "password")) as client:
-    types = client.actions.list_types()
+    types = client.connectors.list_types()
 
     print("Available connector types:")
     for connector_type in types.body:

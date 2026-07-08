@@ -19,6 +19,7 @@ from utils import (
     configure_example_telemetry,
     create_async_kibana_client,
     print_config_info,
+    print_kept,
     print_telemetry_info,
     setup_telemetry_cleanup,
     should_cleanup,
@@ -191,10 +192,13 @@ async def main():
 
     # Create async Kibana client with automatic configuration
     client = create_async_kibana_client()
+    connector_id: str | None = None
+    created: list[tuple[str, str]] = []
 
     try:
         # 1. Create the connector
         connector_id = await create_connector(client)
+        created.append(("index connector", connector_id))
 
         # 2. Prepare sample documents
         sample_documents = [
@@ -263,22 +267,6 @@ async def main():
         print("   Check the 'miconnectedindex' index in Elasticsearch.")
         print(f"   Connector ID: {connector_id}")
 
-        # Optional cleanup
-        if should_cleanup("\nDelete the connector? (y/N): "):
-            print("Cleaning up...")
-            try:
-                await client.actions.delete(id=connector_id)
-                print("✓ Connector deleted")
-            except Exception as e:
-                # Some DELETE operations return empty responses which can cause JSON parsing errors
-                # Check if the connector was actually deleted
-                try:
-                    await client.actions.get(id=connector_id)
-                    print(f"❌ Failed to delete connector: {e}")
-                except Exception:
-                    # If get() fails, the connector was likely deleted successfully
-                    print("✓ Connector deleted (confirmed)")
-
     except Exception as e:
         print(f"❌ Error: {e}")
         import traceback
@@ -286,6 +274,27 @@ async def main():
         traceback.print_exc()
 
     finally:
+        # Teardown lives here (not on the happy path inside `try`) so a
+        # mid-run exception still cleans up the connector that was created.
+        if connector_id:
+            if should_cleanup("\nDelete the connector? (y/N): "):
+                print("Cleaning up...")
+                try:
+                    await client.actions.delete(id=connector_id)
+                    print("✓ Connector deleted")
+                except Exception as e:
+                    # Some DELETE operations return empty responses which can
+                    # cause JSON parsing errors. Check if the connector was
+                    # actually deleted.
+                    try:
+                        await client.actions.get(id=connector_id)
+                        print(f"❌ Failed to delete connector: {e}")
+                    except Exception:
+                        # If get() fails, the connector was likely deleted
+                        print("✓ Connector deleted (confirmed)")
+            else:
+                print_kept(created)
+
         # Close the client
         await client.close()
         print("Client closed")

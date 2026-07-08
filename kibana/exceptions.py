@@ -88,6 +88,10 @@ class ApiError(KibanaException):
         self.body = body
         self.status_code = meta.status
 
+    def __str__(self) -> str:
+        """Format as ``[<status>] <message>`` so the HTTP status is always visible."""
+        return f"[{self.status_code}] {self.message}"
+
 
 class TransportError(KibanaException):
     """Transport-level error.
