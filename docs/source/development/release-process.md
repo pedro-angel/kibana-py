@@ -39,7 +39,7 @@ Use this checklist for every release:
 - [ ] `make check` passes locally (pre-commit, lint, dependency audit, SAST, unit tests)
 - [ ] `make test-python-matrix` passes locally (multi-Python unit test matrix via nox; missing local interpreters are skipped)
 - [ ] Documentation is up to date
-- [ ] Integration tests pass if client logic changed (`make test-integration`)
+- [ ] Integration tests pass locally against a live stack (`make test-integration`) — **required**; CI does not run them (they need a Docker Elastic Stack)
 - [ ] CHANGELOG.md is updated with release notes
 - [ ] Version number is updated in `kibana/_version.py`
 
@@ -111,7 +111,10 @@ make test-python-matrix
 
 If some Python versions are not installed locally, nox skips them. The CI matrix remains the source of truth for full version coverage.
 
-Optionally run integration tests when API/client behavior changed:
+Run the integration suite against a live local stack. This is **required** before a
+release: it is the only gate that exercises real API/client behavior end-to-end. CI
+does not run integration tests (they need a Docker Elastic Stack), so a green CI run is
+not sufficient on its own.
 
 ```bash
 make test-integration

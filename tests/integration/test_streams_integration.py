@@ -37,19 +37,66 @@ def _streams_enabled(client) -> bool:
         return False
 
 
+# The Streams technical-preview sub-features (significant events, attachments,
+# content packs, query streams) are each gated behind an ``observability:``
+# advanced (UI) setting that defaults to off. Until enabled, their endpoints
+# reject calls with 400/403/422. The settings are runtime-toggleable through the
+# internal settings API, so the session fixture switches them on and restores the
+# prior values afterwards -- the same enable/restore contract used for streams.
+_STREAMS_FEATURE_SETTINGS = (
+    "observability:streamsEnableSignificantEvents",
+    "observability:streamsEnableAttachments",
+    "observability:streamsEnableContentPacks",
+    "observability:streamsEnableQueryStreams",
+)
+
+# The settings routes are internal, so they need the internal-origin header
+# (mirrors the pattern in kibana/_sync/client/timeline.py).
+_SETTINGS_PATH = "/internal/kibana/settings"
+_SETTINGS_HEADERS = {
+    "accept": "application/json",
+    "x-elastic-internal-origin": "kibana-py",
+}
+
+
+def _get_feature_settings(client) -> dict:
+    """Return each feature setting's current user value (None when unset/default)."""
+    resp = client.perform_request("GET", _SETTINGS_PATH, headers=_SETTINGS_HEADERS)
+    settings = resp.body.get("settings", {})
+    return {
+        key: settings.get(key, {}).get("userValue") for key in _STREAMS_FEATURE_SETTINGS
+    }
+
+
+def _apply_feature_settings(client, changes: dict) -> None:
+    """Set (value) or clear (None) advanced settings via the internal API."""
+    client.perform_request(
+        "POST", _SETTINGS_PATH, headers=_SETTINGS_HEADERS, body={"changes": changes}
+    )
+
+
 @pytest.fixture(scope="session")
 def streams_enabled_session():
-    """Enable streams for the test session and restore the prior state."""
+    """Enable streams + preview sub-features for the session; restore prior state."""
     client = create_test_kibana_client(auth_method="auto")
     was_enabled = _streams_enabled(client)
+    prior_settings = _get_feature_settings(client)
     client.streams.enable()
+    _apply_feature_settings(client, dict.fromkeys(_STREAMS_FEATURE_SETTINGS, True))
     try:
         yield
     finally:
-        # Restore the pre-test state: only disable if we enabled it
-        if not was_enabled:
-            client.streams.disable()
-        client.close()
+        # Best-effort teardown: isolate the restore/disable steps so a hiccup can't
+        # leave the shared live stack dirty or the session transport open --
+        # client.close() must always run.
+        try:
+            # Restore advanced settings to their pre-test values (None clears them).
+            _apply_feature_settings(client, prior_settings)
+            # Restore the pre-test streams state: only disable if we enabled it.
+            if not was_enabled:
+                client.streams.disable()
+        finally:
+            client.close()
 
 
 @pytest.fixture
