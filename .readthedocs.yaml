@@ -15,10 +15,9 @@ sphinx:
   configuration: docs/source/conf.py
   fail_on_warning: true
 
-# Optionally build your docs in additional formats such as PDF and ePub
-formats:
-  - pdf
-  - epub
+# HTML only: the architecture/release diagrams are Mermaid, which the pdf/epub (LaTeX)
+# builders can only render via the Node-based mermaid-cli (mmdc) — not worth provisioning
+# on RTD for auto-generated API docs. Re-add formats here if mmdc is ever set up.
 
 # Python configuration
 python:
