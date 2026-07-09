@@ -14,25 +14,15 @@ this page explains how to drive it.
 A single action — pushing an annotated `vX.Y.Z` tag whose commit is on `main` — triggers
 the whole pipeline:
 
-```text
-  git push origin vX.Y.Z
-          │
-          ▼
-  ┌───────────────────┐   tag on main? tag == _version.py? CHANGELOG entry exists?
-  │  validate-release │───────────────────────────────────────────────┐ (fails fast)
-  └─────────┬─────────┘                                                │
-            ▼                                                          │
-  ┌───────────────────┐   python -m build → twine check →             │
-  │       build       │   wheel-content guard → SBOM → upload artifact │
-  └─────────┬─────────┘                                                │
-            ▼                                                          │
-  ┌───────────────────────┐   softprops/action-gh-release             │
-  │ publish-github-release │   (generated notes + dist/* attached)     │
-  └─────────┬─────────────┘                                            │
-            ▼                                                          │
-  ┌───────────────────┐   PyPI trusted publishing (OIDC, no token)    │
-  │    publish-pypi   │◄──────────────────────────────────────────────┘
-  └───────────────────┘
+```{mermaid}
+flowchart TD
+    push(["git push origin vX.Y.Z"]) --> validate
+    validate["<b>validate-release</b><br/>tag reachable from main?<br/>tag == kibana/_version.py?<br/>CHANGELOG entry exists?"]
+    validate -- "any check fails" --> halt(["release stops — nothing published"])
+    validate -- "all pass" --> build["<b>build</b><br/>python -m build → twine check<br/>wheel-content guard → SBOM<br/>upload dist artifact"]
+    build --> ghrel["<b>publish-github-release</b><br/>generated notes + dist/* attached"]
+    build --> pypi["<b>publish-pypi</b><br/>OIDC trusted publishing — no token"]
+    ghrel --> pypi
 ```
 
 Jobs, in order (source of truth: `release.yml`):
