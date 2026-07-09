@@ -2,6 +2,20 @@
 
 This document provides an overview of the kibana-py architecture, design patterns, and key architectural decisions.
 
+## System Context
+
+```{mermaid}
+flowchart LR
+    app["Your application"] --> client["kibana-py<br/>Kibana / AsyncKibana"]
+    client -- "HTTP(S) via elastic-transport" --> kibana["Kibana REST API"]
+    kibana --> es[("Elasticsearch")]
+    client -. "optional OTLP traces & logs" .-> otel["OpenTelemetry collector / APM"]
+```
+
+kibana-py is a client library: it holds no state of its own beyond per-client caches, and
+every operation is an HTTP request to the Kibana REST API (which in turn talks to
+Elasticsearch). Observability export is optional and off by default.
+
 ## Project Structure
 
 ```
@@ -70,15 +84,45 @@ The architecture supports the full Kibana REST API:
 
 ### Base Client Architecture
 
+The relationships are composition-first: only `Kibana`/`AsyncKibana` inherit from
+`BaseClient`. Namespace clients do **not** inherit from it — they wrap the parent client
+and delegate requests to it.
+
+```{mermaid}
+classDiagram
+    class BaseClient {
+        transport, auth, serialization
+        perform_request()
+        options()
+    }
+    class Kibana {
+        40 namespace clients as attributes
+        space(space_id)
+    }
+    class NamespaceClient {
+        _client
+        _build_space_path()
+        perform_request()
+    }
+    class ActionsClient
+    class SpacesClient
+    class SpaceScopedKibana {
+        same API surface, space-scoped
+    }
+    BaseClient <|-- Kibana : inherits
+    Kibana "1" *-- "40" NamespaceClient : instantiates in __init__
+    NamespaceClient <|-- ActionsClient
+    NamespaceClient <|-- SpacesClient
+    NamespaceClient ..> BaseClient : delegates requests via _client
+    SpaceScopedKibana ..> Kibana : wraps with space context
 ```
-BaseClient (transport, auth, core request handling)
-├── NamespaceClient (space support, common utilities)
-│   ├── ActionsClient (connector operations)
-│   ├── SavedObjectsClient (saved object operations)
-│   ├── SpacesClient (space management)
-│   └── [Future API clients]
-└── SpaceScopedKibana (space context wrapper)
-```
+
+| Edge | Meaning |
+|------|---------|
+| `Kibana` → `BaseClient` | Inheritance — `class Kibana(BaseClient)` owns transport, auth, serialization. |
+| `Kibana` → namespace clients | Composition — all 40 are instantiated eagerly in `Kibana.__init__` (`self.actions = ActionsClient(self)`, …). |
+| namespace client → `BaseClient` | Delegation — `NamespaceClient` holds `_client` and forwards `perform_request` to it; it does **not** subclass `BaseClient`. |
+| `SpaceScopedKibana` → `Kibana` | Wrapper — the same API surface with every operation scoped to one space. |
 
 ### BaseClient
 
@@ -111,22 +155,23 @@ class BaseClient:
 
 ### NamespaceClient
 
-The `NamespaceClient` extends `BaseClient` with space support:
+The `NamespaceClient` wraps a parent `BaseClient` and adds space support (it delegates
+requests to the parent rather than inheriting from it):
 
 ```python
-class NamespaceClient(BaseClient):
-    """Base client with space support."""
+class NamespaceClient:
+    """Base class for all namespace clients."""
 
     def __init__(
         self,
-        base_client: BaseClient,
-        *,
+        client: BaseClient,
         default_space_id: str | None = None,
         validate_spaces: bool = True,
-    ):
-        # Inherit from base client
-        # Set up space validation
-        # Initialize cache
+    ) -> None:
+        self._client = client  # delegate requests to the parent client
+        self._default_space_id = default_space_id
+        self._validate_spaces = validate_spaces
+        self._space_cache = {}  # space-existence cache (5-minute TTL)
 ```
 
 **Responsibilities**:
@@ -159,7 +204,31 @@ class ActionsClient(NamespaceClient):
 
 ### 1. Space Support Pattern
 
-All clients that support spaces use the same pattern:
+All clients that support spaces use the same pattern. A space-scoped call flows like
+this (validation is cached, so the `spaces.get` round-trip happens at most once per
+space per TTL window):
+
+```{mermaid}
+sequenceDiagram
+    participant App as Caller
+    participant NS as ActionsClient
+    participant Base as Kibana (BaseClient)
+    participant Srv as Kibana server
+    App->>NS: create(name=..., space_id="marketing")
+    NS->>NS: _build_space_path(): validate id format
+    opt space validation on, cache miss
+        NS->>Base: spaces.get(id="marketing")
+        Base->>Srv: GET /api/spaces/space/marketing
+        Srv-->>Base: 200 OK
+        NS->>NS: cache existence (TTL 5 min)
+    end
+    NS->>Base: perform_request(POST /s/marketing/api/actions/connector)
+    Base->>Srv: HTTP POST with auth headers + serialized body
+    Srv-->>Base: 200 + JSON
+    Base-->>App: ObjectApiResponse
+```
+
+In code:
 
 ```python
 def method(
