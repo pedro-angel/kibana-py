@@ -18,6 +18,7 @@ Red-flag thoughts that mean STOP and apply this skill:
 - "I'll hold the approval step in memory — the run won't last long enough to restart."
 - "We say it's read-only; we don't need a test proving it."
 - "Let the agent post it and we'll review afterward if something looks off."
+- "It's just a tag push / a merge — the automation it triggers is a separate concern."
 
 ## The rule
 
@@ -28,6 +29,7 @@ Red-flag thoughts that mean STOP and apply this skill:
 5. **Keep run state in a durable checkpoint/state store (a "checkpointer"), not process memory.** So a service can pause, drop to zero, and resume on a new instance by rehydrating state from the store — without re-running the model or re-doing the work.
 6. **Show the reviewer the real basis for the decision.** Surface the deterministic gate's grading — grounded, verifiable facts — not an invented confidence score. The human approves on what actually routed the run.
 7. **Enforce the posture in infrastructure too.** Private ingress, no public binding, read-only egress credentials. The principle should hold even if application code is wrong.
+8. **Gate on the consequence, not the command — and make the human name the irreversible effect.** Innocuous-looking actions carry consequence at a distance: a tag push that triggers a publish pipeline *is* the publish; a merge that triggers a deploy *is* the deploy. Classify an action by its downstream irreversible effect (a version pushed to a public package registry can never be replaced), and require the approval to name that effect — "publish X.Y.Z to the registry," not "do the release." An approval of the errand is not an approval of the consequence.
 
 ## Why
 
@@ -45,12 +47,15 @@ On the project this was distilled from — a hexagonal, human-in-the-loop AI age
 
 You can apply the same shape without knowing that project: read-only external adapters, a test that pins it, persist-then-pause for approval, checkpointed state, and infra that assumes the code might be wrong.
 
+A later field test showed the rule guarding its own author: an agent about to push a release tag was stopped by its permission layer because the human had approved "the version jump" but had never named the irreversible act the tag would trigger — publication to a public package registry. The release proceeded only after the human explicitly authorized publishing that version. That is rule 8 operating as written: the consequential act was the publish, not the push.
+
 ## Anti-patterns
 
 - Holding the approval pause in process memory, so a restart kills it and forces a full re-run (or silently drops the decision).
 - Treating read-only as a feature flag that can be flipped, rather than an invariant with no write path to flip.
 - Auto-publishing the AI draft instead of waiting for explicit human approval.
 - Claiming "never writes to external systems" with no test pinning GET-only / read-only access.
+- Treating a trigger as harmless because the irreversible act lives downstream in automation — "it's just a git tag" while the workflow it fires publishes forever.
 
 ---
 

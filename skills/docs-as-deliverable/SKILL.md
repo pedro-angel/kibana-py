@@ -19,16 +19,18 @@ Red-flag thoughts that mean STOP and apply this skill:
 - "Everyone on the team already knows this, so I don't need to spell it out."
 - "I'll keep the old design doc around as-is; people will figure out it's outdated."
 - "I'll hand-type the config table into the docs so it reads nicely."
+- "The doc's example commands are close enough — nobody runs them literally."
 
 ## The rule
 
 1. **Write to a reader, in present tense, about what is.** Describe the system as it actually behaves now. Cross-link instead of repeating; one authoritative statement per fact. Cut hedging and filler.
-2. **Verify every concrete claim against the source.** Open the code/config and confirm each function signature, CLI flag, endpoint path, env var, and default. If you cannot verify it, either verify it or do not claim it.
-3. **Express architecture and flows as diagrams-as-code.** Embed parseable diagrams (e.g. Mermaid) directly in the markdown: a context/container view of the system, a sequence diagram for any multi-step or pause/resume flow, a state machine for lifecycle, and a swap map showing which interfaces have which interchangeable implementations. For graph-shaped diagrams, put a small node/edge table beside the diagram so prose, picture, and code can be checked against each other.
+2. **Verify every concrete claim against the source.** Open the code/config and confirm each function signature, CLI flag, endpoint path, env var, and default. If you cannot verify it, either verify it or do not claim it. Commands are claims too: any command a reader will copy-paste must be run, as written, against the current repo — a doc telling the reader to build a venv with an interpreter the package no longer supports fails in the first second of actually trying it.
+3. **Express architecture and flows as diagrams-as-code.** Embed parseable diagrams (e.g. Mermaid) directly in the markdown: a context/container view of the system, a sequence diagram for any multi-step or pause/resume flow, a state machine for lifecycle, and a swap map showing which interfaces have which interchangeable implementations. For graph-shaped diagrams, put a small node/edge table beside the diagram so prose, picture, and code can be checked against each other. Diagram support is toolchain setup: if the docs pipeline cannot render the diagram fence (a Sphinx build with no Mermaid extension, a wiki that strips code fences), provision the renderer before writing the doc — otherwise authors quietly fall back to the ASCII art this skill's anti-patterns forbid.
 4. **Change the diagram in the same commit as the code.** When you alter a flow, a boundary, or a state, update its diagram in that same change so it tracks implemented reality and never silently drifts.
-5. **Generate authoritative tables; don't hand-copy them.** Tables of flags, routes, config keys, or metrics should be produced from the code/config (a script, a `--help` dump, a schema export) rather than maintained as a parallel hand-edited copy that rots.
+5. **Generate authoritative tables; don't hand-copy them.** Tables of flags, routes, config keys, or metrics should be produced from the code/config (a script, a `--help` dump, a schema export) rather than maintained as a parallel hand-edited copy that rots. The same goes for embedded excerpts of machine artifacts — a workflow file, a config block: link the canonical file or generate the excerpt, because a hand-copied sketch drifts until it describes runners and job names that no longer exist.
 6. **Fence off superseded docs; never silently delete or silently keep them.** Preserve historical/design artifacts for provenance, but put a one-line banner at the top pointing to the current authoritative doc, so no reader mistakes a stale snapshot for truth.
 7. **Test the docs with context-free readers.** Have several reader agents or people, each holding only the documentation (no codebase, no tribal knowledge), try to act on it from a distinct persona — new developer, on-call/SRE, end user, skeptic. Log every point where they get stuck, guess, or are misled as a documentation defect, and fix it like a bug.
+8. **When automation implements a procedure, the doc is its operator's guide — the automation is the source of truth.** A runbook narrating manual steps beside a pipeline that performs them will eventually contradict it, and not cosmetically: a manual publish instruction next to a tag-triggered publish workflow is a double-publish. Document the trigger, what the automation does, and how to recover when a stage fails; demote any manual path to an explicitly-labeled fallback that is mutually exclusive with the automated one.
 
 ## Why
 
@@ -44,6 +46,7 @@ On the project this was distilled from — a hexagonal, human-in-the-loop AI age
 - **Drifting diagrams:** ASCII art or external diagram files (or screenshots) that no longer match the implemented graph because nothing forces them to move with the code.
 - **Unmarked or deleted history:** erasing development/design docs (losing provenance) — or leaving them unbannered so they get mistaken for current truth.
 - **Untested docs:** treating documentation as an afterthought that is never checked against whether a newcomer with no context can act on it.
+- **Runbooks that fight their automation:** manual procedure steps documented beside a pipeline that already performs them — followed literally, the two paths collide (a double-publish, a duplicate release).
 
 ---
 

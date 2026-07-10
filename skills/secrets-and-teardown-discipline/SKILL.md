@@ -5,13 +5,14 @@ description: Use when handling credentials, IaC, or ephemeral cloud — make sec
 
 # Secrets, Least Privilege, Teardown, and Scope Ownership
 
-Make secrets structurally impossible to commit, grant the narrowest privilege that works, always tear down ephemeral infrastructure and verify it reached zero, and provision only inside the lifecycle you own. Prevention is structural — not a reviewer remembering to look.
+Make secrets — and identifying details — structurally impossible to commit, grant the narrowest privilege that works, always tear down ephemeral infrastructure and verify it reached zero, and provision only inside the lifecycle you own. Prevention is structural — not a reviewer remembering to look.
 
 ## When to use
 
 Reach for this whenever you touch any of:
 
 - Credentials, API keys, tokens, connection strings, or `.env`-style config.
+- Identifying details of private infrastructure: hostnames, usernames, home paths, internal domains, non-public IPs — reconnaissance data, even when they unlock nothing.
 - Infrastructure-as-code (Terraform, Pulumi, CloudFormation, CDK, Bicep) — especially anything that grants IAM roles or creates secret containers.
 - Ephemeral or throwaway cloud environments spun up for a demo, test, or review.
 - Resources you create inside a project, account, or namespace someone else owns.
@@ -27,7 +28,7 @@ Red-flag thoughts — if you catch yourself thinking any of these, STOP and appl
 
 ## The rule
 
-1. **Gitignore secrets by pattern, allowlist only the template.** Ignore every secret-bearing file by glob (`.env`, `.env.*`, `*.tfvars`, `*.tfstate*`) and force-allow exactly one non-secret template back in (`!.env.example`). A secret should be physically unable to enter a commit, regardless of who is reviewing.
+1. **Gitignore secrets by pattern, allowlist only the template.** Ignore every secret-bearing file by glob (`.env`, `.env.*`, `*.tfvars`, `*.tfstate*`) and force-allow exactly one non-secret template back in (`!.env.example`). A secret should be physically unable to enter a commit, regardless of who is reviewing. Identifying details get the same structural treatment: a pre-commit check that derives the authoring machine's own identity at runtime and denies entries from a per-user registry that lives *outside* any repo — outside, because the list of your private names is itself a secret.
 2. **Provision the container, inject the value out-of-band.** In IaC, create the secret *container* with a placeholder; never put the real value in code or state. Add the real value through a separate channel — a CLI write (`gcloud secrets versions add`, `aws secretsmanager put-secret-value`), a CI secret store, or a manual console step. The value lives only in the secret manager, never in the repo and never in IaC state.
 3. **Grant least privilege resource-by-resource.** Scope each grant to the specific resource: secret access to *that* secret, storage access to *that* bucket — not the project or account (an AWS IAM policy scoped to a single resource ARN, or an Azure RBAC assignment scoped to one resource, says the same thing in another provider's terms). Gate optional grants behind a condition (e.g. a `count`/`for_each` flag) so they exist only when that feature is on. Use separate identities for separate phases — a build identity and a runtime identity — so neither inherits the other's reach. No broad `Editor`, no project-wide `secretAccessor`.
 4. **Deploy private by default.** Ship with internal-only ingress and no public-invoker binding. A service that does not need to be on the public internet must not be reachable from it until you deliberately open it.
