@@ -55,6 +55,11 @@ repos:
         language: script
         entry: scripts/checks/check-no-tracked-secrets.sh
         pass_filenames: false
+      - id: check-no-private-identifiers
+        name: "no private identifier (hostname, internal name) enters the repo"
+        language: script
+        entry: scripts/checks/check-no-private-identifiers.sh
+        pass_filenames: false
       - id: check-commit-trailer
         name: "commit body carries a provenance trailer"
         language: script
