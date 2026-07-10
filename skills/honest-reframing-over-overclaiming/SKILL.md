@@ -50,6 +50,10 @@ On the project this was distilled from — a human-in-the-loop AI agent — the 
 - Presenting a single live call as statistical proof of robustness.
 - Leaving a known limitation as prose only, so it silently rots — or is quietly "fixed" without anyone noticing the documented claim changed.
 
+## Enforcement
+
+What a machine can check: the temptation paths. Ground-truth fixtures behind required review (a CODEOWNERS rule or protected path), so no fix can silently edit the exam; a corpus-balance check that fails when the good or bad case count drops to zero; numbers in shipped claims traced to generated artifacts rather than hand-typed prose ([docs-as-deliverable](../docs-as-deliverable/SKILL.md)). The reframing itself is judgment — the machine's job is making the dishonest path loud, not choosing the honest words.
+
 ---
 
 Related skills:

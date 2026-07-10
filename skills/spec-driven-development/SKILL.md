@@ -47,6 +47,10 @@ On the project this was distilled from — a hexagonal, human-in-the-loop AI age
 - Collapsing "what" and "how" into one document so requirements and mechanism blur and reviewers can't isolate either.
 - Re-debating settled review notes in the next phase instead of carrying them forward as refinements.
 
+## Enforcement
+
+What a machine can check: the chain's structure, not its wisdom. A spec-structure lint — every phase doc carries a status line and a recorded review verdict, every phase names the doc it consumes, cross-links resolve — plus a version bump asserted when a spec's content changes. The judgment inside a phase is gated by the independent review the rule already requires ([adversarial-lens-review](../adversarial-lens-review/SKILL.md) is its binding form), with the verdict recorded where the lint can find it.
+
 ## Cross-links
 
 - [surgical-changes-with-checkpoints](../surgical-changes-with-checkpoints/SKILL.md)

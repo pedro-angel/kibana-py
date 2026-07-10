@@ -21,6 +21,7 @@ Before acting on a task:
 1. **Identify which skill(s) apply.** Match the task to the principles below — most non-trivial tasks touch two or three.
 2. **Load the full skill.** Read `skills/<slug>/SKILL.md` for each match. The paragraphs here are the index; the SKILL files carry the rules, red-flags, and worked examples.
 3. **For non-trivial work, follow the relevant process skill BEFORE implementing.** Starting a feature → run the spec chain first. Touching external systems → set up the ports and the boundary check first. Shipping an LLM decision → define the gate first. Do not write implementation code and back-fill the process.
+4. **Wire the Enforcement sections into your gates.** Every skill ends with an `## Enforcement` section naming what a machine can check for that principle — and what honestly stays judgment. Turn the checkable part into pre-commit hooks and CI jobs (git-controls-starter is the seeded library) instead of trusting discipline; every incident this pack records happened where a principle had no machine on it.
 
 "Non-trivial" means anything beyond a one-file, fully-understood change. When in doubt, treat it as non-trivial.
 
@@ -33,6 +34,14 @@ Ordered foundational → specific.
 ### [spec-driven-development](skills/spec-driven-development/SKILL.md)
 
 For any non-trivial feature, write an ordered design chain — BRIEF (problem and goal) → RESEARCH (what exists, constraints, options) → SPECS (the *what*: behaviors, acceptance criteria) → DESIGN (the *how*: architecture, mechanism, trade-offs) → TASKS (the build plan) — before or alongside the code, with each phase explicitly consuming the one before it. Keep *what* and *how* in separate documents so a reviewer can reject a wrong requirement before you build the right mechanism for it. Gate each phase behind an independent review and record the verdict in the doc itself; carry review notes forward as refinements rather than re-litigating settled points. Treat specs as durable, versioned artifacts: when the implementation diverges, reconcile the spec *onto the shipped code* and bump its version — a frozen optimistic spec is a lie the next reader builds on. Strike through resolved open items, don't delete them, so the decision trail survives.
+
+### [environment-research](skills/environment-research/SKILL.md)
+
+Before a spec or plan leans on a claim about how a dependency — a library, API, CLI, model, or platform — actually behaves, turn that claim into an observation: state a precise hypothesis about its execution, outcome, error, and boundary modes, then write the smallest experiment that could falsify it and run it against the real thing. Provoke failure modes on purpose — empty input, an oversized payload, a second concurrent caller — because a mode you never triggered is one you didn't characterize. Record what you saw, not what you expected, and when the observation contradicts the documentation, design against the observation: the running dependency outranks the doc, and the divergence belongs in the spec or the code the next reader hits, not a chat transcript.
+
+### [adversarial-lens-review](skills/adversarial-lens-review/SKILL.md)
+
+An author cannot grade their own work — everything looks compliant because they wrote it to look compliant. At the spec→plan, plan→code, and code→merge gates, dispatch a fresh reviewer per binding named lens (spec: factual-grounding, completeness, design-flaw, testability; plan: spec-coverage, testing-and-trackability, sequencing-and-anti-hubris; implementation: spec-compliance, then code-quality) instructed to enumerate problems, not fix them, and to default to finding fault. Require severity-graded findings (`BLOCKER`/`MAJOR`/`MINOR`), loop until every BLOCKER and MAJOR clears, and keep the reviewer's context separate from the author's — sunk cost in the work disqualifies a reviewer.
 
 ### [hexagonal-with-enforced-contracts](skills/hexagonal-with-enforced-contracts/SKILL.md)
 
@@ -54,9 +63,17 @@ When adding any new capability to a working system, ship it **additively** — b
 
 Before calling any integration, deployment, or hard guarantee "done," prove it end-to-end against the **real** systems — live API, real database, actual deployed runtime — and record the run as a named evidence artifact (a results file, a captured log, a saved response) that someone else can open. Mocks and fakes prove your wiring is internally consistent; they cannot prove the external reality — auth scopes, quota, serialization quirks, cold-start behavior, IAM propagation — matches your assumptions. Only a live run does. A guarantee with no evidence artifact behind it is a hope. When a path's happy case needs infrastructure you lack, drive the real route anyway and assert the server's *exact* semantic rejection — mark a path untested only when even that is impossible, and name what's missing. Treat the spec as a hypothesis and the running system as ground truth: implement what the server does, recording each divergence in the code the next caller reads, not a report that rots.
 
+### [acceptance-tests-observable-outcomes](skills/acceptance-tests-observable-outcomes/SKILL.md)
+
+Completion is defined by what a user or caller observes, not by which code paths ran: for each observable success criterion in the spec, write an executable acceptance test against the real system, derived from the spec before or independent of the implementation — a test written by reading the implementation encodes the implementation's bugs as its own expectations. Assert the semantic essentials (the value, the status, the substring that matters) and tolerate incidental formatting the spec never promised, or an over-tight assertion turns a harmless refactor into a false failure. Run teardown unconditionally, whether the assertions passed or failed, so a red run never poisons the next one — and treat a red or missing acceptance test, not a green unit suite, as the real "not done yet" signal.
+
 ### [grounded-verifiable-gates](skills/grounded-verifiable-gates/SKILL.md)
 
 When an LLM or agent produces a decision or a claim, convert the fuzzy output into a **verifiable signal**: define grounding invariants (every claim must cite a real source span; every cited id must exist), a deterministic gate that turns the output into a pass/fail or a score, and a CI-able eval harness that runs the gate over a fixed corpus on every change. Never trust raw model output as a result — trust the gate's verdict over it. The harness is what lets you change a prompt, a model, or a threshold and *see* whether quality moved, instead of guessing; it is the regression net that catches the silent degradation a manual spot-check misses.
+
+### [definition-of-done-tooling](skills/definition-of-done-tooling/SKILL.md)
+
+The author never self-certifies "done" — a script does. Declare every completion criterion in a small config as `required` or `n/a`, back every `required` line with a real runnable check, and run them all through one gate that emits a single GO or NO-GO; any required NO-GO fails the whole thing. Marking a criterion `n/a` must be a visible, reviewable decision in the config, never a silent deletion, and a NO-GO gets fixed and re-run — never edited away. Wrap the project's existing CI entrypoint rather than re-implementing it inline, so the gate can't quietly drift from what CI actually enforces.
 
 ### [honest-reframing-over-overclaiming](skills/honest-reframing-over-overclaiming/SKILL.md)
 

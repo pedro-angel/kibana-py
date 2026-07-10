@@ -49,6 +49,10 @@ A second build the pack draws on — a REST API client library extended to cover
 - Blessing a unit on green mocks because clearing the live gate was "the agent's job."
 - Calling the build done when every per-unit review passed, with no whole-scope pass for the defects that live between units.
 
+## Enforcement
+
+What a machine can check: the seams and the joins. Ownership manifests as data, with a join-time check that each agent's diff touched only its manifest — violations revert mechanically; namespacing certified by a finalizer that queries the shared substrate for un-prefixed leftovers; every unit's own gate re-run by the coordinator against the merged tree, believing the exit code and not the prose; and the whole-scope adversarial review as a required final stage, because per-unit gates are structurally blind between units.
+
 ---
 
 Related skills:

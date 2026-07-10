@@ -45,6 +45,10 @@ Consider an agent platform that runs a write-capable worker. A command-pattern g
 - Claiming "structural isolation" while the isolating mechanism is only planned, with no labelled residual.
 - Self-certifying a trust-boundary change instead of routing it to an independent owner review.
 
+## Enforcement
+
+What a machine can check: the boundary, by failing through it. Tests where the sandboxed identity attempts the forbidden write or exec and pass only on the permission error; named residuals pinned as passing-by-design tests so a cooperative check can never masquerade as containment; CI running the worker under the restricted identity, not root. A guard you cannot write a failing test against is not a boundary — it's a hope with a comment.
+
 ## Related
 
 - [reversible-by-default-confirm-consequential](../reversible-by-default-confirm-consequential/SKILL.md)

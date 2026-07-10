@@ -51,6 +51,10 @@ The discipline also caught a regression: an evaluation harness showed that a "sk
 - Editing existing tests to accommodate the new default rather than keeping the old path green.
 - Shipping a regressing idea on by default because "it was the plan," even after a harness flagged the regression.
 
+## Enforcement
+
+What a machine can check: that off is really off. A golden-default regression test pinned before the feature lands — with every new flag unset, observable behavior equals the prior release's; a config lint requiring every new knob to declare an explicit default; the default asserted `off` in one test line that a flipped default turns red. Whether the capability should be additive is design judgment; whether the default path changed is not.
+
 ---
 
 Related skills:

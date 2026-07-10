@@ -48,6 +48,10 @@ On the project this was distilled from — a hexagonal, human-in-the-loop AI age
 - Trusting an old note without re-checking it against current reality — and acting on a claim that has silently gone false.
 - Leaving a note that new findings have contradicted unedited — letting the memory rot into a trap for the next reader.
 
+## Enforcement
+
+What a machine can check: that no note can be silently orphaned. An index-completeness check — every note linked from the index, every link resolving (this pack's own check-readme-index and check-crosslinks-resolve are the worked pattern) — and dates on every note so staleness is at least visible. Whether a note still holds is judgment the skill already assigns (verify before trusting); the machine just guarantees you can find what needs verifying.
+
 ---
 
 Related skills:

@@ -48,6 +48,10 @@ On the project this was distilled from — a hexagonal, human-in-the-loop AI age
 - **Untested docs:** treating documentation as an afterthought that is never checked against whether a newcomer with no context can act on it.
 - **Runbooks that fight their automation:** manual procedure steps documented beside a pipeline that already performs them — followed literally, the two paths collide (a double-publish, a duplicate release).
 
+## Enforcement
+
+What a machine can check: drift, in every direction it happens. Docs built in CI with warnings-as-errors plus linkcheck; diagram fences proven rendered — the renderer declared in the docs dependency group, and the built output containing one rendered node per fence; generated tables regenerated in CI and diffed against the committed copy; copy-paste commands smoke-run where feasible. Reader-testing stays human — schedule it like a gate, don't simulate it with a linter.
+
 ---
 
 Related skills:

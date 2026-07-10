@@ -46,6 +46,10 @@ On the project this was distilled from — a hexagonal, human-in-the-loop AI age
 - Setting gate thresholds by intuition instead of calibrating against measured behavior — and never checking that a weaker model would fail them.
 - Presenting a self-judged precision as the headline metric while hiding that the model graded its own work.
 
+## Enforcement
+
+This skill's harness is its own enforcement: a CI job that runs the deterministic gate over the fixed corpus on every change and fails on regression. What a machine additionally holds: grounding invariants as assertions (every cited id exists, every span matches its source), thresholds living in config so a calibration change is a reviewable diff, and fail-closed semantics — an empty corpus or a skipped eval job is a FAIL, never a quiet green.
+
 ## Related
 
 - [../honest-reframing-over-overclaiming/SKILL.md](../honest-reframing-over-overclaiming/SKILL.md)

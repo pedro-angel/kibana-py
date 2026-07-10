@@ -1,0 +1,38 @@
+# Weekly sync of the vendored methodology (AGENTS.md, skills/, CLAUDE.md adapter) from
+# agent-methodology main -> PR. Vendored copies went stale three times in one week when
+# this was manual; a bot PR makes drift impossible to not-notice, and each sync is one
+# reviewable merge. Bot commits carry no provenance trailer by design (bot-authored).
+name: methodology sync
+
+on:
+  schedule:
+    - cron: "30 6 * * 1" # Mondays 06:30 UTC
+  workflow_dispatch:
+
+permissions: {} # Deny all at workflow level; grant per-job below
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Sync vendored methodology from upstream main
+        run: |
+          git clone --depth 1 https://github.com/pedro-angel/agent-methodology /tmp/upstream
+          rsync -a --delete /tmp/upstream/skills/ skills/
+          cp /tmp/upstream/AGENTS.md AGENTS.md
+          cp /tmp/upstream/adapters/claude/CLAUDE.md CLAUDE.md
+          rm -rf /tmp/upstream
+      - uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
+        with:
+          commit-message: "chore(methodology): sync vendored pack from upstream main"
+          title: "chore(methodology): sync vendored pack from upstream main"
+          body: |
+            Automated weekly sync of `AGENTS.md`, `skills/`, and the `CLAUDE.md` adapter
+            from agent-methodology main. Review the skill diffs before merging.
+          branch: chore/methodology-sync
+          labels: dependencies
