@@ -19,6 +19,7 @@ Red-flag thoughts that mean STOP and apply this skill:
 - "These two enums happen to match, so it's fine."
 - "I'll pass `PROJECT=<id>` on the command line every time."
 - "It's only tuning — I'll bury it in the code as a constant."
+- "I'll re-list those dependencies in this extra / that requirements file — same versions anyway."
 
 ## The rule
 
@@ -30,6 +31,7 @@ Red-flag thoughts that mean STOP and apply this skill:
 6. **Ship a non-secret template.** Commit `.env.example` (or equivalent) as the documented config surface, one inline comment of rationale per knob. It is the contract; secrets stay out of version control.
 7. **Resolve env-over-file at composition time.** When the same fact can come from the process environment or a file, let the real environment win and fall back to the file — resolve it once, at startup/composition, not scattered through the code.
 8. **If a fact truly must live in two places, couple them explicitly and guard it.** Add a check that validates one against the other (e.g. assert the code enum equals the YAML keys) so they cannot diverge without a loud failure.
+9. **Dependency manifests are configuration — declare each dependency and tool version once.** Compose aggregate groups by reference (an `all` extra that references the feature extras) instead of re-listing pins; delete satellite requirements files that shadow the canonical manifest; and give each tool exactly one version owner — whoever *executes* the tool owns its version (if the hook runner pins the linter, remove the linter from the dev manifest and drop the duplicate CI step that ran it at another version). Then make sure update automation watches every surface that still declares anything: a bot that bumps one copy of a duplicated pin doesn't update your dependency, it forks it.
 
 ## Why
 
@@ -46,6 +48,7 @@ On the project this was distilled from — a hexagonal, human-in-the-loop AI age
 - Maintaining a hand-written env table in the docs that drifts from the actual config defaults.
 - Duplicating a value in two files with no guard against them diverging.
 - Bumping the version and one changelog while a second changelog surface (a docs site) silently stays a release behind.
+- Re-listing the same dependencies in an aggregate extra, a satellite requirements file, and a hook config — then letting an update bot bump one of the three.
 
 ---
 

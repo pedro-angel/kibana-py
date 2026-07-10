@@ -18,6 +18,7 @@ Red-flag thoughts — if you catch yourself thinking any of these, STOP and appl
 - "The agent said its tests pass, so that unit is done."
 - "I'll split this into ten 'independent' units" — but two of them edit the same file.
 - "The live tests are each agent's job; I'll just merge what they hand back."
+- "Every unit's review came back clean, so the merged whole is clean."
 
 ## The rule
 
@@ -28,6 +29,7 @@ Red-flag thoughts — if you catch yourself thinking any of these, STOP and appl
 5. **Treat each agent's "done" as a claim, and re-run its gate yourself.** A sub-agent's final report is model output, not a result. The coordinator re-runs the unit's own gate — its tests, its type-check, its lint, its live-integration run — against the merged tree and believes the exit code, not the prose. A unit is not done on a green report over mocks; it is done when *you* watched its gate pass. This is the mechanical check of [autonomous-self-improvement-loop-safety](../autonomous-self-improvement-loop-safety/SKILL.md) and the verdict-over-output rule of [grounded-verifiable-gates](../grounded-verifiable-gates/SKILL.md), applied to delegated development.
 6. **Serialize the join.** Agents return content for the shared seams; the coordinator integrates it and runs the whole suite once at the point of integration. A merge conflict on a shared file is a process failure to prevent, not a thing to resolve after the fact.
 7. **Cut along real independence, not ambition.** Split where the units genuinely don't touch — one module, one endpoint, one migration target each. If two "units" must edit the same file or coordinate mid-flight, they are one unit; forcing them apart manufactures exactly the cross-unit corruption namespacing was meant to prevent. When in doubt, fewer, larger, truly-disjoint units beat more that secretly overlap.
+8. **End with one whole-scope adversarial review of the merged tree.** Per-unit gates are structurally blind to cross-unit residue: unit A deletes a file, unit B's docs still reference it, and both units' own gates pass. After the join, run a single review whose scope is the entire merged change, hunting specifically for what no unit owned — dangling references to artifacts another unit removed, seams two units touched, claims one unit made that another invalidated.
 
 ## Why
 
@@ -45,6 +47,7 @@ A second build the pack draws on — a REST API client library extended to cover
 - Sharing one working tree and dependency set across all agents, so one agent's install or in-flight edit to an imported module breaks another's run.
 - Splitting work into "independent" units that in fact must edit the same file or coordinate mid-run.
 - Blessing a unit on green mocks because clearing the live gate was "the agent's job."
+- Calling the build done when every per-unit review passed, with no whole-scope pass for the defects that live between units.
 
 ---
 
