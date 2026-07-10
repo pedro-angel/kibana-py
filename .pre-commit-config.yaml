@@ -52,9 +52,11 @@ repos:
   # the weekly autoupdate workflow bumps `rev` via PR, so gate changes arrive as
   # reviewable diffs with provenance instead of vendored copies drifting silently.
   - repo: https://github.com/pedro-angel/git-controls-starter
-    rev: v1.0.0
+    rev: v1.1.0
     hooks:
       - id: check-no-tracked-secrets
       - id: check-one-pin-per-action
       - id: check-no-private-identifiers
       - id: check-commit-trailer
+      - id: check-pin-comments-match
+        # manual stage upstream (needs network); CI invokes it explicitly

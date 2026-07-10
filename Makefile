@@ -80,8 +80,9 @@ check: pre-commit lint audit sast test ## Run all CI checks locally (matches Git
 	@echo "\n✓ All checks passed. Note: run 'make test-python-matrix' to verify across all supported Python versions."
 
 .PHONY: pre-commit
-pre-commit: ## Run pre-commit hooks on all files
+pre-commit: ## Run pre-commit hooks on all files (incl. the manual-stage pin check CI runs)
 	$(VENV_BIN)/pre-commit run --all-files
+	$(VENV_BIN)/pre-commit run check-pin-comments-match --hook-stage manual --all-files
 
 .PHONY: lint
 lint: ## Run mypy type checker
