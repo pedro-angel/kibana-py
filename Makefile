@@ -114,6 +114,7 @@ build: ## Build wheel and sdist into dist/, then validate artifacts with twine
 docs: ## Build and link-check Sphinx documentation (matches CI)
 	$(VENV_BIN)/sphinx-build -W --keep-going -b html docs/source docs/build/html
 	$(VENV_BIN)/sphinx-build -b linkcheck docs/source docs/build/linkcheck
+	./scripts/checks/check-diagrams-rendered.sh
 
 # ---------------------------------------------------------------------------
 # Cleanup
