@@ -6,7 +6,7 @@ Captured per `battle-testing-on-real-infra` — the running system is ground tru
 
 ## Environment
 
-- **Host:** `claws` — x86_64, Debian GNU/Linux 13 (trixie), kernel 6.12, 4 CPU / 7.7 GB RAM / Docker.
+- **Host:** dedicated x86_64 verification host — Debian GNU/Linux 13 (trixie), kernel 6.12, 4 CPU / 7.7 GB RAM / Docker.
 - **Code under test:** the `feat/kibana-9.4.3-full-api` branch shipped as a **git bundle** (no push),
   cloned on the host; HEAD `1201ac8` (before this evidence + the test fix `71c320f`).
 - **Python:** CPython **3.14.6**, installed via `uv python install 3.14` (the project's `>=3.14` floor).
