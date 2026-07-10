@@ -46,6 +46,10 @@ Picture an autonomous agent that proposes improvements to its own codebase. Each
 - Leaning on the green gate alone for trust-boundary changes it structurally cannot see.
 - A generation worker that can merge its own proposal, or that runs with live privilege instead of in a sandbox.
 
+## Enforcement
+
+All of it is enforcement, by design. The fresh-clone assertion (the workspace must not pre-exist), success decided by a mechanical read of version-control status rather than the worker's report, tested==shipped bound by a digest comparison at the deploy edge, and a landing credential that structurally cannot merge — branch protection with a human on the button. Each is a pipeline step with an exit code; none consults the worker's opinion of its own work.
+
 ## Related
 
 - [grounded-verifiable-gates](../grounded-verifiable-gates/SKILL.md)

@@ -47,6 +47,10 @@ On the project this was distilled from — a hexagonal, human-in-the-loop AI age
 - Opportunistic refactoring during a bugfix, widening the diff past the intent and burying the actual fix.
 - Making risky edits with no prior checkpoint, leaving no working version to fall back to.
 
+## Enforcement
+
+What a machine can check: the commit's paperwork and its blast radius. Commit-msg gates for the conventional type prefix and the provenance trailer (git-controls-starter ships both), the opt-in `Evidence:` trailer on live-surface paths, and branch protection that keeps checkpoints meaningful. Diff minimality itself is judgment — but reviewable judgment, because the message states the one motivation the diff has to match.
+
 ---
 
 Related skills:

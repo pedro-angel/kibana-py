@@ -57,6 +57,10 @@ You can apply all three without knowing anything about that project: ignore-by-p
 - Calling `terraform destroy` "done" without listing resources to confirm zero — leaving a staging bucket or reserved IP quietly billing.
 - Quietly managing a project/account lifecycle your tool does not own, so your teardown can delete more than you created.
 
+## Enforcement
+
+Most of this skill already ships as machinery: gitignore secret globs, `detect-private-key`, `check-no-tracked-secrets.sh`, and `check-no-private-identifiers.sh` (identity, not just credentials) in git-controls-starter — all fail-closed at commit time. What remains checkable: IaC linted for resource-scoped grants (no broad roles), and teardown certified by a verify-zero script — state list empty AND a provider-side query empty — that fails on any survivor instead of trusting a clean destroy log.
+
 ## Related skills
 
 - [../reversible-by-default-confirm-consequential/SKILL.md](../reversible-by-default-confirm-consequential/SKILL.md)

@@ -59,6 +59,10 @@ A third field test found the inverse failure: a client repo whose live integrati
 - Coding to the spec when the running system does otherwise, and burying the divergence in a report instead of the code the next caller reads.
 - Mocking the model in a model-backed feature and calling the feature tested.
 
+## Enforcement
+
+What a machine can check: that the live gate exists, runs, and leaves evidence. A named, required checkpoint — a release-checklist step, a `make test-live` target distinct from the unit run — because an optional gate is not a gate; the `Evidence:` trailer required on commits touching live-surface paths (`check-evidence-trailer.sh` in git-controls-starter); evidence artifacts committed as files a reviewer can open, with the runner recorded by role — `check-no-private-identifiers.sh` blocks the identity from entering at all.
+
 ## Related skills
 
 - [../grounded-verifiable-gates/SKILL.md](../grounded-verifiable-gates/SKILL.md)

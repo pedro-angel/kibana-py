@@ -50,6 +50,10 @@ On the project this was distilled from — a hexagonal, human-in-the-loop AI age
 - Bumping the version and one changelog while a second changelog surface (a docs site) silently stays a release behind.
 - Re-listing the same dependencies in an aggregate extra, a satellite requirements file, and a hook config — then letting an update bot bump one of the three.
 
+## Enforcement
+
+What a machine can check: duplication itself. A duplicate-declaration check that fails when the same dependency or value is declared on two surfaces; the rule-8 coupling guards run as tests (the enum equals the YAML keys, or the build fails); entry-point preflights that validate against the canonical source and exit non-zero with the remedy. And update automation must watch every surface that still declares anything — a bot that bumps one copy of a duplicated pin doesn't update it, it forks it.
+
 ---
 
 Related skills:

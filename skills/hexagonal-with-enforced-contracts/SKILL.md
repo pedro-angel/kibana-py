@@ -48,6 +48,10 @@ Every external collaborator was a Protocol. When a semantic retriever was added 
 - Building the expensive cloud adapter first instead of a cheap local twin behind the identical port.
 - Letting config or telemetry modules import upward into adapters/driving, quietly inverting the dependency arrow.
 
+## Enforcement
+
+What a machine can check: everything that matters. An import-linter / ArchUnit / dependency-cruiser contract that fails the build the moment domain code imports an adapter or a vendor SDK — running in CI, fail-closed: a missing, empty, or skipped contract is a FAIL, not a pass. The boundary either has a machine on it or it does not exist; a reviewer's eye is defense-in-depth, never the seam.
+
 ---
 
 Related skills:

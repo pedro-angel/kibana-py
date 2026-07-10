@@ -57,6 +57,10 @@ A later field test showed the rule guarding its own author: an agent about to pu
 - Claiming "never writes to external systems" with no test pinning GET-only / read-only access.
 - Treating a trigger as harmless because the irreversible act lives downstream in automation — "it's just a git tag" while the workflow it fires publishes forever.
 
+## Enforcement
+
+What a machine can check: that the read-only claim survives contact. A recording-transport test driving every external adapter and asserting read-only verbs — adding a write breaks the build; a resume-after-restart test proving the approval pause is durable, not in-memory; deploy manifests linted for private ingress and read-only egress credentials. At runtime, permission layers that classify by downstream consequence enforce rule 8 mechanically — gating the tag push that *is* a publish, not just commands that look scary.
+
 ---
 
 Related skills:

@@ -45,6 +45,10 @@ On the project this was distilled from, a private hostname was discovered leaked
 - Relitigating a settled decision with no new evidence.
 - The mirror image: never admitting uncertainty, so your confidence carries no information.
 
+## Enforcement
+
+Almost nothing — honestly. This skill governs a conversation, and a checker that graded "did you challenge enough" would be theater. What a machine can hold is the trail: consequential dissent recorded where decisions are recorded (the provenance-trailer gate gives it a place to live), and checkable premises leaving artifacts behind — the probe, the grep, the exposure map. The rest is the human inviting the challenge and the agent daring to make it.
+
 ---
 
 Related skills:
