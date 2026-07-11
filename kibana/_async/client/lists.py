@@ -1,5 +1,7 @@
 """Async Kibana Security Lists API client."""
 
+from __future__ import annotations
+
 import re
 import uuid
 from typing import TYPE_CHECKING, Any
@@ -71,7 +73,7 @@ class _LenientNdjsonSerializer(NdjsonSerializer):
                 continue
             try:
                 lines.append(self.json_loads(raw_line))
-            except ValueError, TypeError:
+            except (ValueError, TypeError):
                 lines.append(raw_line.decode("utf-8", "surrogatepass"))
         return lines
 

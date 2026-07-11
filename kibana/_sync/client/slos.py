@@ -1,5 +1,7 @@
 """Kibana SLOs (Service Level Objectives) API client."""
 
+from __future__ import annotations
+
 from typing import Any
 
 from elastic_transport import ObjectApiResponse

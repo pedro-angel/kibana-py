@@ -1,5 +1,7 @@
 """Utility classes and functions for Kibana client namespace implementations."""
 
+from __future__ import annotations
+
 import re
 import time
 from typing import Any

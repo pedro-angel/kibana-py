@@ -1,5 +1,7 @@
 """Deprecated ActionsClient alias for the Connectors API client."""
 
+from __future__ import annotations
+
 from kibana._sync.client.connectors import ConnectorsClient
 
 

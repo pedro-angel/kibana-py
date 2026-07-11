@@ -1,5 +1,7 @@
 """Exporter creation helpers for OTLP trace and log exporters."""
 
+from __future__ import annotations
+
 from typing import Any
 
 from kibana.observability._imports import (

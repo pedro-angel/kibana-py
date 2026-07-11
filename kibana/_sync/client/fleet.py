@@ -1,5 +1,7 @@
 """Kibana Fleet core API (setup, settings, health) client."""
 
+from __future__ import annotations
+
 from typing import TYPE_CHECKING, Any
 
 from elastic_transport import ObjectApiResponse

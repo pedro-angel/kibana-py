@@ -6,6 +6,8 @@ operations (``client.alerting.rule``), backfill scheduling
 (``client.alerting.health()`` and ``client.alerting.rule_types()``).
 """
 
+from __future__ import annotations
+
 import json
 from typing import TYPE_CHECKING, Any
 

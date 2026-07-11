@@ -1,5 +1,7 @@
 """AsyncConnectorsClient for managing Kibana connectors (actions)."""
 
+from __future__ import annotations
+
 from typing import Any
 
 from elastic_transport import ApiResponse, ObjectApiResponse, TextSerializer

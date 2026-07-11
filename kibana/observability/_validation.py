@@ -1,5 +1,7 @@
 """APM connectivity validation and error handling utilities."""
 
+from __future__ import annotations
+
 import re
 
 from kibana.observability._imports import logger

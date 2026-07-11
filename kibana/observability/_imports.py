@@ -1,5 +1,7 @@
 """Shared imports and availability flags for observability submodules."""
 
+from __future__ import annotations
+
 import logging
 
 # Set up logger

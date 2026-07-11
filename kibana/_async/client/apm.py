@@ -1,5 +1,7 @@
 """Async Kibana APM API client."""
 
+from __future__ import annotations
+
 import json
 import uuid
 from typing import Any
