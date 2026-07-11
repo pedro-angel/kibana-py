@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 (unreleased)=
 ## Unreleased
 
+(v0.4.0)=
+## [0.4.0] - 2026-07-11
+
 ### Changed
 
 - **Lowered the minimum supported Python from 3.14 to 3.11.** The previous `>=3.14` floor was a tooling/policy pin, not a runtime requirement: only unparenthesized `except A, B:` (PEP 758) and self/forward-reference annotations relying on 3.14's default-deferred evaluation (PEP 649) needed it. Both are now handled in-tree (parenthesized `except` clauses; `from __future__ import annotations` across the package), so the client runs unchanged on Python 3.11–3.14, with the unit suite verified identical across all four. `requires-python`, classifiers, tooling targets, and the CI test matrix were updated to match.
@@ -395,7 +398,8 @@ When version 1.0 is released, this section will contain upgrade instructions.
 - [PyPI Package](https://pypi.org/project/kibana-py/)
 - [Documentation](https://kibana-py.readthedocs.io/)
 
-[Unreleased]: https://github.com/pedro-angel/kibana-py/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/pedro-angel/kibana-py/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/pedro-angel/kibana-py/releases/tag/v0.4.0
 [0.3.1]: https://github.com/pedro-angel/kibana-py/releases/tag/v0.3.1
 [0.3.0]: https://github.com/pedro-angel/kibana-py/releases/tag/v0.3.0
 [0.2.0]: https://github.com/pedro-angel/kibana-py/releases/tag/v0.2.0

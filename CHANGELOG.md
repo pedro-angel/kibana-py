@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-07-11
+
 ### Changed
 - **Lowered the minimum supported Python from 3.14 to 3.11.** The previous
   `>=3.14` floor was a tooling/policy pin, not a runtime requirement: only two
@@ -285,7 +287,10 @@ Initial release of kibana-py, a Python client library for the Kibana REST API.
 
 ---
 
-[Unreleased]: https://github.com/pedro-angel/kibana-py/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/pedro-angel/kibana-py/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/pedro-angel/kibana-py/releases/tag/v0.4.0
+[0.3.1]: https://github.com/pedro-angel/kibana-py/releases/tag/v0.3.1
+[0.3.0]: https://github.com/pedro-angel/kibana-py/releases/tag/v0.3.0
 [0.2.0]: https://github.com/pedro-angel/kibana-py/releases/tag/v0.2.0
 [0.1.9]: https://github.com/pedro-angel/kibana-py/releases/tag/v0.1.9
 [0.1.8]: https://github.com/pedro-angel/kibana-py/releases/tag/v0.1.8
