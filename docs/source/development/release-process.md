@@ -79,7 +79,7 @@ that `stable` points at it.
 For local checks you only need the dev environment:
 
 ```bash
-make setup PYTHON=python3.14   # requires-python is >=3.14
+make setup PYTHON=python3.11   # requires-python is >=3.11
 ```
 
 Watching the release run also uses the [`gh` CLI](https://cli.github.com/)

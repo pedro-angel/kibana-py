@@ -4,7 +4,7 @@
 [![Documentation Build](https://github.com/pedro-angel/kibana-py/workflows/Documentation/badge.svg)](https://github.com/pedro-angel/kibana-py/actions/workflows/docs.yml)
 [![PyPI version](https://img.shields.io/pypi/v/kibana-py.svg)](https://pypi.org/project/kibana-py/)
 [![PyPI downloads](https://img.shields.io/pypi/dm/kibana-py.svg)](https://pypi.org/project/kibana-py/)
-[![Python Version](https://img.shields.io/badge/python-3.14+-blue.svg)](https://www.python.org/downloads/)
+[![Python Version](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
 > **Disclaimer:** This is an independent, community-driven project and is **not** officially affiliated with, endorsed by, or supported by Elastic N.V. or any of its subsidiaries. "Kibana" and "Elasticsearch" are trademarks of Elastic N.V. This project is provided "as is", without warranty of any kind. Use it at your own risk. See the [Disclaimer](#disclaimer) section and the [LICENSE](LICENSE) for full details.
@@ -43,7 +43,7 @@ Headline feature: first-class support for the **new Kibana Dashboards HTTP API**
 pip install kibana-py
 ```
 
-**Requires Python 3.14+.**
+**Requires Python 3.11+.**
 
 **Optional dependencies:**
 - `kibana-py[async]` - Async client support
@@ -257,7 +257,7 @@ For more information, see the [Development Documentation](https://kibana-py.read
 
 ## Requirements
 
-- Python 3.14+
+- Python 3.11+
 - Kibana 9.4.x (developed and live-tested against 9.4.3)
 - elastic-transport >= 9.1.0
 

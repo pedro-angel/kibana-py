@@ -6,7 +6,7 @@ This guide will help you get started with kibana-py quickly. We'll cover basic c
 
 Before you begin, make sure you have:
 
-- **Python 3.14 or newer** — kibana-py requires Python >= 3.14
+- **Python 3.11 or newer** — kibana-py requires Python >= 3.11
 - Installed kibana-py (see {doc}`installation`)
 - A running Kibana instance (version 9.4.x recommended; kibana-py is tested against Kibana 9.4.3)
 - Valid credentials for authentication

@@ -18,7 +18,7 @@ for reliable HTTP communication.
 kibana-py targets Kibana 9.4 and covers the full platform API surface — 24
 namespaces and roughly 270 endpoints — including the new (technical preview)
 :doc:`Dashboards HTTP API <user-guide/dashboards>` for managing dashboards as
-code. It requires Python 3.14 or newer.
+code. It requires Python 3.11 or newer.
 
 .. toctree::
    :maxdepth: 2

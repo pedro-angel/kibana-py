@@ -10,7 +10,7 @@ This project adopts the [Contributor Covenant v2.1](https://www.contributor-cove
 
 ### Prerequisites
 
-- Python 3.10 or higher
+- Python 3.11 or higher
 - Git
 - A running Kibana instance for integration tests (optional but recommended)
 

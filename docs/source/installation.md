@@ -6,7 +6,7 @@ This guide covers installing kibana-py and its optional dependencies.
 
 Before installing kibana-py, ensure you have:
 
-- **Python 3.10 or higher** - The library requires Python 3.10+
+- **Python 3.11 or higher** - The library requires Python 3.11+
 - **Kibana 9.x** - Compatible with Kibana version 9.x
 - **pip** - Python package installer (usually included with Python)
 
@@ -152,8 +152,8 @@ If you encounter errors about Python version:
 # Check your Python version
 python --version
 
-# If you have multiple Python versions, use python3.10+ explicitly
-python3.10 -m pip install kibana-py
+# If you have multiple Python versions, use python3.11+ explicitly
+python3.11 -m pip install kibana-py
 ```
 
 ### SSL Certificate Errors

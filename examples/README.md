@@ -8,7 +8,7 @@ Examples demonstrating how to use the kibana-py client library. All examples aut
 # Start the local Elastic Stack (Elasticsearch + Kibana + APM)
 make stack-start
 
-# Install the library with all optional dependencies (Python 3.14+)
+# Install the library with all optional dependencies (Python 3.11+)
 make setup
 
 # Activate the Python virtual environment

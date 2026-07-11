@@ -51,7 +51,7 @@ the missing precondition are named rather than implying a clean run.
 
 ## Bugs found live and fixed (before commit)
 
-1. **`examples/utils.py`** — Python-2 `except ImportError, X:` was a hard `SyntaxError` under 3.14, breaking `import utils` for **every** example. Fixed (C1).
+1. **`examples/utils.py`** — Python-2 `except ImportError, X:` was a hard `SyntaxError` under Python 3.13 and earlier (the unparenthesized form is actually valid on 3.14 via PEP 758; the project's tooling ran on ≤3.13), breaking `import utils` for **every** example. Fixed (C1).
 2. **`osquery_management.py`** — idempotent pre-delete used the wrong id field → 409 on re-run. Fixed (C5).
 3. **`fleet_epm_management.py`** — `uninstall_package` on a not-installed package raises `BadRequestError`(400), not `NotFoundError`(404); reworked to check `get_package` status first (C7).
 4. **`security_ai_assistant_management.py`** — quick-prompt 409 on kept-then-rerun; added own-scope idempotent pre-delete (C7).
