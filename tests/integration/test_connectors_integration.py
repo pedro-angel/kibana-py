@@ -48,7 +48,7 @@ def _delete_es_index(index: str) -> None:
         request.add_header("Authorization", f"Basic {token}")
     try:
         urllib.request.urlopen(request, timeout=10).close()
-    except urllib.error.URLError, OSError:
+    except (urllib.error.URLError, OSError):
         pass  # index may not exist; cleanup is best-effort
 
 

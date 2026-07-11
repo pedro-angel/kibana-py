@@ -59,7 +59,7 @@ benchmark: stack-start ## Run performance benchmarks
 .PHONY: test-python-matrix
 test-python-matrix: ## Run unit tests across all supported Python versions via nox (required before release)
 	@if command -v pyenv >/dev/null 2>&1; then \
-		PYENV_VERSIONS="$$(pyenv versions --bare | awk '/^3\.(14)(\.|$$)/ {print $$1}' | paste -sd: -)"; \
+		PYENV_VERSIONS="$$(pyenv versions --bare | awk '/^3\.(11|12|13|14)(\.|$$)/ {print $$1}' | paste -sd: -)"; \
 		if [ -n "$$PYENV_VERSIONS" ]; then \
 			PYENV_VERSION="$$PYENV_VERSIONS" \
 			PATH="$(VENV_BIN):$$(pyenv root)/bin:$$(pyenv root)/shims:$$PATH" \
