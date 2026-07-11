@@ -90,10 +90,10 @@ A PyPI/TestPyPI **API token** is needed *only* for the optional manual dry-run
 
 ## Pre-release checklist
 
-- [ ] `make check` passes (pre-commit, lint, dependency audit, SAST, unit tests)
+- [ ] `make check` passes (hooks, lint, dependency audit, SAST, unit tests, docs)
 - [ ] `make test-python-matrix` passes (multi-Python unit matrix via nox; missing interpreters are skipped)
 - [ ] `make test-integration` passes locally against a live stack — **required**; CI does not run it (needs a Docker Elastic Stack)
-- [ ] Documentation builds clean: `make docs` (HTML with `-W` + linkcheck, matching RTD's `fail_on_warning`)
+- [ ] Documentation builds clean: `make docs` (already covered by `make check`) (HTML with `-W` + linkcheck, matching RTD's `fail_on_warning`)
 - [ ] Version bumped in `kibana/_version.py`
 - [ ] `CHANGELOG.md` updated (entry **and** reference links)
 

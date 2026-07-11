@@ -1,0 +1,54 @@
+# Machine-readable target vocabulary for the dev-environment facade.
+# Consumed by conformance checkers — reference implementation:
+# vocabulary-conformance.sh beside this file (see SKILL.md "Enforcement");
+# the prose in SKILL.md carries each name's promise and defines the
+# capability tokens.
+# Format (tab-separated): <tier>	<name>	[capability]	[role]
+#   tier:       universal | family | prefix | banned
+#   capability: token naming the marker that makes a family name required
+#               ("-" = always fires; used when a universal name carries a
+#               role)
+#   role:       floor    — expanded commands (`make -n <name>`) must appear
+#                          in `make -n check`'s output whenever the
+#                          capability fires
+#               mutating — optional (allowed, never required); must never
+#                          run inside `check`
+#               optional — allowed, not required, when the capability fires
+# Checkers use prefix rows only to derive bare-remainder bans (SKILL.md
+# "Enforcement"); prefix-rebinding judgments stay with review.
+universal	help
+universal	setup
+universal	test	-	floor
+universal	check
+universal	clean
+universal	dod
+family	stack-start	stack
+family	stack-stop	stack
+family	stack-status	stack
+family	stack-destroy	stack
+family	test-integration	suite
+family	test-contract	suite
+family	test-e2e	suite
+family	test-benchmark	suite
+family	build	ship
+family	lint	analyzers	floor
+family	fix	autofix	mutating
+family	audit	deps	floor
+family	sast	source	floor
+family	hooks	hookcfg	floor
+family	docs	docs	floor
+family	docs-serve	docs	optional
+family	clean-all	env
+prefix	test-
+prefix	stack-
+prefix	build-
+banned	stack-up
+banned	stack-down
+banned	unit
+banned	integration
+banned	contract
+banned	e2e
+banned	benchmark
+banned	test-unit
+banned	pre-commit
+banned	image

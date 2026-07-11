@@ -1,0 +1,13 @@
+Definition-of-Done gate (dod.config)
+  GO    unit_green
+  GO    types_clean
+  GO    hygiene_hooks
+  GO    audit_clean
+  GO    sast_clean
+  GO    docs_strict
+  GO    vocabulary_conformant
+  NO-GO integration_green  (log: /tmp/dod-kibana-py/integration_green.log)
+  GO    benchmark_green
+  GO    matrix_green
+  GO    changelog_entry
+VERDICT: NO-GO (fix the criteria above, or mark them n/a in dod.config as a visible decision)
