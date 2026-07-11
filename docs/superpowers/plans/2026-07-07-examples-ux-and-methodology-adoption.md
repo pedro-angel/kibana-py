@@ -508,7 +508,7 @@ Expected: `import ok`.
 git add examples/utils.py
 git commit -m "fix(examples): repair Python-2 except syntax in utils.py
 
-except ImportError, X: is a SyntaxError under 3.14, breaking import utils and
+except ImportError, X: is a SyntaxError under Python 3.13 and earlier, breaking import utils and
 therefore every example. Collapse to correct single-type fallbacks.
 
 Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
@@ -901,7 +901,7 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 
 ### Fixed
 - Examples: repaired a Python-2 `except` SyntaxError in `examples/utils.py` that broke
-  `import utils` (and therefore every example) under Python 3.14.
+  `import utils` (and therefore every example) under Python 3.13 and earlier.
 
 ### Changed
 - Examples are now human-usable end-to-end: each run prints its results, then prompts to

@@ -51,7 +51,7 @@ Two secondary problems compound this:
    **re-running any kept example collides with itself** (fixed ID → HTTP 409).
 2. **A blocking SyntaxError.** `examples/utils.py` lines 329/335/341 use the
    Python 2 form `except ImportError, Exception:`, which is a hard `SyntaxError`
-   under Python 3.14. Because every example does `from utils import ...`, this
+   under Python 3.13 and earlier (valid on 3.14 via PEP 758). Because every example does `from utils import ...`, this
    currently breaks *all* utils-importing examples. Verified via
    `python -m py_compile examples/utils.py`.
 

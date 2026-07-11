@@ -1,5 +1,7 @@
 """Deprecated AsyncActionsClient alias for the async Connectors API client."""
 
+from __future__ import annotations
+
 from kibana._async.client.connectors import AsyncConnectorsClient
 
 

@@ -7,11 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Lowered the minimum supported Python from 3.14 to 3.11.** The previous
+  `>=3.14` floor was a tooling/policy pin, not a runtime requirement: only two
+  things actually needed 3.14 — unparenthesized `except A, B:` (PEP 758) and
+  self/forward-reference annotations relying on 3.14's default-deferred
+  evaluation (PEP 649). Both are now handled in-tree (the `except` clauses are
+  parenthesized, and `from __future__ import annotations` is applied across the
+  package), so the client runs unchanged on Python 3.11–3.14 — the full unit
+  suite is verified identical across all four versions. `requires-python`, the
+  classifiers, the mypy/black/ruff targets, and the CI test matrix were updated
+  to match.
+
 ## [0.3.1] - 2026-07-07
 
 ### Fixed
 - Examples: repaired a Python-2 `except` SyntaxError in `examples/utils.py` that broke
-  `import utils` (and therefore every example) under Python 3.14.
+  `import utils` (and therefore every example) under Python 3.13 and earlier. (The
+  unparenthesized form is actually valid on 3.14 via PEP 758; it is a `SyntaxError`
+  only on 3.13 and older, which is what the project's tooling ran.)
 
 ### Changed
 - Examples are now human-usable end-to-end: each run prints its results, then prompts to

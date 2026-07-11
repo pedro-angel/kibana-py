@@ -12,7 +12,7 @@ VENV_BIN    = $(VENV_DIR)/bin
 setup: ## Create virtual environment and install all dependencies
 	@# Preflight: fail fast (with guidance) if $(PYTHON) is older than the
 	@# requires-python floor declared in pyproject.toml (the single source of truth).
-	@$(PYTHON) -c 'import re,sys,pathlib; spec=re.search(r"requires-python\s*=\s*\"([^\"]+)\"", pathlib.Path("pyproject.toml").read_text())[1]; need=tuple(map(int, re.search(r"(\d+)\.(\d+)", spec).groups())); sys.exit(0 if sys.version_info[:2] >= need else f"\n✗ kibana-py needs Python {spec}, but {sys.executable} is {sys.version.split()[0]}.\n  Re-run e.g.  make setup PYTHON=python3.14\n")'
+	@$(PYTHON) -c 'import re,sys,pathlib; spec=re.search(r"requires-python\s*=\s*\"([^\"]+)\"", pathlib.Path("pyproject.toml").read_text())[1]; need=tuple(map(int, re.search(r"(\d+)\.(\d+)", spec).groups())); sys.exit(0 if sys.version_info[:2] >= need else f"\n✗ kibana-py needs Python {spec}, but {sys.executable} is {sys.version.split()[0]}.\n  Re-run e.g.  make setup PYTHON=python3.11\n")'
 	$(PYTHON) -m venv $(VENV_DIR)
 	$(VENV_BIN)/pip install --upgrade pip
 	$(VENV_BIN)/pip install -e ".[dev,all]"
@@ -59,7 +59,7 @@ benchmark: stack-start ## Run performance benchmarks
 .PHONY: test-python-matrix
 test-python-matrix: ## Run unit tests across all supported Python versions via nox (required before release)
 	@if command -v pyenv >/dev/null 2>&1; then \
-		PYENV_VERSIONS="$$(pyenv versions --bare | awk '/^3\.(14)(\.|$$)/ {print $$1}' | paste -sd: -)"; \
+		PYENV_VERSIONS="$$(pyenv versions --bare | awk '/^3\.(11|12|13|14)(\.|$$)/ {print $$1}' | paste -sd: -)"; \
 		if [ -n "$$PYENV_VERSIONS" ]; then \
 			PYENV_VERSION="$$PYENV_VERSIONS" \
 			PATH="$(VENV_BIN):$$(pyenv root)/bin:$$(pyenv root)/shims:$$PATH" \

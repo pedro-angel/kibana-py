@@ -1,5 +1,7 @@
 """KibanaInstrumentor singleton and span helpers."""
 
+from __future__ import annotations
+
 from typing import Any
 
 from kibana.observability._imports import (
@@ -48,7 +50,7 @@ def _get_opentelemetry_version() -> str:
                         from opentelemetry import __version__  # type: ignore
 
                         return str(__version__)
-                    except ImportError, AttributeError:
+                    except (ImportError, AttributeError):
                         return "unknown"
         else:
             return "not-installed"

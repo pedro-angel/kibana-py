@@ -1,5 +1,7 @@
 """Async Kibana Security Endpoint Management API client."""
 
+from __future__ import annotations
+
 import json
 import uuid
 from typing import TYPE_CHECKING, Any

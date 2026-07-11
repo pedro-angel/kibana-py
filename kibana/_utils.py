@@ -1,5 +1,7 @@
 """Utility functions for the Kibana client."""
 
+from __future__ import annotations
+
 import functools
 import warnings
 from typing import Any

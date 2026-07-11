@@ -61,7 +61,7 @@ def _delete_agent_policy_quietly(client, agent_policy_id: str) -> None:
         client.fleet_policies.delete_agent_policy(
             agent_policy_id=agent_policy_id, force=True
         )
-    except NotFoundError, BadRequestError:
+    except (NotFoundError, BadRequestError):
         pass
 
 
@@ -125,7 +125,7 @@ def package_policy(kibana_client, agent_policy, udp_package_version):
         kibana_client.fleet_policies.delete_package_policy(
             package_policy_id=package_policy_id, force=True
         )
-    except NotFoundError, BadRequestError:
+    except (NotFoundError, BadRequestError):
         pass
 
 
@@ -445,7 +445,7 @@ class TestAsyncFleetPoliciesIntegration:
                     await client.fleet_policies.delete_agent_policy(
                         agent_policy_id=agent_policy_id, force=True
                     )
-                except NotFoundError, BadRequestError:
+                except (NotFoundError, BadRequestError):
                     pass
             await client.close()
 

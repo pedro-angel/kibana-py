@@ -1,5 +1,7 @@
 """Kibana Logstash Configuration Management API client."""
 
+from __future__ import annotations
+
 from typing import Any
 
 from elastic_transport import ObjectApiResponse

@@ -3,7 +3,7 @@
 import nox
 
 
-@nox.session(python=["3.14"])
+@nox.session(python=["3.11", "3.12", "3.13", "3.14"])
 def test(session):
     """Run unit tests with pytest across all supported Python versions."""
     session.install(".[dev,all]")

@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 (unreleased)=
 ## Unreleased
 
+### Changed
+
+- **Lowered the minimum supported Python from 3.14 to 3.11.** The previous `>=3.14` floor was a tooling/policy pin, not a runtime requirement: only unparenthesized `except A, B:` (PEP 758) and self/forward-reference annotations relying on 3.14's default-deferred evaluation (PEP 649) needed it. Both are now handled in-tree (parenthesized `except` clauses; `from __future__ import annotations` across the package), so the client runs unchanged on Python 3.11–3.14, with the unit suite verified identical across all four. `requires-python`, classifiers, tooling targets, and the CI test matrix were updated to match.
+
 (v0.3.1)=
 ## [0.3.1] - 2026-07-07
 
@@ -15,7 +19,7 @@ Examples and developer tooling only — no shipped API changes (`kibana/` is unc
 
 ### Fixed
 
-- Repaired a Python-2 `except` SyntaxError in `examples/utils.py` that broke `import utils` (and therefore every example) under Python 3.14.
+- Repaired a Python-2 `except` SyntaxError in `examples/utils.py` that broke `import utils` (and therefore every example) under Python 3.13 and earlier. (The unparenthesized form is valid on 3.14 via PEP 758; it is a `SyntaxError` only on 3.13 and older, which is what the project's tooling ran.)
 
 ### Changed
 
@@ -381,7 +385,7 @@ When version 1.0 is released, this section will contain upgrade instructions.
 ## Support
 
 - **Current stable**: 0.1.x (when released)
-- **Python support**: 3.10+
+- **Python support**: 3.11+
 - **Kibana support**: 9.x
 
 ## Links

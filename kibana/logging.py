@@ -14,6 +14,8 @@ Example::
     logging.getLogger("kibana").addHandler(handler)
 """
 
+from __future__ import annotations
+
 import json
 import logging
 import traceback
@@ -140,7 +142,7 @@ class JSONFormatter(logging.Formatter):
                     try:
                         json.dumps(value)  # Test serializability
                         log_entry[key] = value
-                    except TypeError, ValueError:
+                    except (TypeError, ValueError):
                         log_entry[key] = str(value)
 
         return json.dumps(log_entry, default=str, ensure_ascii=False)
