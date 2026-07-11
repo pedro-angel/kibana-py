@@ -73,9 +73,9 @@ Update the links at the bottom of the file:
 make setup
 
 # Optional quick feedback while iterating
-make pre-commit
+make hooks
 
-# Full local CI-equivalent checks (pre-commit + lint + audit + sast + unit tests)
+# Full local CI-equivalent checks (hooks + lint + audit + sast + unit tests + docs)
 make check
 
 # Required before release: run unit tests across all supported Python versions

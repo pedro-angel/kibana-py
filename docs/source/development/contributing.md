@@ -110,7 +110,7 @@ See {doc}`testing` for detailed testing guidelines.
 
 ```bash
 # Mandatory before opening a PR
-make pre-commit
+make hooks
 
 # Strongly recommended before opening a PR (CI parity)
 make check
@@ -118,10 +118,10 @@ make check
 
 What each target does:
 
-- `make pre-commit`: required. Runs all pre-commit hooks on all files (includes formatting and Ruff fixes/checks).
+- `make hooks`: required. Runs pre-commit-stage hooks on all files, plus the manual-stage pin check (includes formatting and Ruff fixes/checks).
 - `make fix`: optional convenience target. Applies auto-fixes via pinned pre-commit formatter/lint hooks (isort, black, ruff --fix).
 - `make lint`: mypy type-check only.
-- `make check`: full local CI gate (pre-commit + mypy + pip-audit + bandit + unit tests).
+- `make check`: full local CI gate (hooks + mypy + pip-audit + bandit + unit tests + docs).
 
 If you use nox, these are still valid alternatives for broader local workflows:
 
@@ -174,7 +174,7 @@ Then create a pull request on GitHub.
 
 ```bash
 # Mandatory
-make pre-commit
+make hooks
 
 # Optional convenience
 make fix

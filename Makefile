@@ -1,4 +1,7 @@
 .DEFAULT_GOAL := help
+# hooks mutates the tree (pre-commit stash + auto-fixes) while lint/test/docs
+# read it — never interleave check's prerequisites under -j.
+.NOTPARALLEL:
 
 PYTHON     ?= python3
 VENV_DIR   ?= .venv
@@ -52,8 +55,8 @@ test: ## Run unit tests with coverage
 test-integration: stack-start ## Run integration tests (starts stack if needed)
 	$(VENV_BIN)/pytest tests/integration/
 
-.PHONY: benchmark
-benchmark: stack-start ## Run performance benchmarks
+.PHONY: test-benchmark
+test-benchmark: stack-start ## Run performance benchmarks
 	$(VENV_BIN)/pytest tests/benchmark/
 
 .PHONY: test-python-matrix
@@ -76,11 +79,11 @@ test-python-matrix: ## Run unit tests across all supported Python versions via n
 # ---------------------------------------------------------------------------
 
 .PHONY: check
-check: pre-commit lint audit sast test ## Run all CI checks locally (matches GitHub Actions: hooks + lint + security + unit tests)
+check: hooks lint audit sast test docs ## Local PR gate: hooks+lint+audit+sast+unit+docs (the vocabulary floor; matches GitHub Actions)
 	@echo "\n✓ All checks passed. Note: run 'make test-python-matrix' to verify across all supported Python versions."
 
-.PHONY: pre-commit
-pre-commit: ## Run pre-commit hooks on all files (incl. the manual-stage pin check CI runs)
+.PHONY: hooks
+hooks: ## Run pre-commit-stage hooks on all files (plus the manual-stage pin check CI runs)
 	$(VENV_BIN)/pre-commit run --all-files
 	$(VENV_BIN)/pre-commit run check-pin-comments-match --hook-stage manual --all-files
 
@@ -101,6 +104,14 @@ fix: ## Apply auto-fixes via pinned pre-commit hooks (isort, black, ruff --fix)
 	$(VENV_BIN)/pre-commit run isort --all-files
 	$(VENV_BIN)/pre-commit run black --all-files
 	$(VENV_BIN)/pre-commit run ruff --all-files
+
+# ---------------------------------------------------------------------------
+# Gates
+# ---------------------------------------------------------------------------
+
+.PHONY: dod
+dod: ## Run the Definition-of-Done gate (GO/NO-GO over dod.config)
+	scripts/checks/definition-of-done.sh
 
 # ---------------------------------------------------------------------------
 # Build & docs
@@ -138,5 +149,5 @@ clean-all: clean ## Remove everything including the virtual environment
 
 .PHONY: help
 help: ## Show this help message
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
+	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
 		awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'

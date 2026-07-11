@@ -1,0 +1,28 @@
+Vocabulary conformance (skills/dev-environment-facade/vocabulary.txt)
+  GO    universal: help
+  GO    universal: setup
+  GO    universal: test
+  GO    universal: check
+  GO    universal: clean
+  GO    universal: dod
+  GO    family: stack-start (capability: stack)
+  GO    family: stack-stop (capability: stack)
+  GO    family: stack-status (capability: stack)
+  GO    family: stack-destroy (capability: stack)
+  GO    family: test-integration (capability: suite)
+  GO    family: test-benchmark (capability: suite)
+  GO    family: build (capability: ship)
+  GO    family: lint (capability: analyzers)
+  GO    family: fix (capability: autofix)
+  GO    family: audit (capability: deps)
+  GO    family: sast (capability: source)
+  GO    family: hooks (capability: hookcfg)
+  GO    family: docs (capability: docs)
+  GO    family: clean-all (capability: env)
+  GO    floor: test in check's expansion
+  GO    floor: lint in check's expansion
+  GO    floor: audit in check's expansion
+  GO    floor: sast in check's expansion
+  GO    floor: hooks in check's expansion
+  GO    floor: docs in check's expansion
+VERDICT: CONFORMANT

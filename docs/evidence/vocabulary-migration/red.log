@@ -1,0 +1,30 @@
+Vocabulary conformance (skills/dev-environment-facade/vocabulary.txt)
+  GO    universal: help
+  GO    universal: setup
+  GO    universal: test
+  GO    universal: check
+  GO    universal: clean
+  NO-GO universal target missing: dod
+  GO    family: stack-start (capability: stack)
+  GO    family: stack-stop (capability: stack)
+  GO    family: stack-status (capability: stack)
+  GO    family: stack-destroy (capability: stack)
+  GO    family: test-integration (capability: suite)
+  NO-GO family target missing: test-benchmark (capability 'suite' fires)
+  GO    family: build (capability: ship)
+  GO    family: lint (capability: analyzers)
+  GO    family: fix (capability: autofix)
+  GO    family: audit (capability: deps)
+  GO    family: sast (capability: source)
+  NO-GO family target missing: hooks (capability 'hookcfg' fires)
+  GO    family: docs (capability: docs)
+  GO    family: clean-all (capability: env)
+  NO-GO banned target present: benchmark
+  NO-GO banned target present: pre-commit
+  GO    floor: test in check's expansion
+  GO    floor: lint in check's expansion
+  GO    floor: audit in check's expansion
+  GO    floor: sast in check's expansion
+  NO-GO floor: hooks expands to no commands
+  NO-GO floor: docs's commands missing from 'make -n check'
+VERDICT: NOT CONFORMANT
