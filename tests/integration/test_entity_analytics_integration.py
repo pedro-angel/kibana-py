@@ -43,6 +43,17 @@ def _unique(suffix: str) -> str:
     return f"{PREFIX}-{suffix}-{uuid.uuid4().hex[:8]}"
 
 
+def _wait_until(fetch, ok, *, timeout=90.0, interval=1.0):
+    """Poll fetch() until ok(result) is truthy (eventual consistency / async task
+    manager on the live stack; generous deadline for the slow cold CI runner)."""
+    deadline = time.time() + timeout
+    result = fetch()
+    while not ok(result) and time.time() < deadline:
+        time.sleep(interval)
+        result = fetch()
+    return result
+
+
 def _wait_for_entity_store_status(
     client, expected: str, timeout: float = 300.0, interval: float = 5.0
 ) -> dict:
@@ -177,7 +188,6 @@ class TestPrivilegeMonitoring:
         assert "has_all_required" in result.body
         assert "elasticsearch" in result.body["privileges"]
 
-    @pytest.mark.flaky  # context-dependent: fails in full-suite runs, passes in isolation; see #39
     def test_monitoring_engine_and_users_lifecycle(self, kibana_client):
         """Test the full privilege monitoring lifecycle.
 
@@ -192,7 +202,10 @@ class TestPrivilegeMonitoring:
             init = ea.init_monitoring_engine()
             assert init.body["status"] == "started"
 
-            health = ea.get_monitoring_health()
+            health = _wait_until(
+                ea.get_monitoring_health,
+                lambda r: r.body["status"] == "started",
+            )
             assert health.body["status"] == "started"
 
             created = ea.create_monitored_user(name=user_name)
@@ -201,7 +214,10 @@ class TestPrivilegeMonitoring:
             assert created.body["user"]["is_privileged"] is True
             assert created.body["labels"]["sources"] == ["api"]
 
-            listed = ea.list_monitored_users(kql=f"user.name: {user_name}")
+            listed = _wait_until(
+                lambda: ea.list_monitored_users(kql=f"user.name: {user_name}"),
+                lambda r: [u["id"] for u in r.body] == [user_id],
+            )
             assert [u["id"] for u in listed.body] == [user_id]
 
             renamed = f"{user_name}-renamed"
@@ -226,13 +242,21 @@ class TestPrivilegeMonitoring:
 
             disabled = ea.disable_monitoring_engine()
             assert disabled.body["status"] == "disabled"
-            assert ea.get_monitoring_health().body["status"] == "disabled"
+            health = _wait_until(
+                ea.get_monitoring_health,
+                lambda r: r.body["status"] == "disabled",
+            )
+            assert health.body["status"] == "disabled"
         finally:
             # Always remove the engine and its data (including CSV users)
             result = ea.delete_monitoring_engine(data=True)
             assert result.body["deleted"] is True
 
-        assert ea.get_monitoring_health().body["status"] == "not_installed"
+        health = _wait_until(
+            ea.get_monitoring_health,
+            lambda r: r.body["status"] == "not_installed",
+        )
+        assert health.body["status"] == "not_installed"
 
 
 class TestPrivilegedAccessDetection:

@@ -1,5 +1,6 @@
 """Integration tests for DetectionEngineClient against a live Kibana instance."""
 
+import time
 import uuid
 
 import pytest
@@ -44,6 +45,17 @@ async def async_kibana_client():
 
 def _unique(suffix: str) -> str:
     return f"{PREFIX}-{suffix}-{uuid.uuid4().hex[:12]}"
+
+
+def _wait_until(fetch, ok, *, timeout=90.0, interval=1.0):
+    """Poll fetch() until ok(result) is truthy (eventual consistency / async task
+    manager on the live stack; generous deadline for the slow cold CI runner)."""
+    deadline = time.time() + timeout
+    result = fetch()
+    while not ok(result) and time.time() < deadline:
+        time.sleep(interval)
+        result = fetch()
+    return result
 
 
 def _rule_args(rule_id: str, name: str) -> dict:
@@ -98,14 +110,16 @@ class TestDetectionEngineStatusEndpoints:
         ):
             assert isinstance(status.body[key], int)
 
-    @pytest.mark.flaky  # ~20% fail on cold CI runner (task-manager timing); quarantined, see #39
     def test_install_prepackaged_rules_is_idempotent(self, kibana_client):
         """Prebuilt rules were installed on this stack; re-install is a no-op."""
         result = kibana_client.detection_engine.install_prepackaged_rules()
         assert result.body["rules_installed"] >= 0
         assert result.body["rules_updated"] >= 0
 
-        status = kibana_client.detection_engine.get_prepackaged_rules_status()
+        status = _wait_until(
+            lambda: kibana_client.detection_engine.get_prepackaged_rules_status(),
+            lambda r: r.body["rules_not_installed"] == 0,
+        )
         assert status.body["rules_not_installed"] == 0
 
     def test_get_tags_returns_list(self, kibana_client):
@@ -232,17 +246,20 @@ class TestDetectionRulesLifecycle:
 class TestDetectionRulesExportImport:
     """NDJSON export / multipart import round-trip tests."""
 
-    @pytest.mark.flaky  # ~10% fail on cold CI runner (task-manager timing); quarantined, see #39
     def test_export_import_roundtrip(self, kibana_client):
         rule_id = _unique("export")
         name = _unique("export-rule")
         kibana_client.detection_engine.create_rule(**_rule_args(rule_id, name))
         try:
-            exported = kibana_client.detection_engine.export_rules(
-                objects=[{"rule_id": rule_id}],
-                exclude_export_details=True,
+            lines = _wait_until(
+                lambda: list(
+                    kibana_client.detection_engine.export_rules(
+                        objects=[{"rule_id": rule_id}],
+                        exclude_export_details=True,
+                    )
+                ),
+                lambda ls: len(ls) == 1,
             )
-            lines = list(exported)
             assert len(lines) == 1
             assert lines[0]["rule_id"] == rule_id
 
