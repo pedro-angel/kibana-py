@@ -60,8 +60,8 @@ jobs:
           python-version: "3.13"
           cache: pip
 
-      - name: Install package (pytest-timeout / pytest-randomly come from [dev])
-        run: pip install -e ".[dev,all]"
+      - name: Install package + probe measurement tooling ([probe] = pytest-timeout / pytest-randomly)
+        run: pip install -e ".[dev,all,probe]"
 
       # --- single source of truth for the dev env (fresh clone + CI both use it) ---
       - name: Materialize stack env from template

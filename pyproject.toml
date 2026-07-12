@@ -57,13 +57,16 @@ docs = [
 ]
 build = ["build", "twine>=6.2.0", "cyclonedx-bom"]
 all = ["kibana-py[async,orjson,observability]"]
+# Opt-in measurement tooling for the integration-probe workflow ONLY. Kept out of
+# `dev` on purpose: pytest-randomly auto-activates for every pytest run once installed,
+# which reorders (and, given a latent test-isolation bug in the suite, destabilizes)
+# the standard unit gate. Install with `.[probe]` when measuring, never by default.
+probe = ["pytest-timeout", "pytest-randomly"]
 dev = [
     "pytest>=7.0",
     "pytest-cov",
     "pytest-mock",
     "pytest-asyncio",
-    "pytest-timeout",
-    "pytest-randomly",
     "mypy>=1.0",
     "pyright",
     "types-python-dateutil",
