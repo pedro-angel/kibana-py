@@ -91,7 +91,7 @@ A PyPI/TestPyPI **API token** is needed *only* for the optional manual dry-run
 ## Pre-release checklist
 
 - [ ] `make check` passes (hooks, lint, dependency audit, SAST, unit tests, docs)
-- [ ] `make test-python-matrix` passes (multi-Python unit matrix via nox; missing interpreters are skipped)
+- [ ] `make test-python-matrix` passes (multi-Python unit matrix via nox; fails closed if any supported interpreter is missing — install them via pyenv)
 - [ ] `make test-integration` passes locally against a live stack — **required**; CI does not run it (needs a Docker Elastic Stack)
 - [ ] Documentation builds clean: `make docs` (already covered by `make check`) (HTML with `-W` + linkcheck, matching RTD's `fail_on_warning`)
 - [ ] Version bumped in `kibana/_version.py`

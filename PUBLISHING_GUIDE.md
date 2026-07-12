@@ -88,7 +88,7 @@ make build
 ```
 
 Note: `make audit` (included in `make check`) audits dependency vulnerabilities. `make sast` scans this repository's source code.
-Note: if some local Python interpreters are not installed, `make test-python-matrix` can skip those versions locally. CI runs the full matrix.
+Note: `make test-python-matrix` fails if any supported interpreter (3.11–3.14) is missing — it is fail-closed via nox's `--error-on-missing-interpreters`, so install them (e.g. via pyenv) to run the full matrix locally. CI runs the full matrix.
 
 Run integration tests locally for fast feedback if you changed client logic (the tagged release runs them too, as a **required gate** — see Step 8):
 ```bash
