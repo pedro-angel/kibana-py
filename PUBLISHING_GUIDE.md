@@ -18,17 +18,19 @@ Step-by-step guide to release a new version of `kibana-py` to PyPI.
 
 ## Prerequisites (one-time setup)
 
-Before your first release, ensure:
+`kibana-py` is already set up for this — it publishes on every `v*.*.*` tag today. This section documents the setup for reference (and for forks):
 
-1. **PyPI project exists** and is configured for [trusted publishing](https://docs.pypi.org/trusted-publishers/adding-a-publisher/) from this GitHub repository. In PyPI project settings → Publishing, add:
-   - Owner: your GitHub username or organization
+1. **PyPI project exists** and is configured for [trusted publishing](https://docs.pypi.org/trusted-publishers/adding-a-publisher/) from this GitHub repository. In PyPI project settings → Publishing, the GitHub Actions publisher is:
+   - Owner: the GitHub username or organization (e.g. `pedro-angel`)
    - Repository: `kibana-py`
    - Workflow: `release.yml`
-   - Environment: `release`
+   - Environment: *(none)* — the publisher accepts any environment and the workflow declares none. Binding it to a named GitHub environment is optional hardening (see below), not required to publish.
 
-2. **GitHub environment** named `release` exists in the repository settings (Settings → Environments). This is referenced by the workflow's `environment: release` field.
+2. **You have push access** to `main` and permission to create tags.
 
-3. **You have push access** to `main` and permission to create tags.
+### Optional: a protected `release` environment (approval gate)
+
+Trusted publishing works without a GitHub environment. To add a manual-approval gate before each PyPI upload, you would create a protected `release` environment (Settings → Environments) with **required reviewers** and a `v*.*.*` deployment-tag rule, set the PyPI publisher's Environment to `release`, and uncomment `environment: release` in the `publish-pypi` job — **workflow-first** (send the `release` claim while the PyPI publisher still accepts any environment, *then* tighten the publisher), so a tag pushed mid-change isn't rejected with `invalid-publisher`. The commented `# environment: release`, `# user: __token__`, and `# password:` lines in `release.yml` are inert placeholders for this (and the retired token-based flow), not active configuration.
 
 ## Release process
 
@@ -194,9 +196,9 @@ git push origin v0.2.0
 The workflow greps for `## [0.2.0]` in `CHANGELOG.md`. Make sure the version header exists exactly as `## [X.Y.Z]`.
 
 ### "Publish to PyPI failed"
-- Verify the `release` environment exists in GitHub repository settings
-- Verify trusted publishing is configured in PyPI project settings
-- Check that the workflow has `id-token: write` permission
+- Verify trusted publishing is configured in PyPI project settings (owner / `kibana-py` / workflow `release.yml`)
+- Check that the `publish-pypi` job has `id-token: write` permission
+- If you added the optional `release` environment: confirm the workflow's `environment:` name matches the PyPI publisher's Environment exactly — a mismatch fails the token exchange with `invalid-publisher`
 
 ### "How do I delete a bad tag?"
 ```bash
@@ -222,5 +224,5 @@ You'll need a [TestPyPI account](https://test.pypi.org/) and API token for this.
 
 ---
 
-**Last Updated**: 2026-04-04
+**Last Updated**: 2026-07-12
 **Release Line**: 0.x
