@@ -56,4 +56,4 @@ jobs:
 
       - name: Run unit tests
         run: |
-          pytest tests/unit/ --cov=kibana --cov-fail-under=75
+          pytest tests/unit/ --cov=kibana --cov-fail-under=90
