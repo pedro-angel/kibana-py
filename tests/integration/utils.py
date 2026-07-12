@@ -13,6 +13,12 @@ sys.path.insert(0, str(project_root))
 
 from examples.utils import get_kibana_config
 
+# Generous request timeout so heavy operations (detection-engine rule
+# export/import, prebuilt-rules install, etc.) don't hit the default request
+# timeout on the slow cold CI runner. The per-test gate --timeout=180 still
+# bounds genuine hangs.
+_REQUEST_TIMEOUT = 120.0
+
 
 def get_integration_test_config() -> tuple[str, tuple[str, str] | None, str | None]:
     """
@@ -72,19 +78,23 @@ def create_test_kibana_client(auth_method: str = "auto"):
     if auth_method == "auto":
         # Prefer API key over basic auth
         if api_key:
-            return Kibana(kibana_url, api_key=api_key)
+            return Kibana(kibana_url, request_timeout=_REQUEST_TIMEOUT, api_key=api_key)
         elif basic_auth:
-            return Kibana(kibana_url, basic_auth=basic_auth)
+            return Kibana(
+                kibana_url, request_timeout=_REQUEST_TIMEOUT, basic_auth=basic_auth
+            )
         else:
-            return Kibana(kibana_url)
+            return Kibana(kibana_url, request_timeout=_REQUEST_TIMEOUT)
     elif auth_method == "basic":
         if not basic_auth:
             raise ValueError("Basic auth credentials not available")
-        return Kibana(kibana_url, basic_auth=basic_auth)
+        return Kibana(
+            kibana_url, request_timeout=_REQUEST_TIMEOUT, basic_auth=basic_auth
+        )
     elif auth_method == "api_key":
         if not api_key:
             raise ValueError("API key not available")
-        return Kibana(kibana_url, api_key=api_key)
+        return Kibana(kibana_url, request_timeout=_REQUEST_TIMEOUT, api_key=api_key)
     else:
         raise ValueError(f"Unknown auth method: {auth_method}")
 
@@ -184,19 +194,27 @@ def create_test_async_kibana_client(auth_method: str = "auto"):
     if auth_method == "auto":
         # Prefer API key over basic auth
         if api_key:
-            return AsyncKibana(kibana_url, api_key=api_key)
+            return AsyncKibana(
+                kibana_url, request_timeout=_REQUEST_TIMEOUT, api_key=api_key
+            )
         elif basic_auth:
-            return AsyncKibana(kibana_url, basic_auth=basic_auth)
+            return AsyncKibana(
+                kibana_url, request_timeout=_REQUEST_TIMEOUT, basic_auth=basic_auth
+            )
         else:
-            return AsyncKibana(kibana_url)
+            return AsyncKibana(kibana_url, request_timeout=_REQUEST_TIMEOUT)
     elif auth_method == "basic":
         if not basic_auth:
             raise ValueError("Basic auth credentials not available")
-        return AsyncKibana(kibana_url, basic_auth=basic_auth)
+        return AsyncKibana(
+            kibana_url, request_timeout=_REQUEST_TIMEOUT, basic_auth=basic_auth
+        )
     elif auth_method == "api_key":
         if not api_key:
             raise ValueError("API key not available")
-        return AsyncKibana(kibana_url, api_key=api_key)
+        return AsyncKibana(
+            kibana_url, request_timeout=_REQUEST_TIMEOUT, api_key=api_key
+        )
     else:
         raise ValueError(f"Unknown auth method: {auth_method}")
 
