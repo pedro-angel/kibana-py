@@ -1,5 +1,7 @@
 """Integration tests for OTLP endpoint connectivity and span transmission."""
 
+import os
+
 import pytest
 
 # Check if OpenTelemetry is available
@@ -18,6 +20,36 @@ pytestmark = pytest.mark.skipif(
     not is_kibana_available(),
     reason="Kibana not available. Set KIBANA_URL or start elastic-start-local stack.",
 )
+
+
+def _configured_otlp_endpoint() -> str:
+    return os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:8200")
+
+
+@pytest.fixture(scope="module")
+def _otlp_reachable() -> bool:
+    """Probe the OTLP endpoint once (#36): tests that target a live endpoint
+    should skip -- not fail -- when no APM/OTLP server is reachable."""
+    import urllib.error
+    import urllib.request
+
+    try:
+        with urllib.request.urlopen(_configured_otlp_endpoint(), timeout=5):
+            return True
+    except (urllib.error.URLError, OSError):
+        return False
+
+
+@pytest.fixture(autouse=True)
+def _skip_when_otlp_unreachable(request, _otlp_reachable):
+    """Skip endpoint-dependent OTLP tests when the endpoint is unreachable.
+
+    Only guards tests that request the ``otel_endpoint`` fixture. Tests that
+    hardcode a deliberately-unreachable/malformed endpoint don't request it, so
+    they still run -- they test graceful degradation on purpose.
+    """
+    if "otel_endpoint" in request.fixturenames and not _otlp_reachable:
+        pytest.skip(f"OTLP endpoint not reachable at {_configured_otlp_endpoint()}")
 
 
 @pytest.mark.skipif(
