@@ -1,5 +1,6 @@
 """Integration tests for ListsClient against a live Kibana instance."""
 
+import asyncio
 import time
 import uuid
 
@@ -42,6 +43,23 @@ def unique_list_id():
     return f"kbnpy-lists-{uuid.uuid4().hex[:12]}"
 
 
+@pytest.fixture(scope="module", autouse=True)
+def _ensure_lists_index_exists():
+    """Ensure the shared value list data streams exist before any list test.
+
+    ``create_index`` is idempotent; without this, a list-creating test that runs
+    (under randomized order) before ``TestListsIndexStatus`` on a fresh stack hits
+    a 400 "data stream .lists-default does not exist".
+    """
+    if not is_kibana_available():
+        return
+    client = create_test_kibana_client(auth_method="auto")
+    try:
+        client.lists.create_index()
+    finally:
+        client.close()
+
+
 def _cleanup_list(client, list_id: str, space_id: str | None = None) -> None:
     """Delete a value list, ignoring the case where it is already gone."""
     try:
@@ -50,7 +68,7 @@ def _cleanup_list(client, list_id: str, space_id: str | None = None) -> None:
         pass
 
 
-def _wait_for_item_gone(client, item_id: str, timeout: float = 15.0) -> None:
+def _wait_for_item_gone(client, item_id: str, timeout: float = 60.0) -> None:
     """Poll get_item until the deleted item stops being returned.
 
     Item deletions become visible slightly asynchronously on the live stack,
@@ -69,7 +87,7 @@ def _wait_for_item_gone(client, item_id: str, timeout: float = 15.0) -> None:
         time.sleep(0.5)
 
 
-def _wait_for_item_total(client, list_id: str, expected: int, timeout: float = 15.0):
+def _wait_for_item_total(client, list_id: str, expected: int, timeout: float = 60.0):
     """Poll find_items until the list holds the expected number of items.
 
     Kibana processes list item imports slightly asynchronously (items land
@@ -82,6 +100,27 @@ def _wait_for_item_total(client, list_id: str, expected: int, timeout: float = 1
         time.sleep(0.5)
         found = client.lists.find_items(list_id=list_id)
     return found
+
+
+def _wait_until(fetch, ok, *, timeout=60.0, interval=0.5):
+    """Poll fetch() until ok(result) is truthy (eventual consistency on the live
+    stack; generous deadline for the slow cold CI runner)."""
+    deadline = time.time() + timeout
+    result = fetch()
+    while not ok(result) and time.time() < deadline:
+        time.sleep(interval)
+        result = fetch()
+    return result
+
+
+async def _await_until(fetch, ok, *, timeout=60.0, interval=0.5):
+    """Async twin of _wait_until (fetch returns a coroutine)."""
+    deadline = time.time() + timeout
+    result = await fetch()
+    while not ok(result) and time.time() < deadline:
+        await asyncio.sleep(interval)
+        result = await fetch()
+    return result
 
 
 class TestListsIndexStatus:
@@ -173,9 +212,12 @@ class TestListsLifecycle:
             # description untouched by the patch
             assert patched.body["description"] == "updated description"
 
-            # Find with a filter on the list name
-            found = kibana_client.lists.find(
-                filter=f"name:{patched.body['name']}", per_page=100
+            # Find with a filter on the list name (index-refresh race: poll)
+            found = _wait_until(
+                lambda: kibana_client.lists.find(
+                    filter=f"name:{patched.body['name']}", per_page=100
+                ),
+                lambda r: r.body["total"] >= 1,
             )
             assert found.body["total"] >= 1
             assert any(entry["id"] == unique_list_id for entry in found.body["data"])
@@ -234,8 +276,14 @@ class TestListItemsLifecycle:
             )
             assert patched.body["value"] == "192.0.2.3"
 
-            # Find
-            found = _wait_for_item_total(kibana_client, unique_list_id, 1)
+            # Find: poll until BOTH the count and the patched value are visible
+            # (the item total and the patched value are separately eventually
+            # consistent).
+            found = _wait_until(
+                lambda: kibana_client.lists.find_items(list_id=unique_list_id),
+                lambda r: r.body["total"] == 1
+                and r.body["data"][0]["value"] == "192.0.2.3",
+            )
             assert found.body["total"] == 1
             assert found.body["data"][0]["value"] == "192.0.2.3"
 
@@ -280,7 +328,11 @@ class TestListItemsImportExport:
             found = _wait_for_item_total(kibana_client, unique_list_id, len(values))
             assert found.body["total"] == len(values)
 
-            exported = kibana_client.lists.export_items(list_id=unique_list_id)
+            # Export is separately eventually consistent from the item count.
+            exported = _wait_until(
+                lambda: kibana_client.lists.export_items(list_id=unique_list_id),
+                lambda r: sorted(str(v) for v in r.body) == values,
+            )
             assert sorted(str(value) for value in exported.body) == values
         finally:
             _cleanup_list(kibana_client, unique_list_id)
@@ -389,11 +441,15 @@ class TestAsyncListsLifecycle:
             )
             assert patched.body["name"] == "kbnpy async lists - patched"
 
-            found = await async_kibana_client.lists.find_items(list_id=unique_list_id)
+            found = await _await_until(
+                lambda: async_kibana_client.lists.find_items(list_id=unique_list_id),
+                lambda r: r.body["total"] == 1,
+            )
             assert found.body["total"] == 1
 
-            exported = await async_kibana_client.lists.export_items(
-                list_id=unique_list_id
+            exported = await _await_until(
+                lambda: async_kibana_client.lists.export_items(list_id=unique_list_id),
+                lambda r: [str(v) for v in r.body] == ["192.0.2.10"],
             )
             assert [str(value) for value in exported.body] == ["192.0.2.10"]
         finally:
