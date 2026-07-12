@@ -27,7 +27,11 @@ def get_integration_test_config() -> tuple[str, tuple[str, str] | None, str | No
     kibana_url = os.getenv("KIBANA_URL")
     kibana_username = os.getenv("KIBANA_USERNAME")
     kibana_password = os.getenv("KIBANA_PASSWORD")
-    api_key = os.getenv("KIBANA_API_KEY")
+    # Fall back to the start-local ES API key (the integration conftest injects it
+    # into the env; Kibana accepts it). Without this, api-key auth breaks whenever
+    # KIBANA_URL is set, because the get_kibana_config() fallback below -- the only
+    # other place that reads ES_LOCAL_API_KEY -- is then skipped.
+    api_key = os.getenv("KIBANA_API_KEY") or os.getenv("ES_LOCAL_API_KEY")
 
     # If not found, fall back to the same logic as examples
     if not kibana_url:
