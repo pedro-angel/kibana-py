@@ -121,6 +121,7 @@ asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 markers = [
     "benchmark: performance and resource usage benchmarks (deselect with '-m \"not benchmark\"')",
+    "flaky: known-flaky/context-dependent in CI (measured); deselect with '-m \"not flaky\"' (the release gate does). Plain deselection marker, NOT auto-retried. See #39.",
 ]
 
 [tool.coverage.run]

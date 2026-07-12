@@ -177,6 +177,7 @@ class TestPrivilegeMonitoring:
         assert "has_all_required" in result.body
         assert "elasticsearch" in result.body["privileges"]
 
+    @pytest.mark.flaky  # context-dependent: fails in full-suite runs, passes in isolation; see #39
     def test_monitoring_engine_and_users_lifecycle(self, kibana_client):
         """Test the full privilege monitoring lifecycle.
 

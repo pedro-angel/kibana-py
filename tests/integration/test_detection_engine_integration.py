@@ -98,6 +98,7 @@ class TestDetectionEngineStatusEndpoints:
         ):
             assert isinstance(status.body[key], int)
 
+    @pytest.mark.flaky  # ~20% fail on cold CI runner (task-manager timing); quarantined, see #39
     def test_install_prepackaged_rules_is_idempotent(self, kibana_client):
         """Prebuilt rules were installed on this stack; re-install is a no-op."""
         result = kibana_client.detection_engine.install_prepackaged_rules()
@@ -231,6 +232,7 @@ class TestDetectionRulesLifecycle:
 class TestDetectionRulesExportImport:
     """NDJSON export / multipart import round-trip tests."""
 
+    @pytest.mark.flaky  # ~10% fail on cold CI runner (task-manager timing); quarantined, see #39
     def test_export_import_roundtrip(self, kibana_client):
         rule_id = _unique("export")
         name = _unique("export-rule")
