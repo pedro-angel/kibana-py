@@ -301,15 +301,22 @@ class TestDefaultSerializers:
         import importlib
         import sys
 
+        import kibana.serializer
+
+        # Snapshot the module's original attributes. reload() rebuilds the
+        # serializer classes as *new* objects; restoring this snapshot in the
+        # finally (instead of a second reload) puts the original class
+        # identities back, so tests that run afterward and compare against
+        # import-time references still match under any test order. See #34.
+        original_attrs = kibana.serializer.__dict__.copy()
+
         # Temporarily hide orjson from imports
         orjson_module = sys.modules.get("orjson")
         if orjson_module:
             sys.modules["orjson"] = None
 
         try:
-            # Reload the serializer module to trigger the import logic
-            import kibana.serializer
-
+            # Reload the serializer module to trigger the fallback import logic
             importlib.reload(kibana.serializer)
 
             # Check that the default serializer is JSONSerializer
@@ -322,7 +329,7 @@ class TestDefaultSerializers:
             # Restore orjson module
             if orjson_module:
                 sys.modules["orjson"] = orjson_module
-            # Reload again to restore original state
-            import kibana.serializer
-
-            importlib.reload(kibana.serializer)
+            # Restore the exact original module state (original class identities)
+            # instead of reloading, which would create fresh identities.
+            kibana.serializer.__dict__.clear()
+            kibana.serializer.__dict__.update(original_attrs)
