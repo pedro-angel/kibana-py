@@ -43,6 +43,23 @@ def unique_list_id():
     return f"kbnpy-lists-{uuid.uuid4().hex[:12]}"
 
 
+@pytest.fixture(scope="module", autouse=True)
+def _ensure_lists_index_exists():
+    """Ensure the shared value list data streams exist before any list test.
+
+    ``create_index`` is idempotent; without this, a list-creating test that runs
+    (under randomized order) before ``TestListsIndexStatus`` on a fresh stack hits
+    a 400 "data stream .lists-default does not exist".
+    """
+    if not is_kibana_available():
+        return
+    client = create_test_kibana_client(auth_method="auto")
+    try:
+        client.lists.create_index()
+    finally:
+        client.close()
+
+
 def _cleanup_list(client, list_id: str, space_id: str | None = None) -> None:
     """Delete a value list, ignoring the case where it is already gone."""
     try:
