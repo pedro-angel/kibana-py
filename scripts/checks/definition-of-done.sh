@@ -50,18 +50,50 @@ run() {
   fi
 }
 
+# Suite criteria run pytest, and a fully-skipped or empty pytest run still exits 0
+# -- so exit code ALONE can certify GO on zero executed tests. After a zero-exit
+# run, parse the pytest summary line and NO-GO unless >=1 passed; for suites with
+# no legitimate skips (allow_skips=no), also NO-GO on any skips. unit_green is
+# allow_skips=no: its conditional skips (optional deps / OTel) do not fire under
+# the [dev,all] env the gate installs, so a skip there signals an incomplete env.
+# matrix_green's log is multi-session nox output; the parse inspects the LAST
+# session only -- a coarse >=1-passed guard against an empty matrix, with
+# per-interpreter coverage guaranteed separately by #29. Portable: no grep -o/-a.
+# #30
+run_suite() {
+  name="$1"; allow_skips="$2"; shift 2
+  if ! "$@" >"$logdir/$name.log" 2>&1; then
+    echo "  NO-GO $name  (log: $logdir/$name.log)"
+    nogo=1
+    return
+  fi
+  summary=$(grep -E '[0-9]+ (passed|skipped|failed|error|deselected)|no tests ran' "$logdir/$name.log" | tail -1)
+  passed=$(printf '%s\n' "$summary" | sed -n 's/ passed.*//p' | sed 's/.*[^0-9]//')
+  skipped=$(printf '%s\n' "$summary" | sed -n 's/ skipped.*//p' | sed 's/.*[^0-9]//')
+  passed=${passed:-0}; skipped=${skipped:-0}
+  if [ "$passed" -lt 1 ]; then
+    echo "  NO-GO $name  (exit 0 but 0 tests passed -- empty/all-skipped run; log: $logdir/$name.log)"
+    nogo=1
+  elif [ "$allow_skips" = no ] && [ "$skipped" -gt 0 ]; then
+    echo "  NO-GO $name  (exit 0, $passed passed, but $skipped skipped in a no-skip suite; log: $logdir/$name.log)"
+    nogo=1
+  else
+    echo "  GO    $name  ($passed passed, $skipped skipped)"
+  fi
+}
+
 echo "Definition-of-Done gate ($cfg)"
 
-if req unit_green;             then run unit_green             make test; fi
+if req unit_green;             then run_suite unit_green        no  make test; fi
 if req types_clean;            then run types_clean            make lint; fi
 if req hygiene_hooks;          then run hygiene_hooks          make hooks; fi
 if req audit_clean;            then run audit_clean            make audit; fi
 if req sast_clean;             then run sast_clean             make sast; fi
 if req docs_strict;            then run docs_strict            make docs; fi
 if req vocabulary_conformant;  then run vocabulary_conformant  skills/dev-environment-facade/vocabulary-conformance.sh; fi
-if req integration_green;      then run integration_green      make test-integration; fi
-if req benchmark_green;        then run benchmark_green        make test-benchmark; fi
-if req matrix_green;           then run matrix_green           make test-python-matrix; fi
+if req integration_green;      then run_suite integration_green yes make test-integration; fi
+if req benchmark_green;        then run_suite benchmark_green   yes make test-benchmark; fi
+if req matrix_green;           then run_suite matrix_green      yes make test-python-matrix; fi
 
 if req changelog_entry; then
   if [ -f CHANGELOG.md ] && grep -qiE '^## (\[?unreleased|\[?[0-9]+\.[0-9]+\.[0-9]+)' CHANGELOG.md; then
