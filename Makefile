@@ -49,7 +49,7 @@ stack-destroy: ## Destroy local Elastic Stack and delete all data (fresh start)
 
 .PHONY: test
 test: ## Run unit tests with coverage
-	$(VENV_BIN)/pytest tests/unit/ --cov=kibana --cov-fail-under=75
+	$(VENV_BIN)/pytest tests/unit/ --cov=kibana --cov-fail-under=90
 
 .PHONY: test-integration
 test-integration: stack-start ## Run integration tests (starts stack if needed)
