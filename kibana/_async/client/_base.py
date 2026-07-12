@@ -25,7 +25,7 @@ from kibana._sync.client._base import (
     resolve_auth_headers,
     wrap_api_response,
 )
-from kibana.exceptions import HTTP_EXCEPTIONS, ApiError
+from kibana.exceptions import HTTP_EXCEPTIONS, ApiError, translate_transport_errors
 from kibana.observability import KibanaInstrumentor, span_context
 
 __all__ = ["AsyncBaseClient", "DEFAULT", "DefaultType"]
@@ -201,10 +201,11 @@ class AsyncBaseClient:
         with span_context(
             f"kibana.async.{method.lower()}", attributes=span_attrs
         ) as span:
-            # Perform the async request
-            response: TransportApiResponse = await self._transport.perform_request(
-                **request_kwargs
-            )
+            # Perform the async request (translating transport-layer errors)
+            with translate_transport_errors():
+                response: TransportApiResponse = await self._transport.perform_request(
+                    **request_kwargs
+                )
 
             # Add response status to span
             if span is not None:
