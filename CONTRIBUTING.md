@@ -131,7 +131,7 @@ make check
 What each target does:
 
 - `make hooks`: required. Runs pre-commit-stage hooks on all files, plus the manual-stage pin check (includes formatting and Ruff fixes/checks).
-- `make fix`: optional convenience target. Applies auto-fixes via pinned pre-commit formatter/lint hooks (isort, black, ruff --fix).
+- `make fix`: optional convenience target. Applies auto-fixes via pinned pre-commit formatter/lint hooks (isort, black, ruff-check --fix).
 - `make lint`: mypy type-check only.
 - `make check`: full local CI gate (hooks + mypy + pip-audit + bandit + unit tests + docs).
 
