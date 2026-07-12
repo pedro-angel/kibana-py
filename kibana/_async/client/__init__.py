@@ -53,7 +53,7 @@ from kibana._async.client.visualizations import AsyncVisualizationsClient
 from kibana._async.client.workflows import AsyncWorkflowsClient
 from kibana._rate_limiter import AsyncRateLimiter
 from kibana._sync.client import _build_node_configs, _build_node_options
-from kibana.exceptions import SpaceNotFoundError
+from kibana.exceptions import NotFoundError, SpaceNotFoundError
 from kibana.serializer import DEFAULT_SERIALIZERS
 
 __all__ = ["AsyncKibana", "AsyncSpaceScopedKibana", "DEFAULT", "DefaultType"]
@@ -528,14 +528,11 @@ class AsyncSpaceScopedKibana:
         """
         try:
             await self._client.spaces.get(id=self._space_id)
-        except Exception as e:
-            # Check if this is a "not found" error
-            error_str = str(e).lower()
-            if "not found" in error_str or "404" in error_str:
-                raise SpaceNotFoundError(self._space_id)
-            else:
-                # Re-raise other errors (auth, network, etc.)
-                raise
+        except NotFoundError:
+            # The space genuinely does not exist (404). Any other error (auth,
+            # network, serialization) propagates unchanged rather than being
+            # mislabeled as a missing space.
+            raise SpaceNotFoundError(self._space_id) from None
 
     @property
     def spaces(self) -> AsyncSpacesClient:
