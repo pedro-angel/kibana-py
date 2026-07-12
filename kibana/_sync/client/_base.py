@@ -20,7 +20,7 @@ from elastic_transport import (
     TransportApiResponse,
 )
 
-from kibana.exceptions import HTTP_EXCEPTIONS, ApiError
+from kibana.exceptions import HTTP_EXCEPTIONS, ApiError, translate_transport_errors
 from kibana.observability import KibanaInstrumentor, span_context
 
 # Set up logger
@@ -512,10 +512,11 @@ class BaseClient:
             request_kwargs["request_timeout"] = self._request_timeout
 
         with span_context(f"kibana.{method.lower()}", attributes=span_attrs) as span:
-            # Perform the request
-            response: TransportApiResponse = self._transport.perform_request(
-                **request_kwargs
-            )
+            # Perform the request (translating transport-layer errors to kibana.exceptions)
+            with translate_transport_errors():
+                response: TransportApiResponse = self._transport.perform_request(
+                    **request_kwargs
+                )
 
             # Add response status to span
             if span is not None:

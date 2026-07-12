@@ -24,9 +24,15 @@ Exception Hierarchy:
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from typing import Any
 
 from elastic_transport import ApiResponseMeta
+from elastic_transport import ConnectionError as _TransportConnectionError
+from elastic_transport import ConnectionTimeout as _TransportConnectionTimeout
+from elastic_transport import SerializationError as _TransportSerializationError
+from elastic_transport import TlsError as _TransportTlsError
+from elastic_transport import TransportError as _TransportError
 
 
 class KibanaException(Exception):
@@ -46,7 +52,12 @@ class KibanaException(Exception):
         ...     print(f"Kibana error: {e}")
     """
 
-    pass
+    def __init__(self, message: str = "", *args: Any) -> None:
+        # Every kibana exception exposes ``.message`` (the docs use it uniformly,
+        # incl. on the transport exceptions). ApiError overrides this to also carry
+        # meta/body/status_code.
+        self.message = message
+        super().__init__(message, *args)
 
 
 class ApiError(KibanaException):
@@ -371,3 +382,32 @@ HTTP_EXCEPTIONS: dict[int, type[ApiError]] = {
     404: NotFoundError,
     409: ConflictError,
 }
+
+
+@contextmanager
+def translate_transport_errors():
+    """Re-raise ``elastic_transport`` transport-level exceptions as their
+    ``kibana.exceptions`` equivalents.
+
+    Without this, a dropped connection / timeout / TLS failure propagates as an
+    ``elastic_transport`` exception, which the ``kibana.exceptions.*`` types the
+    docs tell users to catch will miss (they are distinct classes with the same
+    names). Wrap the transport call site with this so the documented ``except``
+    clauses work.
+
+    Ordered specific->general because elastic_transport's hierarchy differs from
+    kibana's: ET ``ConnectionTimeout`` subclasses ``TransportError`` *directly*
+    (not ``ConnectionError``), and ET ``TlsError`` subclasses ``ConnectionError``.
+    """
+    try:
+        yield
+    except _TransportConnectionTimeout as e:
+        raise ConnectionTimeout(str(e)) from e
+    except _TransportTlsError as e:
+        raise SSLError(str(e)) from e
+    except _TransportConnectionError as e:
+        raise ConnectionError(str(e)) from e
+    except _TransportSerializationError as e:
+        raise SerializationError(str(e)) from e
+    except _TransportError as e:
+        raise TransportError(str(e)) from e
