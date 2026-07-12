@@ -46,7 +46,7 @@ steps:
 """
 
 
-def _wait_for_execution(client, execution_id: str, timeout: float = 60.0) -> dict:
+def _wait_for_execution(client, execution_id: str, timeout: float = 120.0) -> dict:
     """Poll an execution until it reaches a terminal status."""
     deadline = time.monotonic() + timeout
     body = {}
@@ -58,7 +58,7 @@ def _wait_for_execution(client, execution_id: str, timeout: float = 60.0) -> dic
     return body
 
 
-def _wait_for_logs(client, execution_id: str, timeout: float = 30.0, **kwargs) -> dict:
+def _wait_for_logs(client, execution_id: str, timeout: float = 90.0, **kwargs) -> dict:
     """Poll execution logs until entries are indexed (async ES indexing)."""
     deadline = time.monotonic() + timeout
     body = {}
@@ -275,17 +275,35 @@ class TestWorkflowsExecutionIntegration:
         ).body
         assert isinstance(children, list)
 
-        # Executions listing for the workflow
+        # Executions listing for the workflow (downstream index can lag — poll)
+        deadline = time.monotonic() + 60
         executions = kibana_client.workflows.get_executions(
             workflow_id=workflow, execution_types=["production"]
         ).body
+        while (
+            not (
+                executions["total"] >= 1
+                and any(item["id"] == execution_id for item in executions["results"])
+            )
+            and time.monotonic() < deadline
+        ):
+            time.sleep(1)
+            executions = kibana_client.workflows.get_executions(
+                workflow_id=workflow, execution_types=["production"]
+            ).body
         assert executions["total"] >= 1
         assert any(item["id"] == execution_id for item in executions["results"])
 
-        # Step executions across runs
+        # Step executions across runs (downstream index can lag — poll)
+        deadline = time.monotonic() + 60
         steps = kibana_client.workflows.get_step_executions(
             workflow_id=workflow, step_id="log_step", include_output=True
         ).body
+        while steps["total"] < 1 and time.monotonic() < deadline:
+            time.sleep(1)
+            steps = kibana_client.workflows.get_step_executions(
+                workflow_id=workflow, step_id="log_step", include_output=True
+            ).body
         assert steps["total"] >= 1
         step = steps["results"][0]
         assert step["stepId"] == "log_step"
@@ -397,7 +415,13 @@ class TestAsyncWorkflowsIntegration:
                 await asyncio.sleep(1)
             assert total >= 1
 
-            found = (await client.workflows.get_all(query=workflow_id)).body
+            # The workflow can lag in the search index — poll until it appears
+            found = {"results": []}
+            for _ in range(60):
+                found = (await client.workflows.get_all(query=workflow_id)).body
+                if any(item["id"] == workflow_id for item in found["results"]):
+                    break
+                await asyncio.sleep(1)
             assert any(item["id"] == workflow_id for item in found["results"])
         finally:
             try:
