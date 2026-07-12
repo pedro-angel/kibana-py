@@ -62,6 +62,8 @@ dev = [
     "pytest-cov",
     "pytest-mock",
     "pytest-asyncio",
+    "pytest-timeout",
+    "pytest-randomly",
     "mypy>=1.0",
     "pyright",
     "types-python-dateutil",

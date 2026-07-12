@@ -1,0 +1,128 @@
+name: integration-probe
+
+# MEASUREMENT SPIKE -- not a gate, not required, manual trigger only.
+# Emits evidence (runner specs, cold bring-up timings, per-test flake rate) so the
+# real on-demand integration workflow is tuned from data, not guesses. Deliberately
+# self-contained; the shared-harness refactor (readiness gate + plugins reused by
+# `make test-integration`) comes when we productionize, not here.
+#
+# NOTE: workflow_dispatch only becomes runnable once this file is on the default
+# branch. It is trigger-inert (no push/PR/schedule), so merging changes nothing
+# until someone opens Actions -> integration-probe -> Run workflow.
+
+on:
+  workflow_dispatch:
+    inputs:
+      repeat_count:
+        description: "Times to run the selection (per-test flake rate = passes / repeat_count). Keep at 1 for the first run; bump only WITH a narrow test_selector."
+        type: number
+        required: true
+        default: 1
+      test_selector:
+        description: "pytest -k expression to narrow scope (blank = whole suite). Use a subset for flake measurement."
+        type: string
+        required: false
+        default: ""
+
+permissions: {}            # deny-all at workflow level
+
+concurrency:
+  group: integration-probe-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120     # cold 4-core is slower than the 20min warm/18-core local baseline
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+
+      # --- H1: settle the runner-spec uncertainties the research flagged ---
+      - name: Runner facts
+        run: |
+          {
+            echo "### Runner facts"
+            echo '```'
+            echo "nproc: $(nproc)"
+            free -h
+            df -h /
+            docker version --format 'docker {{.Server.Version}}'
+            docker compose version
+            lsb_release -a 2>/dev/null
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install package (pytest-timeout / pytest-randomly come from [dev])
+        run: pip install -e ".[dev,all]"
+
+      # --- single source of truth for the dev env (fresh clone + CI both use it) ---
+      - name: Materialize stack env from template
+        working-directory: elastic-start-local
+        run: cp .env.example .env
+
+      # --- H2: time the COLD stack bring-up ---
+      - name: Start stack (timed)
+        working-directory: elastic-start-local
+        run: |
+          set -euo pipefail
+          t0=$(date +%s)
+          docker compose up --wait -d
+          echo "compose_up_seconds=$(( $(date +%s) - t0 ))" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      # --- readiness gate: poll /api/status until available (unauth = redacted level, no creds) ---
+      - name: Wait for Kibana available (timed)
+        run: |
+          set -uo pipefail
+          t0=$(date +%s); level=""
+          for _ in $(seq 1 60); do
+            level=$(curl -s http://localhost:5601/api/status | jq -r '.status.overall.level // empty' 2>/dev/null || true)
+            [ "$level" = "available" ] && break
+            sleep 5
+          done
+          echo "kibana_ready_seconds=$(( $(date +%s) - t0 )) level=${level:-none}" | tee -a "$GITHUB_STEP_SUMMARY"
+          [ "$level" = "available" ] || { echo "Kibana never reached 'available'"; exit 1; }
+
+      # --- H3: run the selection K times; randomized order; per-test timeout; NO reruns ---
+      - name: Run selection x repeat_count
+        env:
+          KIBANA_URL: http://localhost:5601
+          KIBANA_USERNAME: elastic
+          KIBANA_PASSWORD: kibana-py-es-dev
+        run: |
+          set -uo pipefail
+          reps="${{ inputs.repeat_count }}"
+          sel="${{ inputs.test_selector }}"
+          mkdir -p probe-junit
+          for i in $(seq 1 "$reps"); do
+            echo "::group::run $i/$reps"
+            pytest tests/integration/ ${sel:+-k "$sel"} \
+              -o addopts="" -p no:cacheprovider \
+              --timeout=120 --timeout-method=signal \
+              --junitxml="probe-junit/run-$i.xml" -q -ra || true   # never abort the measurement
+            echo "::endgroup::"
+          done
+
+      # --- aggregate; FLAKY vs ALWAYS-FAIL; exits non-zero ONLY if nothing executed ---
+      - name: Aggregate flake rate
+        run: python3 .github/scripts/flake_rate.py probe-junit "$GITHUB_STEP_SUMMARY"
+
+      - name: Capture stack logs
+        if: always()
+        working-directory: elastic-start-local
+        run: docker compose logs > ../probe-junit/stack.log 2>&1 || true
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: integration-probe-evidence
+          path: probe-junit/**
+          if-no-files-found: error
