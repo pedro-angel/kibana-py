@@ -188,7 +188,7 @@ class TestPrivilegeMonitoring:
         assert "has_all_required" in result.body
         assert "elasticsearch" in result.body["privileges"]
 
-    # Quarantined (measured, see #39): on the cold CI runner the engine's periodic
+    # Quarantined (measured, see #53): on the cold CI runner the engine's periodic
     # task -- started by init_monitoring_engine() + the health poll -- is still
     # running when the test issues the ad-hoc schedule_monitoring_engine_now()
     # below, and the two collide: [500] Failed to run task

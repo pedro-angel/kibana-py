@@ -369,7 +369,7 @@ class TestWorkflowsExecutionIntegration:
 class TestAsyncWorkflowsIntegration:
     """Async round-trip integration tests for the Workflows API."""
 
-    # Quarantined (measured, see #39): on the cold CI runner the cleanup
+    # Quarantined (measured, see #53): on the cold CI runner the cleanup
     # delete(force=True) below races execution-terminal-state propagation -- the
     # test-run execution has reached "completed" but the workflow still has a
     # running execution server-side, so force-delete returns [409] Cannot
