@@ -87,8 +87,24 @@ esac
 # Operations
 # -----------------------------------------------------------------------
 
+# Seed .env on a fresh clone. The upstream start.sh and every operation below
+# source ./.env ("./.env: No such file or directory" otherwise), but only the
+# non-secret .env.example is tracked (.env is gitignored). Copy the template when
+# .env is absent so a clean checkout works for ALL operations; an existing .env is
+# left untouched. Assumes the working directory is already ELASTIC_DIR.
+seed_env() {
+  if [ ! -f ./.env ]; then
+    echo "No .env found -- seeding from .env.example (fresh clone)."
+    cp ./.env.example ./.env || { echo "Error: failed to seed .env from .env.example" >&2; exit 1; }
+  fi
+}
+
 do_start() {
   cd "${ELASTIC_DIR}"
+
+  # Step 0: Seed .env on a fresh clone (see seed_env) so upstream start.sh can
+  # source it instead of dying on a missing ./.env.
+  seed_env
 
   # Step 1: Upstream start.sh (disk check, trial-expiry, full stack up)
   ./start.sh
@@ -159,6 +175,7 @@ do_start() {
 
 do_stop() {
   cd "${ELASTIC_DIR}"
+  seed_env
   . ./.env
 
   echo "---------------------------------------------------------------------"
@@ -181,6 +198,7 @@ do_stop() {
 
 do_status() {
   cd "${ELASTIC_DIR}"
+  seed_env
   . ./.env
 
   echo "---------------------------------------------------------------------"
@@ -194,6 +212,7 @@ do_status() {
 
 do_destroy() {
   cd "${ELASTIC_DIR}"
+  seed_env
   . ./.env
 
   echo "---------------------------------------------------------------------"
