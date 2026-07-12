@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-07-12
+
+### Fixed
+- **Connection, timeout, TLS, and transport errors are now catchable through the
+  public API.** The client documented `except ConnectionError / ConnectionTimeout
+  / SSLError / TransportError`, but `elastic_transport` raised its own
+  same-named-but-distinct classes that slipped past those handlers, so a dropped
+  connection, request timeout, or TLS failure was uncatchable via
+  `kibana.exceptions`. Transport-layer errors are now translated to the matching
+  `kibana.exceptions` types (the original error is preserved as the exception
+  cause), and `KibanaException` gained a uniform `.message` attribute across all
+  exception types.
+- **Space-existence checks no longer misfire or mis-cache.** `_validate_space_exists`
+  and `_validate_space_on_creation` detected a missing space by string-matching
+  error text under a broad `except Exception`, which (a) mislabeled unrelated
+  400/403/500 errors as `SpaceNotFoundError` and broke on changed or localized
+  Kibana messages, and (b) negatively cached the space as "missing" on any
+  transient auth/network error for the whole cache TTL. They now catch the real
+  `NotFoundError`; other errors propagate unchanged and are not cached.
+
 ## [0.4.0] - 2026-07-11
 
 ### Changed
@@ -287,7 +307,8 @@ Initial release of kibana-py, a Python client library for the Kibana REST API.
 
 ---
 
-[Unreleased]: https://github.com/pedro-angel/kibana-py/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/pedro-angel/kibana-py/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/pedro-angel/kibana-py/releases/tag/v0.4.1
 [0.4.0]: https://github.com/pedro-angel/kibana-py/releases/tag/v0.4.0
 [0.3.1]: https://github.com/pedro-angel/kibana-py/releases/tag/v0.3.1
 [0.3.0]: https://github.com/pedro-angel/kibana-py/releases/tag/v0.3.0
