@@ -63,46 +63,9 @@ jobs:
       - name: Install package + probe measurement tooling ([probe] = pytest-timeout / pytest-randomly)
         run: pip install -e ".[dev,all,probe]"
 
-      # --- single source of truth for the dev env (fresh clone + CI both use it) ---
-      - name: Materialize stack env from template
-        working-directory: elastic-start-local
-        run: cp .env.example .env
-
-      # --- H2: time the COLD stack bring-up ---
-      - name: Start stack (timed)
-        working-directory: elastic-start-local
-        run: |
-          set -euo pipefail
-          t0=$(date +%s)
-          # Include the standalone APM server so the OTLP/observability tier runs for real.
-          docker compose -f docker-compose.yml -f docker-compose.apm.yml up --wait -d
-          echo "compose_up_seconds=$(( $(date +%s) - t0 ))" | tee -a "$GITHUB_STEP_SUMMARY"
-
-      # --- readiness gate: poll /api/status until available (unauth = redacted level, no creds) ---
-      - name: Wait for Kibana available (timed)
-        run: |
-          set -uo pipefail
-          t0=$(date +%s); level=""
-          for _ in $(seq 1 60); do
-            level=$(curl -s http://localhost:5601/api/status | jq -r '.status.overall.level // empty' 2>/dev/null || true)
-            [ "$level" = "available" ] && break
-            sleep 5
-          done
-          echo "kibana_ready_seconds=$(( $(date +%s) - t0 )) level=${level:-none}" | tee -a "$GITHUB_STEP_SUMMARY"
-          [ "$level" = "available" ] || { echo "Kibana never reached 'available'"; exit 1; }
-
-      # --- APM readiness: apm-server has no compose healthcheck, so poll its port ---
-      - name: Wait for APM server (timed)
-        run: |
-          set -uo pipefail
-          t0=$(date +%s); code="000"
-          for _ in $(seq 1 30); do
-            code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8200 2>/dev/null || echo 000)
-            [ "$code" != "000" ] && break
-            sleep 2
-          done
-          echo "apm_ready_seconds=$(( $(date +%s) - t0 )) http=$code" | tee -a "$GITHUB_STEP_SUMMARY"
-          [ "$code" != "000" ] || { echo "APM server never answered on :8200"; exit 1; }
+      # --- provision ES + Kibana + APM via the shared script (the release gate uses the same one) ---
+      - name: Provision stack (ES + Kibana + APM)
+        run: ./scripts/ci-stack-up.sh
 
       # --- H3: run the selection K times; randomized order; per-test timeout; NO reruns ---
       - name: Run selection x repeat_count

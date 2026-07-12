@@ -87,9 +87,48 @@ jobs:
           name: dist
           path: dist/
 
+  integration:
+    name: Integration tests (release gate)
+    needs: validate-release
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install package + integration tooling
+        run: pip install -e ".[dev,all,probe]"
+
+      - name: Provision stack (ES + Kibana + APM)
+        run: ./scripts/ci-stack-up.sh
+
+      # Stable selection only: quarantined flakes (-m "not flaky") are excluded so a
+      # nondeterministic test can't block a release. Deterministic order (no randomly)
+      # so the gate is a reliable green/red; order-exploration lives in the probe and
+      # the unit gate. Any failure here fails the job -> publish is blocked by needs:.
+      - name: Run integration suite (blocks release on failure)
+        env:
+          KIBANA_URL: http://localhost:5601
+          KIBANA_USERNAME: elastic
+          KIBANA_PASSWORD: kibana-py-es-dev
+          OTEL_EXPORTER_OTLP_ENDPOINT: http://localhost:8200
+          ELASTIC_APM_SECRET_TOKEN: kibana-py-dev-apm-token
+        run: |
+          pytest tests/integration/ -m "not flaky" \
+            -o addopts="" -p no:randomly -p no:cacheprovider \
+            --timeout=180 --timeout-method=signal -q -ra
+
   publish-github-release:
     name: Publish GitHub Release
-    needs: build
+    needs: [build, integration]
     runs-on: ubuntu-latest
     permissions:
       contents: write
