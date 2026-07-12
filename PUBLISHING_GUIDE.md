@@ -88,7 +88,7 @@ make build
 Note: `make audit` (included in `make check`) audits dependency vulnerabilities. `make sast` scans this repository's source code.
 Note: if some local Python interpreters are not installed, `make test-python-matrix` can skip those versions locally. CI runs the full matrix.
 
-Optionally, run integration tests if you changed client logic:
+Run integration tests locally for fast feedback if you changed client logic (the tagged release runs them too, as a **required gate** — see Step 8):
 ```bash
 make test-integration
 ```
@@ -133,10 +133,11 @@ Go to **Actions** → **Release** in the GitHub repository. The workflow will:
    - the tag matches `kibana/_version.py`
    - `CHANGELOG.md` has an entry for this version
 2. **Build** — runs `python -m build`, `twine check`, verifies wheel contents (`kibana/py.typed` present and no `tests/`, `docs/`, or `examples/` paths), and generates an SBOM
-3. **GitHub Release** — creates a GitHub Release with auto-generated notes and attaches the wheel, sdist, and SBOM
-4. **Publish to PyPI** — uploads to PyPI via trusted publishing
+3. **Integration gate** — provisions a live Elasticsearch + Kibana + APM stack and runs `pytest tests/integration/ -m "not flaky"`. It runs in parallel with **Build**, and **the GitHub Release and PyPI publish both require it to pass** — a failing integration test blocks the release.
+4. **GitHub Release** — creates a GitHub Release with auto-generated notes and attaches the wheel, sdist, and SBOM
+5. **Publish to PyPI** — uploads to PyPI via trusted publishing
 
-If any step fails, the release is aborted. Fix the issue and re-tag.
+If any step fails, the release is aborted (nothing is published). Fix the issue and re-tag.
 
 ### Step 9: Verify the release
 
