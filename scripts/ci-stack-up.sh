@@ -15,6 +15,8 @@ cd "$here/elastic-start-local"
 
 # Non-secret dev env; the one template a fresh clone and CI both consume.
 cp .env.example .env
+# shellcheck disable=SC1091
+set -a; . ./.env; set +a  # ES_LOCAL_PASSWORD etc. for the api-key mint below
 
 # ES + Kibana (+ its one-shot kibana_settings) + the standalone APM server.
 t0=$(date +%s)
@@ -41,3 +43,20 @@ done
 [ "$code" != "000" ] || { echo "APM server never answered on :8200" >&2; exit 1; }
 
 echo "kibana=available apm_http=$code" | tee -a "$summary"
+
+# Mint an ES API key so the api-key auth tests have a real key in CI. Locally
+# this key lives in the untracked .env.local; CI has no such file. Written to
+# $GITHUB_ENV so later steps -- and the integration conftest -- pick it up as
+# ES_LOCAL_API_KEY (tests/integration/utils.py falls back to it).
+if [ -n "${GITHUB_ENV:-}" ]; then
+  api_key="$(curl -s -u "elastic:${ES_LOCAL_PASSWORD}" -X POST \
+    "http://localhost:9200/_security/api_key" \
+    -H 'Content-Type: application/json' -d '{"name":"kibana-py-ci"}' \
+    | python3 -c "import sys, json; print(json.load(sys.stdin).get('encoded', ''))" 2>/dev/null || true)"
+  if [ -n "$api_key" ]; then
+    echo "ES_LOCAL_API_KEY=$api_key" >> "$GITHUB_ENV"
+    echo "minted ES API key for api-key auth tests" | tee -a "$summary"
+  else
+    echo "WARNING: could not mint an ES API key (api-key tests may skip)" | tee -a "$summary"
+  fi
+fi
