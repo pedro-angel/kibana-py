@@ -4,9 +4,18 @@ import time
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
+from elastic_transport import ApiResponseMeta
 
 from kibana._async.client.utils import AsyncNamespaceClient
-from kibana.exceptions import InvalidSpaceIdError, SpaceNotFoundError
+from kibana.exceptions import InvalidSpaceIdError, NotFoundError, SpaceNotFoundError
+
+
+def _not_found(message: str = "Not Found") -> NotFoundError:
+    """Build a real 404 NotFoundError, as the spaces client raises for a missing space."""
+    meta = ApiResponseMeta(
+        status=404, headers={}, http_version="1.1", duration=0.0, node=None
+    )
+    return NotFoundError(message, meta, {})
 
 
 class TestAsyncNamespaceClientSpaceSupport:
@@ -96,7 +105,7 @@ class TestAsyncNamespaceClientSpaceSupport:
         mock_client = Mock()
         mock_spaces_client = AsyncMock()
         mock_client.spaces = mock_spaces_client
-        mock_spaces_client.get.side_effect = Exception("Space not found")
+        mock_spaces_client.get.side_effect = _not_found("Space not found")
 
         client = AsyncNamespaceClient(mock_client, validate_spaces=True)
 
@@ -112,7 +121,7 @@ class TestAsyncNamespaceClientSpaceSupport:
         mock_client = Mock()
         mock_spaces_client = AsyncMock()
         mock_client.spaces = mock_spaces_client
-        mock_spaces_client.get.side_effect = Exception("404 Not Found")
+        mock_spaces_client.get.side_effect = _not_found("404 Not Found")
 
         client = AsyncNamespaceClient(mock_client, validate_spaces=True)
 
@@ -176,7 +185,7 @@ class TestAsyncNamespaceClientSpaceSupport:
         mock_client = Mock()
         mock_spaces_client = AsyncMock()
         mock_client.spaces = mock_spaces_client
-        mock_spaces_client.get.side_effect = Exception("Space not found")
+        mock_spaces_client.get.side_effect = _not_found("Space not found")
 
         client = AsyncNamespaceClient(mock_client, validate_spaces=True)
 

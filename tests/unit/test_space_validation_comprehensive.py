@@ -4,9 +4,31 @@ import time
 from unittest.mock import Mock, patch
 
 import pytest
+from elastic_transport import ApiResponseMeta
 
 from kibana._sync.client.utils import NamespaceClient
-from kibana.exceptions import InvalidSpaceIdError, SpaceNotFoundError
+from kibana.exceptions import (
+    AuthenticationException,
+    InvalidSpaceIdError,
+    NotFoundError,
+    SpaceNotFoundError,
+)
+
+
+def _not_found(message: str = "Not Found") -> NotFoundError:
+    """Build a real 404 NotFoundError, as the spaces client raises for a missing space."""
+    meta = ApiResponseMeta(
+        status=404, headers={}, http_version="1.1", duration=0.0, node=None
+    )
+    return NotFoundError(message, meta, {})
+
+
+def _auth_error(message: str = "Unauthorized") -> AuthenticationException:
+    """Build a real 401 AuthenticationException (a non-NotFoundError ApiError)."""
+    meta = ApiResponseMeta(
+        status=401, headers={}, http_version="1.1", duration=0.0, node=None
+    )
+    return AuthenticationException(message, meta, {})
 
 
 class TestSpaceValidationComprehensive:
@@ -106,7 +128,7 @@ class TestSpaceValidationComprehensive:
         mock_client = Mock()
         mock_spaces_client = Mock()
         mock_client.spaces = mock_spaces_client
-        mock_spaces_client.get.side_effect = Exception("Space not found")
+        mock_spaces_client.get.side_effect = _not_found("Space not found")
 
         client = NamespaceClient(mock_client, validate_spaces=True)
 
@@ -135,7 +157,7 @@ class TestSpaceValidationComprehensive:
             if id == "existing":
                 return {"id": "existing", "name": "Existing Space"}
             else:
-                raise Exception("Space not found")
+                raise _not_found("Space not found")
 
         mock_spaces_client.get.side_effect = mock_get
 
@@ -204,32 +226,69 @@ class TestSpaceValidationComprehensive:
         assert len(client._cache_timestamps) == 0
 
     def test_validation_error_types_comprehensive(self):
-        """Test comprehensive error type handling in validation."""
+        """Validation keys off the exception TYPE, not its message text.
+
+        A NotFoundError maps to SpaceNotFoundError regardless of what its message
+        says, while a non-NotFoundError is never reinterpreted from its text --
+        proving the old string-sniffing ("not found" in str(e)) is gone.
+        """
         mock_client = Mock()
         mock_spaces_client = Mock()
         mock_client.spaces = mock_spaces_client
 
         client = NamespaceClient(mock_client, validate_spaces=True)
 
-        # Test various "not found" error messages
-        not_found_messages = [
-            "Space not found",
-            "404 Not Found",
-            "Resource not found",
-            "NOT FOUND",
-            "space 'test' not found",
-        ]
-
-        for message in not_found_messages:
-            mock_spaces_client.get.side_effect = Exception(message)
+        # (a) Any NotFoundError -> SpaceNotFoundError, whatever the message says
+        # (including messages that do NOT mention "not found" at all).
+        for message in ["Space not found", "404", "", "gone", "space missing"]:
+            mock_spaces_client.get.side_effect = _not_found(message)
 
             with pytest.raises(SpaceNotFoundError) as exc_info:
                 client._validate_space_exists("test")
 
             assert exc_info.value.space_id == "test"
 
-            # Clear cache for next test
+            # Clear cache for next iteration
             client._clear_space_cache("test")
+
+        # (b) A NON-NotFoundError whose message even contains "not found" must NOT
+        # be reinterpreted as a missing space -- it propagates unchanged.
+        mock_spaces_client.get.side_effect = _auth_error("not found (but really 401)")
+
+        with pytest.raises(AuthenticationException) as exc_info:
+            client._validate_space_exists("test")
+
+        assert not isinstance(exc_info.value, SpaceNotFoundError)
+        client._clear_space_cache("test")
+
+    def test_transient_error_does_not_negatively_cache(self):
+        """A transient (non-404) error must propagate and must NOT pin the space
+        as missing in the negative cache -- otherwise a blip would make the space
+        look gone for the whole cache TTL.
+        """
+        mock_client = Mock()
+        mock_spaces_client = Mock()
+        mock_client.spaces = mock_spaces_client
+
+        client = NamespaceClient(mock_client, validate_spaces=True)
+
+        # A transient auth failure surfaces as AuthenticationException, never
+        # SpaceNotFoundError.
+        mock_spaces_client.get.side_effect = _auth_error("Unauthorized")
+
+        with pytest.raises(AuthenticationException) as exc_info:
+            client._validate_space_exists("marketing")
+        assert not isinstance(exc_info.value, SpaceNotFoundError)
+
+        # ...and it must NOT have been negatively cached.
+        assert client._space_cache.get("marketing") is not False
+
+        # Once the transient error clears, validation succeeds -- no stale negative
+        # cache entry pins the space as missing.
+        mock_spaces_client.get.side_effect = None
+        mock_spaces_client.get.return_value = {"id": "marketing", "name": "Marketing"}
+        client._validate_space_exists("marketing")  # must not raise
+        assert client._space_cache["marketing"] is True
 
     def test_validation_non_404_errors_reraise(self):
         """Test that non-404 errors are properly re-raised."""

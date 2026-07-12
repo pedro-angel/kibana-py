@@ -3,10 +3,19 @@
 from unittest.mock import Mock
 
 import pytest
+from elastic_transport import ApiResponseMeta
 
 from kibana._sync.client._base import BaseClient
 from kibana._sync.client.saved_objects import SavedObjectsClient
-from kibana.exceptions import SpaceNotFoundError
+from kibana.exceptions import NotFoundError, SpaceNotFoundError
+
+
+def _not_found(message: str = "Not Found") -> NotFoundError:
+    """Build a real 404 NotFoundError, as the spaces client raises for a missing space."""
+    meta = ApiResponseMeta(
+        status=404, headers={}, http_version="1.1", duration=0.0, node=None
+    )
+    return NotFoundError(message, meta, {})
 
 
 class TestSavedObjectsClientSpaceConsistency:
@@ -251,7 +260,7 @@ class TestSavedObjectsClientCreateSpaceConsistency:
 
         # Mock spaces client to return not found error
         mock_spaces_client = Mock()
-        mock_spaces_client.get.side_effect = Exception("Space not found")
+        mock_spaces_client.get.side_effect = _not_found("Space not found")
         base_client.spaces = mock_spaces_client
 
         saved_objects_client = SavedObjectsClient(base_client, validate_spaces=True)
@@ -541,7 +550,7 @@ class TestSavedObjectsClientSpaceErrorConsistency:
 
         # Mock spaces client to return not found error
         mock_spaces_client = Mock()
-        mock_spaces_client.get.side_effect = Exception("Space not found")
+        mock_spaces_client.get.side_effect = _not_found("Space not found")
         base_client.spaces = mock_spaces_client
 
         saved_objects_client = SavedObjectsClient(base_client, validate_spaces=True)

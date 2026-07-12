@@ -9,7 +9,7 @@ from typing import Any
 from elastic_transport import ObjectApiResponse
 
 from kibana._async.client._base import AsyncBaseClient
-from kibana.exceptions import InvalidSpaceIdError, SpaceNotFoundError
+from kibana.exceptions import InvalidSpaceIdError, NotFoundError, SpaceNotFoundError
 
 
 class AsyncNamespaceClient:
@@ -142,15 +142,15 @@ class AsyncNamespaceClient:
             # Space exists - cache the result
             self._space_cache[space_id] = True
             self._cache_timestamps[space_id] = current_time
-        except Exception as e:
-            # Space doesn't exist or other error - cache the negative result
+        except NotFoundError:
+            # The space genuinely does not exist (404): cache the negative result
+            # so repeated calls fast-path, and surface it as SpaceNotFoundError.
+            # Any OTHER error (auth, network, serialization) propagates WITHOUT
+            # negatively caching -- a transient failure must not pin the space as
+            # "missing" for the cache TTL.
             self._space_cache[space_id] = False
             self._cache_timestamps[space_id] = current_time
-            if "not found" in str(e).lower() or "404" in str(e):
-                raise SpaceNotFoundError(space_id)
-            else:
-                # Re-raise other errors (auth, network, etc.)
-                raise
+            raise SpaceNotFoundError(space_id) from None
 
     def _clear_space_cache(self, space_id: str | None = None) -> None:
         """

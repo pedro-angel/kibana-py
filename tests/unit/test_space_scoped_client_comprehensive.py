@@ -3,9 +3,18 @@
 from unittest.mock import Mock
 
 import pytest
+from elastic_transport import ApiResponseMeta
 
 from kibana._sync.client import Kibana, SpaceScopedKibana
-from kibana.exceptions import SpaceNotFoundError
+from kibana.exceptions import NotFoundError, SpaceNotFoundError
+
+
+def _not_found(message: str = "Not Found") -> NotFoundError:
+    """Build a real 404 NotFoundError (the space-missing path is now typed)."""
+    meta = ApiResponseMeta(
+        status=404, headers={}, http_version="1.1", duration=0.0, node=None
+    )
+    return NotFoundError(message, meta, {})
 
 
 class TestSpaceScopedKibanaCreation:
@@ -42,7 +51,7 @@ class TestSpaceScopedKibanaCreation:
 
         # Mock spaces client to return not found error
         mock_spaces_client = Mock()
-        mock_spaces_client.get.side_effect = Exception("Space not found")
+        mock_spaces_client.get.side_effect = _not_found("Space not found")
         client.spaces = mock_spaces_client
 
         # Creating space-scoped client should raise SpaceNotFoundError
@@ -59,7 +68,7 @@ class TestSpaceScopedKibanaCreation:
 
         # Mock spaces client to return 404 error
         mock_spaces_client = Mock()
-        mock_spaces_client.get.side_effect = Exception("404 Not Found")
+        mock_spaces_client.get.side_effect = _not_found("404 Not Found")
         client.spaces = mock_spaces_client
 
         # Creating space-scoped client should raise SpaceNotFoundError
@@ -368,7 +377,7 @@ class TestSpaceScopedKibanaErrorHandling:
         assert "Unauthorized" in str(exc_info.value)
 
         # Test space not found error
-        mock_spaces_client.get.side_effect = Exception("Space not found")
+        mock_spaces_client.get.side_effect = _not_found("Space not found")
         with pytest.raises(SpaceNotFoundError) as exc_info:
             client.space("marketing")
         assert exc_info.value.space_id == "marketing"
