@@ -6,6 +6,8 @@
 PYTHON     ?= python3
 VENV_DIR   ?= .venv
 VENV_BIN    = $(VENV_DIR)/bin
+# Overridable so CI (system install, no venv) passes PYTEST=pytest.
+PYTEST     ?= $(VENV_BIN)/pytest
 
 # ---------------------------------------------------------------------------
 # Development environment
@@ -54,6 +56,10 @@ test: ## Run unit tests with coverage
 .PHONY: test-integration
 test-integration: stack-start ## Run integration tests (starts stack if needed)
 	$(VENV_BIN)/pytest tests/integration/
+
+.PHONY: test-integration-ci
+test-integration-ci: ## Release-gate integration selection vs an already-provisioned stack (no stack-start; release.yml calls this; needs the [probe] extra for --timeout)
+	$(PYTEST) tests/integration/ -m "not flaky" -o addopts="" -p no:randomly -p no:cacheprovider --timeout=180 --timeout-method=signal -q -ra
 
 .PHONY: test-benchmark
 test-benchmark: stack-start ## Run performance benchmarks

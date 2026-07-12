@@ -121,10 +121,9 @@ jobs:
           KIBANA_PASSWORD: kibana-py-es-dev
           OTEL_EXPORTER_OTLP_ENDPOINT: http://localhost:8200
           ELASTIC_APM_SECRET_TOKEN: kibana-py-dev-apm-token
-        run: |
-          pytest tests/integration/ -m "not flaky" \
-            -o addopts="" -p no:randomly -p no:cacheprovider \
-            --timeout=180 --timeout-method=signal -q -ra
+        # Single source of truth for the gate's pytest invocation (Makefile);
+        # PYTEST=pytest because CI installs into the system Python, not a venv.
+        run: make test-integration-ci PYTEST=pytest
 
   publish-github-release:
     name: Publish GitHub Release
