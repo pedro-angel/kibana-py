@@ -112,7 +112,11 @@ class TestDetectionEngineStatusEndpoints:
 
     def test_install_prepackaged_rules_is_idempotent(self, kibana_client):
         """Prebuilt rules were installed on this stack; re-install is a no-op."""
-        result = kibana_client.detection_engine.install_prepackaged_rules()
+        # The install downloads the prebuilt-rules Fleet package on first use,
+        # which can exceed the (unset) default request timeout on a cold runner.
+        result = kibana_client.options(
+            request_timeout=300
+        ).detection_engine.install_prepackaged_rules()
         assert result.body["rules_installed"] >= 0
         assert result.body["rules_updated"] >= 0
 
