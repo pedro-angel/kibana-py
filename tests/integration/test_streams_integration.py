@@ -238,7 +238,7 @@ class TestStreamsLifecycle:
 class TestStreamsQueries:
     """Significant-events queries lifecycle on a live child stream."""
 
-    def test_query_crud_and_bulk(self, kibana_client, child_stream):
+    def test_query_crud_and_bulk(self, kibana_client, child_stream, elser_ready):
         esql = _sig_events_esql(child_stream)
         query_id = "kbnpy-streams-q1"
 
