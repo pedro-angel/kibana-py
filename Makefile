@@ -106,10 +106,10 @@ sast: ## Run SAST scan with bandit
 	$(VENV_BIN)/bandit -r kibana/ -ll -q
 
 .PHONY: fix
-fix: ## Apply auto-fixes via pinned pre-commit hooks (isort, black, ruff --fix)
+fix: ## Apply auto-fixes via pinned pre-commit hooks (isort, black, ruff-check --fix)
 	$(VENV_BIN)/pre-commit run isort --all-files
 	$(VENV_BIN)/pre-commit run black --all-files
-	$(VENV_BIN)/pre-commit run ruff --all-files
+	$(VENV_BIN)/pre-commit run ruff-check --all-files
 
 # ---------------------------------------------------------------------------
 # Gates
