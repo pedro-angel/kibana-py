@@ -65,6 +65,10 @@ test-integration-ci: ## Release-gate integration selection vs an already-provisi
 test-benchmark: stack-start ## Run performance benchmarks
 	$(VENV_BIN)/pytest tests/benchmark/
 
+# --error-on-missing-interpreters makes nox FAIL (not silently skip) when any of
+# the supported interpreters is absent, so matrix_green can't fail-open to a
+# single-interpreter run on an incomplete host (#29). Install the missing
+# interpreters (e.g. via pyenv) to run the full matrix.
 .PHONY: test-python-matrix
 test-python-matrix: ## Run unit tests across all supported Python versions via nox (required before release)
 	@if command -v pyenv >/dev/null 2>&1; then \
@@ -72,12 +76,12 @@ test-python-matrix: ## Run unit tests across all supported Python versions via n
 		if [ -n "$$PYENV_VERSIONS" ]; then \
 			PYENV_VERSION="$$PYENV_VERSIONS" \
 			PATH="$(VENV_BIN):$$(pyenv root)/bin:$$(pyenv root)/shims:$$PATH" \
-			$(VENV_BIN)/nox -s test; \
+			$(VENV_BIN)/nox --error-on-missing-interpreters -s test; \
 		else \
-			PATH="$(VENV_BIN):$$PATH" $(VENV_BIN)/nox -s test; \
+			PATH="$(VENV_BIN):$$PATH" $(VENV_BIN)/nox --error-on-missing-interpreters -s test; \
 		fi; \
 	else \
-		PATH="$(VENV_BIN):$$PATH" $(VENV_BIN)/nox -s test; \
+		PATH="$(VENV_BIN):$$PATH" $(VENV_BIN)/nox --error-on-missing-interpreters -s test; \
 	fi
 
 # ---------------------------------------------------------------------------
