@@ -196,6 +196,7 @@ class AsyncTimelineClient(AsyncNamespaceClient):
         if version is not None:
             body["version"] = version
 
+        await self._maybe_validate_space(space_id, validate_spaces)
         path = self._build_space_path("/api/timeline", space_id)
         return await self.perform_request(
             "POST",
@@ -254,6 +255,7 @@ class AsyncTimelineClient(AsyncNamespaceClient):
         if template_timeline_id is not None:
             params["template_timeline_id"] = template_timeline_id
 
+        await self._maybe_validate_space(space_id, validate_spaces)
         path = self._build_space_path("/api/timeline", space_id)
         return await self.perform_request(
             "GET",
@@ -332,6 +334,7 @@ class AsyncTimelineClient(AsyncNamespaceClient):
         if status is not None:
             params["status"] = status
 
+        await self._maybe_validate_space(space_id, validate_spaces)
         path = self._build_space_path("/api/timelines", space_id)
         return await self.perform_request(
             "GET",
@@ -392,6 +395,7 @@ class AsyncTimelineClient(AsyncNamespaceClient):
             "timeline": timeline,
         }
 
+        await self._maybe_validate_space(space_id, validate_spaces)
         path = self._build_space_path("/api/timeline", space_id)
         return await self.perform_request(
             "PATCH",
@@ -440,6 +444,7 @@ class AsyncTimelineClient(AsyncNamespaceClient):
         if search_ids is not None:
             body["searchIds"] = search_ids
 
+        await self._maybe_validate_space(space_id, validate_spaces)
         path = self._build_space_path("/api/timeline", space_id)
         return await self.perform_request(
             "DELETE",
@@ -498,6 +503,7 @@ class AsyncTimelineClient(AsyncNamespaceClient):
         if template_timeline_id is not None:
             params["template_timeline_id"] = template_timeline_id
 
+        await self._maybe_validate_space(space_id, validate_spaces)
         path = self._build_space_path("/api/timeline/resolve", space_id)
         return await self.perform_request(
             "GET",
@@ -556,6 +562,7 @@ class AsyncTimelineClient(AsyncNamespaceClient):
             "timelineIdToCopy": timeline_id_to_copy,
         }
 
+        await self._maybe_validate_space(space_id, validate_spaces)
         path = self._build_space_path("/api/timeline/_copy", space_id)
         return await self.perform_request(
             "POST",
@@ -609,6 +616,7 @@ class AsyncTimelineClient(AsyncNamespaceClient):
             >>> print(draft.body["status"])
             draft
         """
+        await self._maybe_validate_space(space_id, validate_spaces)
         path = self._build_space_path("/api/timeline/_draft", space_id)
         return await self.perform_request(
             "GET",
@@ -654,6 +662,7 @@ class AsyncTimelineClient(AsyncNamespaceClient):
             >>> draft = await client.timeline.clean_draft(timeline_type="default")
             >>> print(draft.body["savedObjectId"])
         """
+        await self._maybe_validate_space(space_id, validate_spaces)
         path = self._build_space_path("/api/timeline/_draft", space_id)
         return await self.perform_request(
             "POST",
@@ -712,6 +721,7 @@ class AsyncTimelineClient(AsyncNamespaceClient):
         if ids is not None:
             body["ids"] = ids
 
+        await self._maybe_validate_space(space_id, validate_spaces)
         path = self._build_space_path("/api/timeline/_export", space_id)
         return await self.perform_request(
             "POST",
@@ -782,6 +792,7 @@ class AsyncTimelineClient(AsyncNamespaceClient):
             _ndjson_bytes(file), is_immutable=immutable_field, filename=filename
         )
 
+        await self._maybe_validate_space(space_id, validate_spaces)
         path = self._build_space_path("/api/timeline/_import", space_id)
         return await self.perform_request(
             "POST",
@@ -846,6 +857,7 @@ class AsyncTimelineClient(AsyncNamespaceClient):
             ),
         }
 
+        await self._maybe_validate_space(space_id, validate_spaces)
         path = self._build_space_path("/api/timeline/_prepackaged", space_id)
         return await self.perform_request(
             "POST",
@@ -912,6 +924,7 @@ class AsyncTimelineClient(AsyncNamespaceClient):
             "timelineType": timeline_type,
         }
 
+        await self._maybe_validate_space(space_id, validate_spaces)
         path = self._build_space_path("/api/timeline/_favorite", space_id)
         return await self.perform_request(
             "PATCH",
@@ -962,6 +975,7 @@ class AsyncTimelineClient(AsyncNamespaceClient):
             ... )
             >>> print(created.body["note"]["noteId"])
         """
+        await self._maybe_validate_space(space_id, validate_spaces)
         path = self._build_space_path("/api/note", space_id)
         return await self.perform_request(
             "PATCH",
@@ -1017,6 +1031,7 @@ class AsyncTimelineClient(AsyncNamespaceClient):
         if version is not None:
             body["version"] = version
 
+        await self._maybe_validate_space(space_id, validate_spaces)
         path = self._build_space_path("/api/note", space_id)
         return await self.perform_request(
             "PATCH",
@@ -1115,6 +1130,7 @@ class AsyncTimelineClient(AsyncNamespaceClient):
         if associated_filter is not None:
             params["associatedFilter"] = associated_filter
 
+        await self._maybe_validate_space(space_id, validate_spaces)
         path = self._build_space_path("/api/note", space_id)
         return await self.perform_request(
             "GET",
@@ -1169,6 +1185,7 @@ class AsyncTimelineClient(AsyncNamespaceClient):
         else:
             body = {"noteIds": note_ids}
 
+        await self._maybe_validate_space(space_id, validate_spaces)
         path = self._build_space_path("/api/note", space_id)
         return await self.perform_request(
             "DELETE",
@@ -1218,6 +1235,7 @@ class AsyncTimelineClient(AsyncNamespaceClient):
             ... )
             >>> print(pinned.body["pinnedEventId"])
         """
+        await self._maybe_validate_space(space_id, validate_spaces)
         path = self._build_space_path("/api/pinned_event", space_id)
         return await self.perform_request(
             "PATCH",
@@ -1268,6 +1286,7 @@ class AsyncTimelineClient(AsyncNamespaceClient):
             >>> print(result.body["unpinned"])
             True
         """
+        await self._maybe_validate_space(space_id, validate_spaces)
         path = self._build_space_path("/api/pinned_event", space_id)
         return await self.perform_request(
             "PATCH",
