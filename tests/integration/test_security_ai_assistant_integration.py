@@ -339,7 +339,9 @@ class TestKnowledgeBase:
         assert result.meta.status == 200
         assert result.body["success"] is True
 
-    def test_knowledge_base_entry_crud_lifecycle(self, kibana_client, unique_suffix):
+    def test_knowledge_base_entry_crud_lifecycle(
+        self, kibana_client, unique_suffix, elser_ready
+    ):
         entry_name = f"{PREFIX}-kb-entry-{unique_suffix}"
         created = kibana_client.security_ai_assistant.create_knowledge_base_entry(
             type="document",
@@ -393,7 +395,9 @@ class TestKnowledgeBase:
         with pytest.raises(NotFoundError):
             kibana_client.security_ai_assistant.get_knowledge_base_entry(id=entry_id)
 
-    def test_bulk_action_knowledge_base_entries(self, kibana_client, unique_suffix):
+    def test_bulk_action_knowledge_base_entries(
+        self, kibana_client, unique_suffix, elser_ready
+    ):
         entry_name = f"{PREFIX}-kb-bulk-{unique_suffix}"
         created_ids: list[str] = []
         try:
