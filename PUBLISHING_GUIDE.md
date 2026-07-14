@@ -30,7 +30,7 @@ Step-by-step guide to release a new version of `kibana-py` to PyPI.
 
 ### Optional: a protected `release` environment (approval gate)
 
-Trusted publishing works without a GitHub environment. To add a manual-approval gate before each PyPI upload, you would create a protected `release` environment (Settings → Environments) with **required reviewers** and a `v*.*.*` deployment-tag rule, set the PyPI publisher's Environment to `release`, and uncomment `environment: release` in the `publish-pypi` job — **workflow-first** (send the `release` claim while the PyPI publisher still accepts any environment, *then* tighten the publisher), so a tag pushed mid-change isn't rejected with `invalid-publisher`. The commented `# environment: release`, `# user: __token__`, and `# password:` lines in `release.yml` are inert placeholders for this (and the retired token-based flow), not active configuration.
+Trusted publishing works without a GitHub environment. To add a manual-approval gate before each PyPI upload, you would create a protected `release` environment (Settings → Environments) with **required reviewers** and a `v*.*.*` deployment-tag rule, set the PyPI publisher's Environment to `release`, and add an `environment: release` line to the `publish-pypi` job — **workflow-first** (send the `release` claim while the PyPI publisher still accepts any environment, *then* tighten the publisher), so a tag pushed mid-change isn't rejected with `invalid-publisher`.
 
 ## Release process
 
