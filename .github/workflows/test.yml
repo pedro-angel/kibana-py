@@ -35,7 +35,11 @@ jobs:
 
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
+          # Upgrade setuptools too: the audit step below scans the whole runner
+          # environment, and older Pythons (3.11) ship a setuptools that trails
+          # security fixes (e.g. 79.0.1 / PYSEC-2026-3447). Keeping it current keeps
+          # pip-audit green without chasing each new setuptools advisory by hand.
+          python -m pip install --upgrade pip setuptools
           pip install -e ".[dev,all]"
 
       - name: Run pre-commit hooks
