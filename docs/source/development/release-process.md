@@ -47,17 +47,17 @@ one-time *trusted publisher* registered on PyPI for the project:
 - Project: `kibana-py`
 - Owner / repository: `pedro-angel/kibana-py`
 - Workflow filename: `release.yml`
-- Environment: none (the `environment: release` line in `release.yml` is commented out)
+- Environment: none (the `publish-pypi` job in `release.yml` declares no environment)
 
 Register it under **PyPI → the project → Settings → Publishing** (for a brand-new
 project, add a *pending* publisher first). See the
 [PyPI trusted publishing guide](https://docs.pypi.org/trusted-publishers/).
 
 :::{note}
-If you want a deployment-gate (manual approval before publish), uncomment
-`# environment: release` in `release.yml`, create a GitHub Environment named `release`
-with the desired protection rules, and add that environment name to the trusted
-publisher on PyPI.
+If you want a deployment-gate (manual approval before publish), add an
+`environment: release` line to the `publish-pypi` job in `release.yml`, create a
+GitHub Environment named `release` with the desired protection rules, and add that
+environment name to the trusted publisher on PyPI.
 :::
 
 ### Read the Docs
