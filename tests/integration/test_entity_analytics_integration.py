@@ -54,6 +54,24 @@ def _wait_until(fetch, ok, *, timeout=90.0, interval=1.0):
     return result
 
 
+def _schedule_monitoring_now(ea, *, timeout=90.0, interval=3.0):
+    """Trigger an immediate privilege-monitoring run.
+
+    Retries the transient race where the engine's periodic task is mid-run and
+    the ad-hoc schedule is rejected with 500 "... as it is currently running".
+    The run is short, so an idle window opens quickly and the retry succeeds.
+    """
+    deadline = time.time() + timeout
+    while True:
+        try:
+            return ea.schedule_monitoring_engine_now()
+        except ApiError as exc:
+            if "currently running" in str(exc) and time.time() < deadline:
+                time.sleep(interval)
+                continue
+            raise
+
+
 def _wait_for_entity_store_status(
     client, expected: str, timeout: float = 300.0, interval: float = 5.0
 ) -> dict:
@@ -188,14 +206,6 @@ class TestPrivilegeMonitoring:
         assert "has_all_required" in result.body
         assert "elasticsearch" in result.body["privileges"]
 
-    # Quarantined (measured, see #53): on the cold CI runner the engine's periodic
-    # task -- started by init_monitoring_engine() + the health poll -- is still
-    # running when the test issues the ad-hoc schedule_monitoring_engine_now()
-    # below, and the two collide: [500] Failed to run task
-    # "entity_analytics:monitoring:privileges:engine:default:1.0.0" as it is
-    # currently running. Full fix: poll the engine's task to idle before
-    # scheduling. Deselected by the release gate's -m "not flaky".
-    @pytest.mark.flaky
     def test_monitoring_engine_and_users_lifecycle(self, kibana_client):
         """Test the full privilege monitoring lifecycle.
 
@@ -242,7 +252,7 @@ class TestPrivilegeMonitoring:
             assert csv_result.body["stats"]["uploaded"] == 2
             assert csv_result.body["stats"]["failedOperations"] == 0
 
-            scheduled = ea.schedule_monitoring_engine_now()
+            scheduled = _schedule_monitoring_now(ea)
             assert scheduled.body["success"] is True
 
             deleted_user = ea.delete_monitored_user(id=user_id)

@@ -369,14 +369,6 @@ class TestWorkflowsExecutionIntegration:
 class TestAsyncWorkflowsIntegration:
     """Async round-trip integration tests for the Workflows API."""
 
-    # Quarantined (measured, see #53): on the cold CI runner the cleanup
-    # delete(force=True) below races execution-terminal-state propagation -- the
-    # test-run execution has reached "completed" but the workflow still has a
-    # running execution server-side, so force-delete returns [409] Cannot
-    # force-delete workflows with running executions. Full fix: poll the
-    # workflow's executions until none are running before deleting. Deselected by
-    # the release gate's -m "not flaky".
-    @pytest.mark.flaky
     async def test_async_workflow_lifecycle(self):
         """Create, test-run, read and delete a workflow with the async client."""
         import asyncio
@@ -432,11 +424,24 @@ class TestAsyncWorkflowsIntegration:
                 await asyncio.sleep(1)
             assert any(item["id"] == workflow_id for item in found["results"])
         finally:
+            # Deletion retries on 409: even force-delete is rejected while an
+            # execution kicked off by the test is still running server-side (the
+            # execution reaches "completed" before the workflow's running-execution
+            # state clears). Mirrors the sync `workflow` fixture.
             try:
-                await client.workflows.delete(id=workflow_id, force=True)
-            except NotFoundError:
-                pass
-            await client.close()
+                deadline = time.time() + 90
+                while True:
+                    try:
+                        await client.workflows.delete(id=workflow_id, force=True)
+                        break
+                    except NotFoundError:
+                        break
+                    except ConflictError:
+                        if time.time() > deadline:
+                            raise
+                        await asyncio.sleep(3)
+            finally:
+                await client.close()
 
 
 class TestWorkflowsClientProperties:
