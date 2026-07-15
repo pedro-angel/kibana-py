@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-07-15
+
+### Fixed
+- **The async `TimelineClient` now validates space existence like the sync client.**
+  Its 19 space-scoped operations built the space path but never called
+  `_maybe_validate_space`, so an async caller targeting a nonexistent space
+  silently proceeded instead of raising `SpaceNotFoundError` — even though the
+  async docstrings advertised `validate_spaces` (default `True`). Each operation
+  now `await`s the space-existence check before building the path, matching the
+  sync twin and every other async namespace. Sync callers were unaffected
+  ([#60](https://github.com/pedro-angel/kibana-py/pull/60)).
+
 ## [0.4.1] - 2026-07-12
 
 ### Fixed
@@ -307,7 +319,8 @@ Initial release of kibana-py, a Python client library for the Kibana REST API.
 
 ---
 
-[Unreleased]: https://github.com/pedro-angel/kibana-py/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/pedro-angel/kibana-py/compare/v0.4.2...HEAD
+[0.4.2]: https://github.com/pedro-angel/kibana-py/releases/tag/v0.4.2
 [0.4.1]: https://github.com/pedro-angel/kibana-py/releases/tag/v0.4.1
 [0.4.0]: https://github.com/pedro-angel/kibana-py/releases/tag/v0.4.0
 [0.3.1]: https://github.com/pedro-angel/kibana-py/releases/tag/v0.3.1
