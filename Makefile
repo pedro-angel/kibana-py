@@ -19,7 +19,10 @@ setup: ## Create virtual environment and install all dependencies
 	@# requires-python floor declared in pyproject.toml (the single source of truth).
 	@$(PYTHON) -c 'import re,sys,pathlib; spec=re.search(r"requires-python\s*=\s*\"([^\"]+)\"", pathlib.Path("pyproject.toml").read_text())[1]; need=tuple(map(int, re.search(r"(\d+)\.(\d+)", spec).groups())); sys.exit(0 if sys.version_info[:2] >= need else f"\n✗ kibana-py needs Python {spec}, but {sys.executable} is {sys.version.split()[0]}.\n  Re-run e.g.  make setup PYTHON=python3.11\n")'
 	$(PYTHON) -m venv $(VENV_DIR)
-	$(VENV_BIN)/pip install --upgrade pip
+	@# Upgrade base build tools (pip + setuptools) via the shared script that CI
+	@# also calls, so the two can't drift (see scripts/upgrade-base-build-tools.sh
+	@# for why setuptools is upgraded). One source, not a hand-synced copy.
+	PYTHON=$(VENV_BIN)/python ./scripts/upgrade-base-build-tools.sh
 	$(VENV_BIN)/pip install -e ".[dev,all]"
 	$(VENV_BIN)/pre-commit install --install-hooks --hook-type pre-commit --hook-type pre-push
 	@echo "\n✓ Dev environment ready. Activate with: source $(VENV_DIR)/bin/activate"
