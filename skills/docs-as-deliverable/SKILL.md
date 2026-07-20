@@ -1,6 +1,6 @@
 ---
 name: docs-as-deliverable
-description: Use when shipping or handing off code — treat docs as a first-class deliverable: present-tense, diagrammed-as-code, verified against reality, reader-tested.
+description: Use when shipping or handing off code — treat docs as a first-class deliverable — present-tense, diagrammed-as-code, verified against reality, reader-tested.
 ---
 
 # Docs as a First-Class, Diagrammed, Tested Deliverable

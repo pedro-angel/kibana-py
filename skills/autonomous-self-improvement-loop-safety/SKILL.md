@@ -19,6 +19,7 @@ Red-flag thoughts — if you catch yourself thinking any of these, STOP and appl
 - "We tested the branch; deploying from the cache is the same bytes."
 - "The prompt tells the worker not to touch the guards, so it won't."
 - "It can open the merge itself — a human reviewing every one is slow."
+- "I can edit the guard or hook that mediates this very cycle." (isolation must be enforcement-scoped, not merely workspace-scoped)
 
 ## The rule
 
@@ -45,6 +46,7 @@ Picture an autonomous agent that proposes improvements to its own codebase. Each
 - Deploying from a cache the build step never invalidated, so the gate blessed different bytes than ship.
 - Leaning on the green gate alone for trust-boundary changes it structurally cannot see.
 - A generation worker that can merge its own proposal, or that runs with live privilege instead of in a sandbox.
+- Hot-editing the guard, permission mode, or hook that mediates the *current* cycle — isolation must be enforcement-scoped, not merely workspace-scoped: the modifier runs under a pinned, known-good enforcement snapshot while it edits the next version. (→ [structural-security-boundary](../structural-security-boundary/SKILL.md), [currency-and-audit-before-trust](../currency-and-audit-before-trust/SKILL.md))
 
 ## Enforcement
 
@@ -57,3 +59,4 @@ All of it is enforcement, by design. The fresh-clone assertion (the workspace mu
 - [structural-security-boundary](../structural-security-boundary/SKILL.md)
 - [reversible-by-default-confirm-consequential](../reversible-by-default-confirm-consequential/SKILL.md)
 - [honest-reframing-over-overclaiming](../honest-reframing-over-overclaiming/SKILL.md)
+- [currency-and-audit-before-trust](../currency-and-audit-before-trust/SKILL.md)

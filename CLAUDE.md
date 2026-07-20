@@ -13,5 +13,8 @@ The skills are written in actions, not Claude-specific tool names ("run the test
 
 ## Install
 
-1. Copy `AGENTS.md` and `skills/` into the project root, and place this file at `./CLAUDE.md`.
-2. For global reuse across projects, also symlink or copy `skills/*` into `~/.claude/skills/` (the per-user skills directory).
+See `INSTALL.md` at the root of the agent-methodology pack repo for the install modes — copy, sync bot,
+or (for the maintainer's own hosts) the pinned plugin. In short: put `AGENTS.md` + `skills/` at the project root with this file
+as `./CLAUDE.md`; Claude Code reads the skills by path, and discovers them as native skills once they
+sit under a skills directory. Don't hand-maintain a per-slug install list here — the pack ships the
+modes, and the pinned-plugin path installs the whole tier through one symlink.

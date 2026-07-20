@@ -30,6 +30,7 @@ Red-flag thoughts that mean STOP and apply this skill:
 7. **Calibrate, then prove discrimination.** Set thresholds from a real run with documented provenance (which model, which inputs, when). Prove the gates actually separate quality: a strong model clears them; a deliberately weaker one fails. A gate everything passes is decoration.
 8. **Report honestly.** Headline the judge-independent metrics. Report judge-dependent ones (e.g. precision, when the model grades its own work) as bounds, and disclose the self-judging bias explicitly.
 9. **Verify an agent's "done" by mechanism, not by its word.** When an agent reports it performed an action, confirm it from the world — the file's new content, the record's existence, a zero exit code — and fail closed when the check cannot confirm. A worker that says "done" having written nothing must read as nothing-happened, not as success; its self-report is a proposal, and the mechanical check is the verdict.
+10. **Test the deny path, and mutation-verify the fail-closed default.** A gate or guard's whole purpose is its deny/fail branch — yet that is the branch left untested, because triggering it needs a violation the clean run never produces, so the tests assert "passes clean" and the behaviour *on failure* is never checked. Drive the guard to DENY and assert the deny signal itself — the exit code, the decision, the raised error — not merely that the allowed case passes. Then prove it fails closed by **mutating the fail-closed return**: flip it and re-run; if the suite still passes, the guarantee is untested. A claimed safety property ("fails closed") must be enforced and tested on *every* path, not asserted in a comment.
 
 ## Why
 
@@ -48,7 +49,7 @@ On the project this was distilled from — a hexagonal, human-in-the-loop AI age
 
 ## Enforcement
 
-This skill's harness is its own enforcement: a CI job that runs the deterministic gate over the fixed corpus on every change and fails on regression. What a machine additionally holds: grounding invariants as assertions (every cited id exists, every span matches its source), thresholds living in config so a calibration change is a reviewable diff, and fail-closed semantics — an empty corpus or a skipped eval job is a FAIL, never a quiet green.
+This skill's harness is its own enforcement: a CI job that runs the deterministic gate over the fixed corpus on every change and fails on regression. What a machine additionally holds: grounding invariants as assertions (every cited id exists, every span matches its source), thresholds living in config so a calibration change is a reviewable diff, and fail-closed semantics — an empty corpus or a skipped eval job is a FAIL, never a quiet green. A gate's own deny/fail branch carries its own regression test, mutation-checked — flip the fail-closed return and the suite must go red; a still-green suite means the deny path is unguarded and can silently regress to fail-open.
 
 ## Related
 

@@ -64,3 +64,4 @@ Related skills:
 - [spec-driven-development](../spec-driven-development/SKILL.md)
 - [structural-security-boundary](../structural-security-boundary/SKILL.md)
 - [autonomous-self-improvement-loop-safety](../autonomous-self-improvement-loop-safety/SKILL.md)
+- [evidence-over-deference](../evidence-over-deference/SKILL.md)
