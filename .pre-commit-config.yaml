@@ -30,13 +30,13 @@ repos:
         args: ["--line-length=88"]
 
   - repo: https://github.com/pycqa/isort
-    rev: 8.0.1
+    rev: 9.0.0b1
     hooks:
       - id: isort
         args: ["--profile=black"]
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.15.21
+    rev: v0.15.22
     hooks:
       - id: ruff-check
         args: ["--fix"]
@@ -52,7 +52,7 @@ repos:
   # the weekly autoupdate workflow bumps `rev` via PR, so gate changes arrive as
   # reviewable diffs with provenance instead of vendored copies drifting silently.
   - repo: https://github.com/pedro-angel/git-controls-starter
-    rev: v1.2.0
+    rev: v1.3.0
     hooks:
       - id: check-no-tracked-secrets
       - id: check-one-pin-per-action
