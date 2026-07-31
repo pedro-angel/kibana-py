@@ -8,6 +8,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **A scheme-less host string no longer silently routes traffic to
+  `localhost`.** `_build_node_configs` (`kibana/_sync/client/__init__.py`,
+  shared by `AsyncKibana` via import) parsed host strings with `urlparse`,
+  which mis-parses a scheme-less string like `"myhost:5601"` into
+  `scheme='myhost', host='localhost', port=5601` — so `Kibana("myhost:5601")`
+  silently sent every request to `localhost` with a bogus scheme and path
+  prefix instead of failing
+  ([#71](https://github.com/pedro-angel/kibana-py/issues/71)). A string host
+  whose parsed form has no scheme or no hostname (e.g. `"myhost:5601"`,
+  `"myhost"`, `"http://"`, or `"://"`) now raises a `ValueError` naming the
+  offending input and the expected form (`http://host:port` or
+  `https://host:port`) before any transport is built. The check parses first
+  and inspects the result — a plain substring check for `"://"` would still
+  let `"http://"` (empty host) and `"host/path?q=a://b"` (`://` appearing
+  outside the scheme separator) through. The fix rejects rather than guesses
+  a default scheme, since silently assuming `http://` would surprise TLS
+  deployments; valid `http://`/`https://` strings (including odd-but-parsable
+  schemes), dict hosts, and `cloud_id` are unaffected.
 - **`import kibana` no longer crashes on a partial OpenTelemetry install.**
   `kibana/observability/_imports.py` imported the gRPC OTLP trace exporter
   unconditionally, and its except-branch never bound `OTLPSpanExporter` /
