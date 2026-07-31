@@ -16,14 +16,15 @@ from kibana.exceptions import InvalidSpaceIdError, NotFoundError, SpaceNotFoundE
 _SPACE_ID_RE = re.compile(r"^[a-z0-9_-]+$")
 
 
-def validate_space_id_format(space_id: str) -> None:
+def _check_space_id_format(space_id: str) -> None:
     """Reject a space ID that could not name a space, without asking the server.
 
-    The single source of the rule: the namespace clients of both trees call it
-    through ``_validate_space_id_format``, and ``SpaceScopedKibana`` /
-    ``AsyncSpaceScopedKibana`` call it directly (they are not namespace clients).
-    Purely local -- no request, no cache read or write -- which is what lets every
-    caller run it *first*.
+    Internal (like every other ``_``-prefixed helper here): it is the single
+    source of the rule, not new public API. The namespace clients of both trees
+    reach it through ``_validate_space_id_format``; ``SpaceScopedKibana`` /
+    ``AsyncSpaceScopedKibana`` call it directly, since they are not namespace
+    clients. Purely local -- no request, no cache read or write -- which is what
+    lets every caller run it *first*.
 
     :param space_id: Space ID to validate
     :raises InvalidSpaceIdError: If space ID format is invalid
@@ -140,7 +141,7 @@ class NamespaceClient:
         :param space_id: Space ID to validate
         :raises InvalidSpaceIdError: If space ID format is invalid
         """
-        validate_space_id_format(space_id)
+        _check_space_id_format(space_id)
 
     def _validate_space_exists(self, space_id: str) -> None:
         """

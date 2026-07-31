@@ -279,7 +279,7 @@ connector = fast_client.actions.create(
     name="Fast Connector",
     connector_type_id=".index",
     config={"index": "test"}
-    # No validation performed
+    # No space-existence lookup performed
 )
 
 # Disable validation for specific operation
@@ -288,9 +288,15 @@ connector = client.actions.create(
     connector_type_id=".index",
     config={"index": "test"},
     space_id="marketing",
-    validate_space=False  # Skip validation for this operation
+    validate_space=False  # Skip the existence lookup for this operation
 )
 ```
+
+`validate=False` / `validate_space=False` skip only the *existence* check (the
+`GET /api/spaces/space/{id}` round trip). The space ID **format** is always
+checked, locally and without any request, so a malformed ID such as
+`"Bad Space!"` still raises `InvalidSpaceIdError` — at construction for
+`client.space(...)`, and before the request for a per-operation call.
 
 (multi-tenancy)=
 ## Multi-Tenancy Patterns

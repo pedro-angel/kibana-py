@@ -49,7 +49,7 @@ from kibana._async.client.task_manager import AsyncTaskManagerClient
 from kibana._async.client.timeline import AsyncTimelineClient
 from kibana._async.client.upgrade_assistant import AsyncUpgradeAssistantClient
 from kibana._async.client.uptime import AsyncUptimeClient
-from kibana._async.client.utils import validate_space_id_format
+from kibana._async.client.utils import _check_space_id_format
 from kibana._async.client.visualizations import AsyncVisualizationsClient
 from kibana._async.client.workflows import AsyncWorkflowsClient
 from kibana._rate_limiter import AsyncRateLimiter
@@ -484,7 +484,7 @@ class AsyncSpaceScopedKibana:
         # bug, so it fails locally here -- before ``space()`` awaits
         # _validate_space_on_creation, so no request goes out and the shared space
         # cache is never seeded with an id that could not name a space (#74).
-        validate_space_id_format(space_id)
+        _check_space_id_format(space_id)
 
         # Wire space-scoped namespace clients
         def scoped(cls: type) -> Any:

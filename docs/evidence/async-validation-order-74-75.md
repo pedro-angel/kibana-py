@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-31
 **Change under test:** `AsyncNamespaceClient._maybe_validate_space` and the
-shared `validate_space_id_format`
+shared `_check_space_id_format`
 (`kibana/_async/client/utils.py`, `kibana/_sync/client/utils.py`); statement
 order in the four async namespaces that diverged (`connectors.py`,
 `data_views.py`, `ml.py`, `saved_objects.py`); construction-time format check in
@@ -86,11 +86,13 @@ first — the exact regression class PR #60 fixed — and it costs one regex mat
 on an already space-scoped call.
 
 `SpaceScopedKibana.__init__` and `AsyncSpaceScopedKibana.__init__` call the
-shared `validate_space_id_format` first and regardless of `validate=`, honoring
+shared `_check_space_id_format` first and regardless of `validate=`, honoring
 the docstring promise and keeping `_validate_space_on_creation` (which seeds the
 shared cache) from ever being handed a malformed id. The format rule itself was
-duplicated in both trees; it is now one function in `kibana/_sync/client/utils.py`,
-re-exported by the async utils, that both trees and both scoped clients call.
+duplicated in both trees; it is now one private function
+(`_check_space_id_format` in `kibana/_sync/client/utils.py`, imported by the async
+utils) that both trees and both scoped clients call. It is internal, not new
+public API.
 
 For #75 the fold is now narrow: a `_maybe_validate_space` statement is removed
 only when it was **genuinely awaited** (marked in `visit_AsyncFunctionDef` while
@@ -222,10 +224,13 @@ FAILED tests/unit/test_sync_async_parity.py::test_public_method_bodies_match[MlC
 1 failed, 143 passed in 0.65s
 ```
 
-**(iii) Restore both files — green again:**
+**(iii) Restore — green again.** The two mutations were applied one at a time,
+each file restored before the next was mutated, so the restore is two separate
+checkouts:
 
 ```
-$ git checkout kibana/_async/client/ml.py
+$ git checkout kibana/_async/client/slos.py     # after (i)
+$ git checkout kibana/_async/client/ml.py       # after (ii)
 $ .venv/bin/python -m pytest tests/unit/test_sync_async_parity.py -q --no-cov
 ........................................................................ [ 50%]
 ........................................................................ [100%]
@@ -239,10 +244,27 @@ call is no longer eligible for the fold.
 
 ## Live battle-test — real stack, real transport
 
-A counting hook wraps `client._transport.perform_request`, so the assertions
-count requests that actually left the client. The baseline check proves the hook
-counts (a real `GET /api/status` against Kibana 9.4.3), which is what makes
-"zero requests" mean something.
+This started as an ad-hoc probe; it is now a committed gate. The claims below
+live in `tests/integration/test_space_validation_integration.py` as
+`TestMalformedSpaceIdCostsNothing` (sync and async namespaces, plus `space()`
+with `validate=` both ways), using a `record_requests` helper that wraps the
+live transport — the sibling of the existing `count_space_lookups`. Each test
+makes one real call inside the recorder afterwards and asserts it *was* recorded,
+so "zero requests" is a measurement and not an unattached hook. The sync
+format-validation test in the same file gained the same zero-request and
+empty-cache assertions.
+
+```
+$ .venv/bin/pytest tests/integration/test_space_validation_integration.py \
+                   -o addopts="" -p no:randomly -q -ra
+27 passed in 41.42s
+```
+
+The original ad-hoc probe's output is kept below because it also pins the server
+version and the exact request targets. A counting hook wraps
+`client._transport.perform_request`, so the assertions count requests that
+actually left the client; the baseline check proves the hook counts (a real
+`GET /api/status` against Kibana 9.4.3).
 
 ```
 $ .venv/bin/python .../live_battle_74.py
@@ -278,7 +300,7 @@ two of the four that were re-ordered.
 $ .venv/bin/pytest tests/integration/test_space_validation_integration.py \
                    tests/integration/test_space_scoped_operations_integration.py \
                    tests/integration/test_spaces_integration.py -o addopts="" -p no:randomly -q -ra
-45 passed in 144.34s (0:02:24)
+45 passed in 144.34s (0:02:24)          # before the 6 tests above were added; 51 after
 
 $ .venv/bin/pytest tests/integration/test_async_saved_objects_integration.py \
                    -o addopts="" -p no:randomly -q -ra

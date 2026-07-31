@@ -105,7 +105,7 @@ class AsyncNamespaceClient:
         :param space_id: Space ID to validate
         :raises InvalidSpaceIdError: If space ID format is invalid
         """
-        validate_space_id_format(space_id)
+        _check_space_id_format(space_id)
 
     async def _maybe_validate_space(
         self,
@@ -269,10 +269,9 @@ class AsyncNamespaceClient:
 
 
 # Import utility functions from sync version
-from kibana._sync.client.utils import _quote, validate_space_id_format  # noqa: F401
+from kibana._sync.client.utils import _check_space_id_format, _quote  # noqa: F401
 
 __all__ = [
     "AsyncNamespaceClient",
     "_quote",
-    "validate_space_id_format",
 ]

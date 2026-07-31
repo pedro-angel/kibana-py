@@ -52,7 +52,7 @@ from kibana._sync.client.task_manager import TaskManagerClient
 from kibana._sync.client.timeline import TimelineClient
 from kibana._sync.client.upgrade_assistant import UpgradeAssistantClient
 from kibana._sync.client.uptime import UptimeClient
-from kibana._sync.client.utils import validate_space_id_format
+from kibana._sync.client.utils import _check_space_id_format
 from kibana._sync.client.visualizations import VisualizationsClient
 from kibana._sync.client.workflows import WorkflowsClient
 from kibana.exceptions import NotFoundError, SpaceNotFoundError
@@ -591,7 +591,7 @@ class SpaceScopedKibana:
         # Format first, and regardless of ``validate``: a malformed id is a caller
         # bug, so it fails locally -- before any request and before the shared
         # space cache that _validate_space_on_creation seeds is touched (#74).
-        validate_space_id_format(space_id)
+        _check_space_id_format(space_id)
 
         # Validate space exists immediately if validation is enabled
         if validate:
