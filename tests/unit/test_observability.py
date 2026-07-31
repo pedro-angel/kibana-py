@@ -335,6 +335,34 @@ class TestAPMServerIntegration:
                 endpoint="http://localhost:4317", headers={}, protocol="invalid"
             )
 
+    def test_get_trace_endpoint_with_existing_path(self):
+        """Test _get_trace_endpoint with endpoint that already has traces path."""
+        from kibana.observability import _get_trace_endpoint
+
+        endpoint = "http://localhost:4318/v1/traces"
+        result = _get_trace_endpoint(endpoint, "http/protobuf")
+        assert result == "http://localhost:4318/v1/traces"
+
+    def test_get_trace_endpoint_http_protocol(self):
+        """Test _get_trace_endpoint with HTTP protocol appends path."""
+        from kibana.observability import _get_trace_endpoint
+
+        endpoint = "http://localhost:4318"
+        result = _get_trace_endpoint(endpoint, "http/protobuf")
+        assert result == "http://localhost:4318/v1/traces"
+
+        endpoint_with_slash = "http://localhost:4318/"
+        result = _get_trace_endpoint(endpoint_with_slash, "http/protobuf")
+        assert result == "http://localhost:4318/v1/traces"
+
+    def test_get_trace_endpoint_grpc_protocol(self):
+        """Test _get_trace_endpoint with gRPC protocol uses same endpoint."""
+        from kibana.observability import _get_trace_endpoint
+
+        endpoint = "http://localhost:4317"
+        result = _get_trace_endpoint(endpoint, "grpc")
+        assert result == "http://localhost:4317"
+
     @patch("socket.socket")
     def test_validate_apm_connectivity_success(self, mock_socket):
         """Test successful APM server connectivity validation."""
@@ -538,6 +566,185 @@ class TestAPMServerIntegration:
 
         assert instrumentor.is_enabled() is False
         assert "APM server connectivity validation failed" in caplog.text
+
+    @patch.dict("os.environ", {}, clear=True)
+    @patch("kibana.observability._create_otlp_exporter_with_error_handling")
+    def test_configure_opentelemetry_http_protocol_appends_v1_traces(
+        self, mock_create_exporter
+    ):
+        """http/protobuf traces must be posted to /v1/traces, not the bare root
+        (issue #77) -- an explicit endpoint with no signal path gets one appended."""
+        from kibana.observability import KibanaInstrumentor, configure_opentelemetry
+
+        mock_create_exporter.return_value = object()
+        instrumentor = KibanaInstrumentor.get_instance()
+        instrumentor.disable()
+
+        configure_opentelemetry(
+            enabled=True,
+            protocol="http/protobuf",
+            endpoint="http://localhost:8200",
+            validate_endpoint=False,
+        )
+
+        mock_create_exporter.assert_called_once_with(
+            "http://localhost:8200/v1/traces", {}, "http/protobuf"
+        )
+
+    @patch.dict("os.environ", {}, clear=True)
+    @patch("kibana.observability._create_otlp_exporter_with_error_handling")
+    def test_configure_opentelemetry_http_protocol_trailing_slash(
+        self, mock_create_exporter
+    ):
+        """A trailing slash on the configured endpoint must not produce a
+        double slash ahead of the appended signal path."""
+        from kibana.observability import KibanaInstrumentor, configure_opentelemetry
+
+        mock_create_exporter.return_value = object()
+        instrumentor = KibanaInstrumentor.get_instance()
+        instrumentor.disable()
+
+        configure_opentelemetry(
+            enabled=True,
+            protocol="http/protobuf",
+            endpoint="http://localhost:8200/",
+            validate_endpoint=False,
+        )
+
+        mock_create_exporter.assert_called_once_with(
+            "http://localhost:8200/v1/traces", {}, "http/protobuf"
+        )
+
+    @patch.dict("os.environ", {}, clear=True)
+    @patch("kibana.observability._create_otlp_exporter_with_error_handling")
+    def test_configure_opentelemetry_http_protocol_endpoint_already_has_path(
+        self, mock_create_exporter
+    ):
+        """An endpoint that already ends in /v1/traces must be passed through
+        unchanged (no double-appending)."""
+        from kibana.observability import KibanaInstrumentor, configure_opentelemetry
+
+        mock_create_exporter.return_value = object()
+        instrumentor = KibanaInstrumentor.get_instance()
+        instrumentor.disable()
+
+        configure_opentelemetry(
+            enabled=True,
+            protocol="http/protobuf",
+            endpoint="http://localhost:8200/v1/traces",
+            validate_endpoint=False,
+        )
+
+        mock_create_exporter.assert_called_once_with(
+            "http://localhost:8200/v1/traces", {}, "http/protobuf"
+        )
+
+    @patch.dict("os.environ", {}, clear=True)
+    @patch("kibana.observability._create_otlp_exporter_with_error_handling")
+    def test_configure_opentelemetry_grpc_protocol_endpoint_untouched(
+        self, mock_create_exporter
+    ):
+        """gRPC endpoints must pass through untouched -- there is no
+        HTTP-style /v1/traces resource path for the gRPC transport."""
+        from kibana.observability import KibanaInstrumentor, configure_opentelemetry
+
+        mock_create_exporter.return_value = object()
+        instrumentor = KibanaInstrumentor.get_instance()
+        instrumentor.disable()
+
+        configure_opentelemetry(
+            enabled=True,
+            protocol="grpc",
+            endpoint="http://localhost:8200",
+            validate_endpoint=False,
+        )
+
+        mock_create_exporter.assert_called_once_with(
+            "http://localhost:8200", {}, "grpc"
+        )
+
+    @patch.dict("os.environ", {}, clear=True)
+    @patch("kibana.observability._create_otlp_exporter_with_error_handling")
+    def test_configure_opentelemetry_default_endpoint_http_protocol_uses_4318(
+        self, mock_create_exporter
+    ):
+        """With no endpoint configured, http/protobuf must default to the
+        OTLP/HTTP port 4318, not the gRPC port 4317 (issue #77)."""
+        from kibana.observability import KibanaInstrumentor, configure_opentelemetry
+
+        mock_create_exporter.return_value = object()
+        instrumentor = KibanaInstrumentor.get_instance()
+        instrumentor.disable()
+
+        configure_opentelemetry(
+            enabled=True, protocol="http/protobuf", validate_endpoint=False
+        )
+
+        mock_create_exporter.assert_called_once_with(
+            "http://localhost:4318/v1/traces", {}, "http/protobuf"
+        )
+
+    @patch.dict("os.environ", {}, clear=True)
+    @patch("kibana.observability._create_otlp_exporter_with_error_handling")
+    def test_configure_opentelemetry_default_endpoint_grpc_protocol_uses_4317(
+        self, mock_create_exporter
+    ):
+        """With no endpoint configured, gRPC must keep defaulting to port 4317."""
+        from kibana.observability import KibanaInstrumentor, configure_opentelemetry
+
+        mock_create_exporter.return_value = object()
+        instrumentor = KibanaInstrumentor.get_instance()
+        instrumentor.disable()
+
+        configure_opentelemetry(enabled=True, protocol="grpc", validate_endpoint=False)
+
+        mock_create_exporter.assert_called_once_with(
+            "http://localhost:4317", {}, "grpc"
+        )
+
+    @patch.dict("os.environ", {}, clear=True)
+    @patch("kibana.observability._validate_apm_connectivity")
+    @patch("kibana.observability._setup_log_forwarding")
+    def test_configure_default_endpoint_http_protocol_logs_use_4318(
+        self, mock_setup_logs, mock_validate
+    ):
+        """Log forwarding must share the same protocol-aware default endpoint
+        as traces: http/protobuf defaults to port 4318, not the gRPC port 4317
+        -- same defect class as the trace default, same helper family
+        (issue #77)."""
+        from kibana.observability import KibanaInstrumentor, configure_opentelemetry
+
+        mock_validate.return_value = True
+        mock_setup_logs.return_value = []
+        instrumentor = KibanaInstrumentor.get_instance()
+        instrumentor.disable()
+
+        configure_opentelemetry(
+            enabled=True, protocol="http/protobuf", logs_enabled=True
+        )
+
+        call_kwargs = mock_setup_logs.call_args[1]
+        assert call_kwargs["endpoint"] == "http://localhost:4318"
+
+    @patch.dict("os.environ", {}, clear=True)
+    @patch("kibana.observability._validate_apm_connectivity")
+    @patch("kibana.observability._setup_log_forwarding")
+    def test_configure_default_endpoint_grpc_protocol_logs_use_4317(
+        self, mock_setup_logs, mock_validate
+    ):
+        """With no endpoint configured, gRPC log forwarding must keep
+        defaulting to port 4317."""
+        from kibana.observability import KibanaInstrumentor, configure_opentelemetry
+
+        mock_validate.return_value = True
+        mock_setup_logs.return_value = []
+        instrumentor = KibanaInstrumentor.get_instance()
+        instrumentor.disable()
+
+        configure_opentelemetry(enabled=True, protocol="grpc", logs_enabled=True)
+
+        call_kwargs = mock_setup_logs.call_args[1]
+        assert call_kwargs["endpoint"] == "http://localhost:4317"
 
 
 @pytest.mark.skipif(not OTEL_AVAILABLE, reason="OpenTelemetry not installed")

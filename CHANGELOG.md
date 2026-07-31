@@ -8,6 +8,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **`configure_opentelemetry(protocol="http/protobuf")` now actually reaches the
+  APM server instead of 404/405ing on every span.** Two compounding defects:
+  (1) the OTLP/HTTP exporter got the raw configured (or default) endpoint
+  verbatim — no `/v1/traces` resource path — so spans POSTed to the bare root
+  and the APM server rejected them (`405 Method Not Allowed`), while log
+  forwarding's `_get_log_endpoint` already appended `/v1/logs` correctly, so
+  traces silently dropped while logs worked; (2) when no endpoint was
+  configured, the default was always the gRPC port `:4317`, even for
+  `http/protobuf`, which needs `:4318`
+  ([#77](https://github.com/pedro-angel/kibana-py/issues/77)). A new
+  `_get_trace_endpoint` helper (mirroring `_get_log_endpoint`) now appends
+  `/v1/traces` for `http/protobuf` endpoints that don't already have a signal
+  path, and the no-endpoint-configured default is now protocol-aware (`:4318`
+  for `http/protobuf`, `:4317` for `grpc`) for both traces and log forwarding,
+  which shares the same default-endpoint computation. gRPC endpoints and
+  already-correct explicit endpoints (with or without a trailing slash, or
+  already ending in `/v1/traces`) are unaffected.
 - **A malformed `space_id` now fails the same way in async as in sync: locally,
   with no request and nothing cached.** Sync checks the id's *format* before
   anything else, so `client.slos.get(slo_id="x", space_id="Bad Space!")` raised

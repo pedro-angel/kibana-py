@@ -149,7 +149,17 @@ def configure_opentelemetry(
 
     if exporter == "otlp":
         if endpoint is None:
-            endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317")
+            # The OTLP/HTTP and OTLP/gRPC exporters listen on different default
+            # ports (4318 vs. 4317) -- the fallback must match whichever
+            # protocol is actually in effect, not always the gRPC port
+            # (issue #77). `endpoint` here is the shared base used for both
+            # traces (below) and log forwarding (later in this function), so
+            # fixing it here fixes the same wrong-default-port defect for
+            # both signals at once.
+            default_port = 4318 if protocol in ("http/protobuf", "http") else 4317
+            endpoint = os.getenv(
+                "OTEL_EXPORTER_OTLP_ENDPOINT", f"http://localhost:{default_port}"
+            )
         try:
             if validate_endpoint and not _obs._validate_apm_connectivity(
                 endpoint, headers, protocol
@@ -160,8 +170,14 @@ def configure_opentelemetry(
                 )
                 return
 
+            # http/protobuf requires the OTLP signal-specific resource path
+            # (`/v1/traces`); gRPC's endpoint is a bare host:port and passes
+            # through untouched. `endpoint` itself stays the unmodified base
+            # so log forwarding (which appends its own `/v1/logs` path) below
+            # still sees the same base both signals were configured with.
+            trace_endpoint = _obs._get_trace_endpoint(endpoint, protocol)
             otlp_exporter = _obs._create_otlp_exporter_with_error_handling(
-                endpoint, headers, protocol
+                trace_endpoint, headers, protocol
             )
             if otlp_exporter is None:
                 logger.warning(
@@ -169,7 +185,9 @@ def configure_opentelemetry(
                 )
                 return
             tracer_provider.add_span_processor(BatchSpanProcessor(otlp_exporter))
-            logger.info(f"OTLP exporter configured: {endpoint} (protocol: {protocol})")
+            logger.info(
+                f"OTLP exporter configured: {trace_endpoint} (protocol: {protocol})"
+            )
         except Exception as e:
             _obs._handle_telemetry_error("OTLP exporter configuration", e)
             return

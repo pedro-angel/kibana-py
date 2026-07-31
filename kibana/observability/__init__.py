@@ -20,6 +20,7 @@ from kibana.observability._exporters import (  # noqa: F401
     _create_otlp_log_exporter,
     _create_otlp_log_exporter_with_error_handling,
     _get_log_endpoint,
+    _get_trace_endpoint,
 )
 
 # Re-export availability flags and SDK classes
