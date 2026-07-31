@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from kibana.observability._imports import (
+    GRPC_EXPORTER_AVAILABLE,
     GRPC_LOG_EXPORTER_AVAILABLE,
     HTTP_EXPORTER_AVAILABLE,
     HTTP_LOG_EXPORTER_AVAILABLE,
@@ -29,6 +30,11 @@ def _create_otlp_exporter(endpoint: str, headers: dict[str, str], protocol: str)
             exporter_kwargs["headers"] = headers
 
     if protocol == "grpc":
+        if not GRPC_EXPORTER_AVAILABLE:
+            raise ImportError(
+                "gRPC OTLP exporter not available. Install with: "
+                "pip install opentelemetry-exporter-otlp-proto-grpc"
+            )
         return OTLPSpanExporter(**exporter_kwargs)
     elif protocol in ("http/protobuf", "http"):
         if not HTTP_EXPORTER_AVAILABLE:

@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **`import kibana` no longer crashes on a partial OpenTelemetry install.**
+  `kibana/observability/_imports.py` imported the gRPC OTLP trace exporter
+  unconditionally, and its except-branch never bound `OTLPSpanExporter` /
+  `HTTPOTLPSpanExporter`, so having the OTEL SDK installed without
+  `opentelemetry-exporter-otlp-proto-grpc` — even for callers that only export
+  over OTLP/HTTP — raised `ImportError: cannot import name 'HTTPOTLPSpanExporter'
+  from 'kibana.observability._imports'` all the way up through `import kibana`
+  ([#68](https://github.com/pedro-angel/kibana-py/issues/68)). The gRPC and HTTP
+  trace exporters are now each imported in their own guarded block, so either
+  one being absent degrades only that exporter. Separately, the logs
+  except-branch was unconditionally rebinding those same two trace-exporter
+  names to `None`, silently clobbering a trace exporter that had already
+  imported successfully whenever the (private) OTEL logs modules failed to
+  import ([#70](https://github.com/pedro-angel/kibana-py/issues/70)); it now
+  degrades only the logs-specific names.
+- **A missing gRPC OTLP exporter now fails loudly instead of silently.** With
+  the above fix, "SDK present, gRPC exporter absent" became a newly-reachable
+  state — previously `import kibana` itself crashed first, so this path never
+  ran. `_create_otlp_exporter` gained an explicit `GRPC_EXPORTER_AVAILABLE`
+  check on the gRPC path (mirroring the pre-existing HTTP check), so
+  requesting `protocol="grpc"` in that state now raises a clear `ImportError`
+  naming the missing package, instead of letting `OTLPSpanExporter` be `None`
+  and raising an opaque `TypeError: 'NoneType' object is not callable` that
+  the broad exception handler in `_create_otlp_exporter_with_error_handling`
+  would mask as a generic "APM configuration error". This is what delivers
+  #68's stated outcome — "OTEL simply runs without the gRPC exporter" — as an
+  honest, diagnosable failure for the one signal that needs it, rather than a
+  silent mismatch for callers who explicitly asked for gRPC.
+
 ## [0.4.2] - 2026-07-15
 
 ### Fixed

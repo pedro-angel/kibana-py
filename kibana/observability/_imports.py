@@ -10,9 +10,6 @@ logger = logging.getLogger("kibana.observability")
 # ---------- Trace SDK availability ----------
 try:
     from opentelemetry import trace  # noqa: F401
-    from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (  # noqa: F401
-        OTLPSpanExporter,
-    )
     from opentelemetry.sdk.resources import (  # noqa: F401
         SERVICE_NAME,
         SERVICE_VERSION,
@@ -25,6 +22,20 @@ try:
     )
     from opentelemetry.semconv.resource import ResourceAttributes  # noqa: F401
     from opentelemetry.trace import Span, Status, StatusCode, Tracer  # noqa: F401
+
+    # The gRPC and HTTP OTLP trace exporters ship as separate, independently
+    # optional distributions (opentelemetry-exporter-otlp-proto-grpc /
+    # -http). Each is imported in its own nested try so that either one
+    # being absent degrades only that exporter, not the whole SDK (#68).
+    try:
+        from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (  # noqa: F401
+            OTLPSpanExporter,
+        )
+
+        GRPC_EXPORTER_AVAILABLE = True
+    except ImportError:
+        OTLPSpanExporter = None  # type: ignore[misc, assignment]
+        GRPC_EXPORTER_AVAILABLE = False
 
     try:
         from opentelemetry.exporter.otlp.proto.http.trace_exporter import (  # noqa: F401
@@ -39,7 +50,10 @@ try:
     OTEL_AVAILABLE = True
 except ImportError:
     OTEL_AVAILABLE = False
+    GRPC_EXPORTER_AVAILABLE = False
     HTTP_EXPORTER_AVAILABLE = False
+    OTLPSpanExporter = None  # type: ignore[misc, assignment]
+    HTTPOTLPSpanExporter = None  # type: ignore[misc, assignment]
     SERVICE_NAME = None  # type: ignore[misc, assignment]
     SERVICE_VERSION = None  # type: ignore[misc, assignment]
     Resource = None  # type: ignore[misc, assignment]
@@ -98,8 +112,10 @@ except ImportError:
     LoggingHandler = None  # type: ignore[misc, assignment]
     OTLPLogExporter = None  # type: ignore[misc, assignment]
     HTTPOTLPLogExporter = None  # type: ignore[misc, assignment]
-    OTLPSpanExporter = None  # type: ignore[misc, assignment]
-    HTTPOTLPSpanExporter = None  # type: ignore[misc, assignment]
+    # NOTE: do not rebind OTLPSpanExporter / HTTPOTLPSpanExporter here — they
+    # belong to the trace try/except above and may already be correctly
+    # bound (real exporter or None) by the time this block runs. Clobbering
+    # them unconditionally silently disabled working trace exporters (#70).
     logger.debug(
         "OpenTelemetry logs not available. Install with: pip install "
         "opentelemetry-exporter-otlp-proto-grpc "
