@@ -69,9 +69,12 @@ change a space id, only its presentation/features — existence is unaffected),
 `update_objects_spaces` (all move or read saved objects *between existing
 spaces*; none creates or deletes a space).
 
-**Concurrency:** every cache operation holds a `threading.Lock` (the precedent
-is `kibana/_rate_limiter.py`, and the sync client documents itself as
-thread-safe). An earlier revision of this change relied on plain dict
+**Concurrency:** every operation that touches the entries — `lookup`,
+`remember`, `invalidate` — holds a `threading.Lock` (the precedent is
+`kibana/_rate_limiter.py`, and the sync client documents itself as thread-safe).
+Two members stay outside it by design: reading `generation` (an atomic `int`
+read, re-checked under the lock inside `remember`) and assigning `ttl` (a single
+attribute store). An earlier revision of this change relied on plain dict
 operations; a code-quality review reproduced two real failures against it, both
 now closed and both regression-tested:
 
@@ -83,8 +86,12 @@ now closed and both regression-tested:
   write was silently overwritten — an explicit `spaces.delete` undone for the
   whole TTL. Validators now snapshot `SpaceValidationCache.generation` *before*
   asking the server and pass it to `remember()`, which drops a verdict an
-  invalidation has already outdated. The counter is global, so an unrelated
-  invalidation can discard a concurrent verdict: the price is one extra lookup.
+  invalidation has already outdated. The counter is global: *any* invalidation
+  discards *every* verdict in flight, so one `spaces.create`/`delete` costs at
+  most one extra lookup per concurrent validation, and sustained space churn
+  degrades the cache toward one lookup per space-scoped call, client-wide, for
+  as long as it lasts. Acceptable because invalidations fire only on rare
+  administrative operations; per-space counters are a recorded non-goal.
 
 No I/O ever happens under the lock, so the class serves the async tree
 unchanged, and two callers that miss simultaneously still both ask the server —
@@ -100,23 +107,41 @@ sync/async, plus 6 on the cache object itself), driving real `Kibana` /
 `AsyncKibana` clients over a transport double that tracks which spaces exist and
 counts `GET /api/spaces/space/team-a` requests.
 
-**RED (against pre-fix code, watched fail for the right reason):**
+The pytest blocks below are verbatim apart from two mechanical edits: absolute
+paths elided to `/Users/.../`, and trailing whitespace stripped by this repo's
+pre-commit hook (it blanks the indentation-only lines inside pytest's assertion
+diffs). Each was re-captured by checking the recorded commits back out, so the
+object addresses and durations come from the reproduction run rather than the
+original session; the failures and their line numbers are the real ones.
+
+**RED (against pre-fix code, watched fail for the right reason)** -- the tree at
+`fb845d4` with this module as it stood at `05da99b`:
 
 ```
 $ .venv/bin/pytest tests/unit/test_space_cache_sharing.py -p no:randomly -o addopts="" -q --tb=line
+FFFFFFFF                                                                 [100%]
+=================================== FAILURES ===================================
 E   kibana.exceptions.SpaceNotFoundError: Space not found: team-a
 /Users/.../kibana/_sync/client/utils.py:122: kibana.exceptions.SpaceNotFoundError: Space not found: team-a
 E   Failed: DID NOT RAISE SpaceNotFoundError
-/Users/.../tests/unit/test_space_cache_sharing.py:112: Failed: DID NOT RAISE SpaceNotFoundError
+/Users/.../tests/unit/test_space_cache_sharing.py:114: Failed: DID NOT RAISE SpaceNotFoundError
 E   assert 2 == 1
-/Users/.../tests/unit/test_space_cache_sharing.py:124: assert 2 == 1
+     +  where 2 = <unit.test_space_cache_sharing._SpacesDouble object at 0x10d7dc590>.space_lookups
+/Users/.../tests/unit/test_space_cache_sharing.py:126: assert 2 == 1
 E   assert 1 == 2
-/Users/.../tests/unit/test_space_cache_sharing.py:142: assert 1 == 2
+     +  where 1 = <unit.test_space_cache_sharing._SpacesDouble object at 0x10d7ea910>.space_lookups
+/Users/.../tests/unit/test_space_cache_sharing.py:144: assert 1 == 2
 E   kibana.exceptions.SpaceNotFoundError: Space not found: team-a
 /Users/.../kibana/_async/client/utils.py:131: kibana.exceptions.SpaceNotFoundError: Space not found: team-a
 E   Failed: DID NOT RAISE SpaceNotFoundError
+/Users/.../tests/unit/test_space_cache_sharing.py:175: Failed: DID NOT RAISE SpaceNotFoundError
 E   assert 2 == 1
+     +  where 2 = <unit.test_space_cache_sharing._SpacesDouble object at 0x10d7f6fd0>.space_lookups
+/Users/.../tests/unit/test_space_cache_sharing.py:187: assert 2 == 1
 E   assert 1 == 2
+     +  where 1 = <unit.test_space_cache_sharing._SpacesDouble object at 0x10d832850>.space_lookups
+/Users/.../tests/unit/test_space_cache_sharing.py:205: assert 1 == 2
+=========================== short test summary info ============================
 FAILED tests/unit/test_space_cache_sharing.py::TestSharedSpaceCacheSync::test_create_invalidates_the_negative_cache
 FAILED tests/unit/test_space_cache_sharing.py::TestSharedSpaceCacheSync::test_delete_invalidates_the_positive_cache
 FAILED tests/unit/test_space_cache_sharing.py::TestSharedSpaceCacheSync::test_cache_is_shared_across_namespace_clients
@@ -125,7 +150,7 @@ FAILED tests/unit/test_space_cache_sharing.py::TestSharedSpaceCacheAsync::test_c
 FAILED tests/unit/test_space_cache_sharing.py::TestSharedSpaceCacheAsync::test_delete_invalidates_the_positive_cache
 FAILED tests/unit/test_space_cache_sharing.py::TestSharedSpaceCacheAsync::test_cache_is_shared_across_namespace_clients
 FAILED tests/unit/test_space_cache_sharing.py::TestSharedSpaceCacheAsync::test_ttl_is_measured_with_the_monotonic_clock
-8 failed in 0.06s
+8 failed in 0.07s
 ```
 
 Each failure is the bug, not a broken test: create leaves the negative verdict
@@ -145,15 +170,43 @@ $ .venv/bin/pytest tests/unit/test_space_cache_sharing.py tests/unit/test_sync_a
 seed the cache, and `options()` clones built their own). Six more tests —
 scoped-client seeding on success, scoped-client seeding of a *missing* space,
 and `options()` clone sharing, each × sync/async — added to the same module and
-watched fail first:
+watched fail first (the tree at `05da99b`, this module at `b298a8c`). The three
+distinct `assert 2 == 1` failures are, in file order: `client.space(X)` plus two
+namespaces (the construction lookup was thrown away), the same after a *failed*
+construction (the negative verdict was thrown away), and an `options()` clone
+re-validating a space the original had already cached:
 
 ```
 $ .venv/bin/pytest tests/unit/test_space_cache_sharing.py -p no:randomly -o addopts="" -q --tb=line
-E   assert 2 == 1     (client.space(X) + 2 namespaces: construction lookup thrown away)
-E   assert 2 == 1     (failed client.space(X) then a namespace call: negative verdict thrown away)
-E   assert 2 == 1     (options() clone re-validated a space the original had cached)
-... x2 (sync + async)
+....FFF....FFF                                                           [100%]
+=================================== FAILURES ===================================
+E   assert 2 == 1
+     +  where 2 = <unit.test_space_cache_sharing._SpacesDouble object at 0x10f466b10>.space_lookups
+/Users/.../tests/unit/test_space_cache_sharing.py:160: assert 2 == 1
+E   assert 2 == 1
+     +  where 2 = <unit.test_space_cache_sharing._SpacesDouble object at 0x10f484050>.space_lookups
+/Users/.../tests/unit/test_space_cache_sharing.py:172: assert 2 == 1
+E   assert 2 == 1
+     +  where 2 = <unit.test_space_cache_sharing._SpacesDouble object at 0x10f471950>.space_lookups
+/Users/.../tests/unit/test_space_cache_sharing.py:182: assert 2 == 1
+E   assert 2 == 1
+     +  where 2 = <unit.test_space_cache_sharing._SpacesDouble object at 0x10f48dd90>.space_lookups
+/Users/.../tests/unit/test_space_cache_sharing.py:260: assert 2 == 1
+E   assert 2 == 1
+     +  where 2 = <unit.test_space_cache_sharing._SpacesDouble object at 0x10f4a1950>.space_lookups
+/Users/.../tests/unit/test_space_cache_sharing.py:272: assert 2 == 1
+E   assert 2 == 1
+     +  where 2 = <unit.test_space_cache_sharing._SpacesDouble object at 0x10f494790>.space_lookups
+/Users/.../tests/unit/test_space_cache_sharing.py:282: assert 2 == 1
+=========================== short test summary info ============================
+FAILED tests/unit/test_space_cache_sharing.py::TestSharedSpaceCacheSync::test_scoped_client_construction_seeds_the_cache
+FAILED tests/unit/test_space_cache_sharing.py::TestSharedSpaceCacheSync::test_scoped_client_construction_seeds_a_missing_space
+FAILED tests/unit/test_space_cache_sharing.py::TestSharedSpaceCacheSync::test_options_clone_shares_the_cache
+FAILED tests/unit/test_space_cache_sharing.py::TestSharedSpaceCacheAsync::test_scoped_client_construction_seeds_the_cache
+FAILED tests/unit/test_space_cache_sharing.py::TestSharedSpaceCacheAsync::test_scoped_client_construction_seeds_a_missing_space
+FAILED tests/unit/test_space_cache_sharing.py::TestSharedSpaceCacheAsync::test_options_clone_shares_the_cache
 6 failed, 8 passed in 0.07s
+
 
 $ .venv/bin/pytest tests/unit/test_space_cache_sharing.py tests/unit/test_sync_async_parity.py -p no:randomly -o addopts="" -q
 153 passed in 0.65s
@@ -162,24 +215,58 @@ $ .venv/bin/pytest tests/unit/test_space_cache_sharing.py tests/unit/test_sync_a
 **Third RED/GREEN round** (code-quality review: two races, both reproduced by
 the reviewer). Seven more tests — six on the cache object itself
 (`TestSpaceValidationCacheUnit`) plus the delete-during-validation race in each
-tree — watched fail first:
+tree — watched fail first (the tree at `b298a8c` plus the clock seam, which landed
+before the fix as test infrastructure). Reading the failures in file order: the
+lookup race raises `KeyError` out of the cache; an expired entry is not evicted;
+`invalidate("")` wiped the whole cache; `generation` does not exist yet; a
+`__slots__` parent crashes the attach; and the delete-during-validation race is
+undone in each tree:
 
 ```
 $ .venv/bin/pytest tests/unit/test_space_cache_sharing.py -p no:randomly -o addopts="" -q --tb=line
-E   KeyError: 'team-a'                                   (lookup racing an invalidate)
-E   AssertionError: assert {} == {'team-a': True}         (expired entry never evicted)
-E   AssertionError: assert {} == {'team-a': True}         (invalidate("") wiped everything)
+FF.FFFF.......F.......                                                   [100%]
+=================================== FAILURES ===================================
+E   KeyError: 'team-a'
+/Users/.../kibana/_space_cache.py:62: KeyError: 'team-a'
+E   AssertionError: assert {'team-a': True} == {}
+
+      Left contains 1 more item:
+      {'team-a': True}
+      Use -v to get more diff
+/Users/.../tests/unit/test_space_cache_sharing.py:155: AssertionError: assert {'team-a': True} == {}
+E   AssertionError: assert {} == {'team-a': True}
+
+      Right contains 1 more item:
+      {'team-a': True}
+      Use -v to get more diff
+/Users/.../tests/unit/test_space_cache_sharing.py:177: AssertionError: assert {} == {'team-a': True}
 E   AttributeError: 'SpaceValidationCache' object has no attribute 'generation'
+/Users/.../tests/unit/test_space_cache_sharing.py:182: AttributeError: 'SpaceValidationCache' object has no attribute 'generation'
 E   AttributeError: 'Slotted' object has no attribute '_space_validation_cache'
-E   Failed: DID NOT RAISE SpaceNotFoundError              (sync: delete undone by a late verdict)
-E   Failed: DID NOT RAISE SpaceNotFoundError              (async: same, via gather + a latency double)
+/Users/.../kibana/_space_cache.py:106: AttributeError: 'Slotted' object has no attribute '_space_validation_cache'
+E   Failed: DID NOT RAISE SpaceNotFoundError
+/Users/.../tests/unit/test_space_cache_sharing.py:226: Failed: DID NOT RAISE SpaceNotFoundError
+E   Failed: DID NOT RAISE SpaceNotFoundError
+/Users/.../tests/unit/test_space_cache_sharing.py:350: Failed: DID NOT RAISE SpaceNotFoundError
+=========================== short test summary info ============================
+FAILED tests/unit/test_space_cache_sharing.py::TestSpaceValidationCacheUnit::test_lookup_is_atomic_against_a_concurrent_invalidate
+FAILED tests/unit/test_space_cache_sharing.py::TestSpaceValidationCacheUnit::test_expired_entries_are_dropped_on_lookup
+FAILED tests/unit/test_space_cache_sharing.py::TestSpaceValidationCacheUnit::test_invalidating_an_empty_id_does_not_wipe_the_cache
+FAILED tests/unit/test_space_cache_sharing.py::TestSpaceValidationCacheUnit::test_a_verdict_outdated_by_an_invalidation_is_discarded
+FAILED tests/unit/test_space_cache_sharing.py::TestSpaceValidationCacheUnit::test_a_parent_that_refuses_attributes_still_gets_a_cache
+FAILED tests/unit/test_space_cache_sharing.py::TestSharedSpaceCacheSync::test_a_delete_during_a_validation_is_not_overwritten
+FAILED tests/unit/test_space_cache_sharing.py::TestSharedSpaceCacheAsync::test_a_delete_during_a_validation_is_not_overwritten
 7 failed, 15 passed in 0.13s
 ```
 
-The two race tests are deterministic, not timing-hopeful: the sync one parks the
-lookup on the clock seam while another thread invalidates, and the async one
-answers the space lookup from pre-delete state but delivers the reply after the
-`spaces.delete` task has run, via `asyncio.gather`.
+The sync race test is deterministic rather than timing-hopeful: it parks the
+lookup on the clock seam and only lets the invalidating thread proceed from
+there. The async twin is weaker by construction — it orders the two tasks with
+an `asyncio.sleep` on the lookup reply, so it is deterministic under a healthy
+event loop, but a stalled or heavily contended loop could run the delete after
+the verdict lands and turn the test into a vacuous pass rather than a failure.
+It cannot report a false *failure*, and the sync twin covers the same
+invalidation-versus-late-verdict rule without any timing dependency.
 
 ```
 $ .venv/bin/pytest tests/unit/test_space_cache_sharing.py tests/unit/test_sync_async_parity.py -p no:randomly -o addopts="" -q

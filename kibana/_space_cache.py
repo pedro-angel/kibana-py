@@ -17,9 +17,13 @@ patching the process-wide clock that asyncio's event loop also reads.
 Concurrency
 -----------
 
-Every operation holds a :class:`threading.Lock` (the same precedent as
+Every operation that reads or writes the entries -- ``lookup``, ``remember``,
+``invalidate`` -- holds a :class:`threading.Lock` (the same precedent as
 :mod:`kibana._rate_limiter`, and the sync client documents itself as
-thread-safe). The lock closes two races that plain dict operations do not:
+thread-safe). Two members stay outside it: the :attr:`~SpaceValidationCache.generation`
+read (an atomic ``int`` read, re-checked under the lock where it matters) and
+assignment to ``ttl`` (a single attribute store, only ever changed by tests and
+by ``_cache_ttl``). The lock closes two races that plain dict operations do not:
 
 - a ``lookup`` that had checked membership, then found the entry gone when it
   read the value, raised ``KeyError`` out of an ordinary client call;
@@ -27,9 +31,17 @@ thread-safe). The lock closes two races that plain dict operations do not:
   write was silently overwritten -- an explicit ``spaces.delete`` undone for the
   whole TTL. Writers therefore snapshot :attr:`SpaceValidationCache.generation`
   *before* asking the server and pass it to :meth:`SpaceValidationCache.remember`,
-  which drops a verdict that an invalidation has already outdated. The generation
-  is global rather than per-space: an unrelated invalidation can discard a
-  concurrent verdict, and the price of that is one extra lookup.
+  which drops a verdict that an invalidation has already outdated.
+
+The generation is global rather than per-space, and that is the honest cost of
+the guard: *any* invalidation discards *every* verdict still in flight, not just
+the one for the space that changed. A single ``spaces.create``/``delete`` costs
+at most one extra lookup per concurrent validation; sustained space churn
+degrades the cache toward one ``GET /api/spaces/space/{id}`` per space-scoped
+call, client-wide, for as long as the churn lasts. That is acceptable here
+because invalidations only fire on rare administrative operations (creating and
+deleting spaces), never on the read path. Per-space counters would narrow the
+blast radius and are a deliberate non-goal for now.
 
 What the lock does *not* buy is single-flight: two callers that miss
 simultaneously still both ask the server (no await or blocking I/O ever happens
@@ -71,9 +83,11 @@ class SpaceValidationCache:
 
         Snapshot it before asking the server, then hand it to :meth:`remember`
         so a verdict that an invalidation has outdated is dropped instead of
-        overwriting the invalidation. Read without the lock on purpose: reading
-        an ``int`` attribute is atomic, and taking the (non-reentrant) lock here
-        would deadlock callers that already hold it.
+        overwriting the invalidation. Read without the lock on purpose: an
+        ``int`` attribute read is atomic, and the snapshot only has to be a
+        *lower bound* -- :meth:`remember` re-reads the counter under the lock and
+        compares there, so a value that goes stale between this read and that
+        comparison can only make the write more conservative, never wrong.
         """
         return self._generation
 
