@@ -24,6 +24,7 @@ from kibana.observability._exporters import (  # noqa: F401
 
 # Re-export availability flags and SDK classes
 from kibana.observability._imports import (  # noqa: F401
+    GRPC_EXPORTER_AVAILABLE,
     GRPC_LOG_EXPORTER_AVAILABLE,
     HTTP_EXPORTER_AVAILABLE,
     HTTP_LOG_EXPORTER_AVAILABLE,

@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **`import kibana` no longer crashes on a partial OpenTelemetry install.**
+  `kibana/observability/_imports.py` imported the gRPC OTLP trace exporter
+  unconditionally, and its except-branch never bound `OTLPSpanExporter` /
+  `HTTPOTLPSpanExporter`, so having the OTEL SDK installed without
+  `opentelemetry-exporter-otlp-proto-grpc` — even for callers that only export
+  over OTLP/HTTP — raised `ImportError: cannot import name 'HTTPOTLPSpanExporter'
+  from 'kibana.observability._imports'` all the way up through `import kibana`
+  ([#68](https://github.com/pedro-angel/kibana-py/issues/68)). The gRPC and HTTP
+  trace exporters are now each imported in their own guarded block, so either
+  one being absent degrades only that exporter. Separately, the logs
+  except-branch was unconditionally rebinding those same two trace-exporter
+  names to `None`, silently clobbering a trace exporter that had already
+  imported successfully whenever the (private) OTEL logs modules failed to
+  import ([#70](https://github.com/pedro-angel/kibana-py/issues/70)); it now
+  degrades only the logs-specific names. `_create_otlp_exporter` also gained an
+  explicit availability check on the gRPC path (mirroring the existing HTTP
+  check), so a missing gRPC exporter raises a clear `ImportError` instead of an
+  opaque `TypeError: 'NoneType' object is not callable`.
+
 ## [0.4.2] - 2026-07-15
 
 ### Fixed

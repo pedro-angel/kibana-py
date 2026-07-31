@@ -1,6 +1,9 @@
 """Unit tests for OpenTelemetry observability."""
 
 import logging
+import subprocess
+import sys
+import textwrap
 from unittest.mock import patch
 
 import pytest
@@ -285,6 +288,24 @@ class TestAPMServerIntegration:
             protocol="grpc",
         )
         assert exporter is not None
+
+    @patch("kibana.observability._exporters.OTLPSpanExporter", None)
+    @patch("kibana.observability._exporters.GRPC_EXPORTER_AVAILABLE", False)
+    def test_create_otlp_exporter_grpc_protocol_raises_clear_error_when_absent(self):
+        """When the gRPC OTLP exporter package isn't installed, creating a
+        grpc-protocol exporter must raise a clear ImportError — mirroring the
+        HTTP branch's existing behavior — instead of calling ``None(...)``
+        and crashing with an opaque ``TypeError: 'NoneType' object is not
+        callable`` that gets masked by the broad ``except Exception`` in
+        ``_create_otlp_exporter_with_error_handling``."""
+        from kibana.observability import _create_otlp_exporter
+
+        with pytest.raises(ImportError, match="gRPC OTLP exporter not available"):
+            _create_otlp_exporter(
+                endpoint="http://localhost:4317",
+                headers={"authorization": "Bearer test-token"},
+                protocol="grpc",
+            )
 
     def test_create_otlp_exporter_http_protocol(self):
         """Test creating OTLP exporter with HTTP protocol."""
@@ -1558,3 +1579,179 @@ class TestObservabilityWithoutOpenTelemetry:
 
         # Should not raise
         set_span_error(None, Exception("test"))
+
+
+def _run_with_blocked_imports(
+    blocked_prefixes: tuple[str, ...], probe: str
+) -> subprocess.CompletedProcess:
+    """Run ``probe`` in a fresh subprocess where importing any module whose
+    dotted name equals (or is nested under) one of ``blocked_prefixes`` raises
+    ``ImportError``, simulating that distribution being uninstalled.
+
+    A real subprocess is required rather than monkeypatching ``sys.modules``
+    in-process: ``kibana.observability._imports`` resolves its try/except
+    degradation exactly once, on first import, and the result is cached in
+    ``sys.modules`` for the life of the interpreter. An in-process trick can't
+    "un-import" it for a later test — only a fresh interpreter can.
+    """
+    setup = textwrap.dedent(f"""
+        import sys
+
+        class _Blocker:
+            _blocked = {blocked_prefixes!r}
+
+            def find_spec(self, name, path, target=None):
+                if any(
+                    name == prefix or name.startswith(prefix + ".")
+                    for prefix in self._blocked
+                ):
+                    raise ImportError(f"blocked for test: {{name}}")
+                return None
+
+        sys.meta_path.insert(0, _Blocker())
+        """)
+    return subprocess.run(
+        [sys.executable, "-c", setup + "\n" + textwrap.dedent(probe)],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+
+@pytest.mark.skipif(not OTEL_AVAILABLE, reason="OpenTelemetry not installed")
+class TestImportGuardMatrix:
+    """Real subprocess-isolated coverage for the conditional-import
+    degradation in ``kibana/observability/_imports.py`` (issues #68, #70).
+
+    Each case blocks a real OTEL distribution's import path via a meta path
+    finder, then asserts that ``import kibana`` still succeeds and that every
+    exporter/availability name lands in the state the rest of the package
+    expects: never left unbound for ``_exporters.py`` to fail importing (#68),
+    and never wrongly clobbered by an unrelated except-branch (#70).
+    """
+
+    PROBE = textwrap.dedent("""
+        import kibana  # noqa: F401  (must not raise)
+        from kibana.observability import _imports as m
+
+        def flag(name):
+            return repr(getattr(m, name, "MISSING"))
+
+        print("OTEL_AVAILABLE=" + flag("OTEL_AVAILABLE"))
+        print("GRPC_EXPORTER_AVAILABLE=" + flag("GRPC_EXPORTER_AVAILABLE"))
+        print("HTTP_EXPORTER_AVAILABLE=" + flag("HTTP_EXPORTER_AVAILABLE"))
+        print("OTLPSpanExporter_bound=" + repr(getattr(m, "OTLPSpanExporter", "MISSING") is not None))
+        print(
+            "HTTPOTLPSpanExporter_bound="
+            + repr(getattr(m, "HTTPOTLPSpanExporter", "MISSING") is not None)
+        )
+        print("OTEL_LOGS_AVAILABLE=" + flag("OTEL_LOGS_AVAILABLE"))
+        """)
+
+    @staticmethod
+    def _parse(stdout: str) -> dict:
+        values = {}
+        for line in stdout.splitlines():
+            if "=" in line:
+                key, _, value = line.partition("=")
+                values[key.strip()] = value.strip()
+        return values
+
+    @pytest.mark.parametrize(
+        ("blocked", "expected"),
+        [
+            pytest.param(
+                (),
+                {
+                    "OTEL_AVAILABLE": "True",
+                    "GRPC_EXPORTER_AVAILABLE": "True",
+                    "HTTP_EXPORTER_AVAILABLE": "True",
+                    "OTLPSpanExporter_bound": "True",
+                    "HTTPOTLPSpanExporter_bound": "True",
+                    "OTEL_LOGS_AVAILABLE": "True",
+                },
+                id="baseline-everything-present",
+            ),
+            pytest.param(
+                ("opentelemetry.exporter.otlp.proto.grpc",),
+                {
+                    "OTEL_AVAILABLE": "True",
+                    "GRPC_EXPORTER_AVAILABLE": "False",
+                    "HTTP_EXPORTER_AVAILABLE": "True",
+                    "OTLPSpanExporter_bound": "False",
+                    "HTTPOTLPSpanExporter_bound": "True",
+                    "OTEL_LOGS_AVAILABLE": "True",
+                },
+                id="issue68-grpc-exporter-absent-sdk-and-http-present",
+            ),
+            pytest.param(
+                ("opentelemetry.exporter.otlp.proto.http",),
+                {
+                    "OTEL_AVAILABLE": "True",
+                    "GRPC_EXPORTER_AVAILABLE": "True",
+                    "HTTP_EXPORTER_AVAILABLE": "False",
+                    "OTLPSpanExporter_bound": "True",
+                    "HTTPOTLPSpanExporter_bound": "False",
+                    "OTEL_LOGS_AVAILABLE": "True",
+                },
+                id="http-exporter-absent-sdk-and-grpc-present",
+            ),
+            pytest.param(
+                # In the installed opentelemetry-exporter-otlp-proto-grpc build,
+                # the grpc trace exporter's own module imports
+                # ``opentelemetry.sdk._logs.ReadableLogRecord`` internally (shared
+                # trace/log encoding code), so blocking ``sdk._logs`` also takes
+                # down the grpc trace exporter as a real side effect — exactly the
+                # "future SDK renames the private logs names" scenario #70 warns
+                # about. The HTTP trace exporter has no such coupling and must
+                # come through untouched: that's the assertion this case exists
+                # to make (pre-fix, the logs except-branch wrongly clobbered it
+                # to None too).
+                ("opentelemetry.sdk._logs",),
+                {
+                    "OTEL_AVAILABLE": "True",
+                    "GRPC_EXPORTER_AVAILABLE": "False",
+                    "HTTP_EXPORTER_AVAILABLE": "True",
+                    "OTLPSpanExporter_bound": "False",
+                    "HTTPOTLPSpanExporter_bound": "True",
+                    "OTEL_LOGS_AVAILABLE": "False",
+                },
+                id="issue70-logs-absent-must-not-clobber-trace-exporters",
+            ),
+            pytest.param(
+                ("opentelemetry.sdk",),
+                {
+                    "OTEL_AVAILABLE": "False",
+                    "GRPC_EXPORTER_AVAILABLE": "False",
+                    "HTTP_EXPORTER_AVAILABLE": "False",
+                    "OTLPSpanExporter_bound": "False",
+                    "HTTPOTLPSpanExporter_bound": "False",
+                    "OTEL_LOGS_AVAILABLE": "False",
+                },
+                id="sdk-entirely-absent-api-only",
+            ),
+            pytest.param(
+                ("opentelemetry",),
+                {
+                    "OTEL_AVAILABLE": "False",
+                    "GRPC_EXPORTER_AVAILABLE": "False",
+                    "HTTP_EXPORTER_AVAILABLE": "False",
+                    "OTLPSpanExporter_bound": "False",
+                    "HTTPOTLPSpanExporter_bound": "False",
+                    "OTEL_LOGS_AVAILABLE": "False",
+                },
+                id="otel-entirely-absent",
+            ),
+        ],
+    )
+    def test_import_kibana_under_partial_install(self, blocked, expected):
+        """``import kibana`` must succeed, and exporter/availability names
+        must match the given partial-install combination exactly — no
+        unbound name (#68) and no cross-branch clobbering (#70)."""
+        result = _run_with_blocked_imports(blocked, self.PROBE)
+
+        assert result.returncode == 0, (
+            f"`import kibana` failed with blocked={blocked!r}:\n"
+            f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+        )
+        assert self._parse(result.stdout) == expected
