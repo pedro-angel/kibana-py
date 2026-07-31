@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 from kibana.observability._imports import (
+    _HTTP_OTLP_PROTOCOLS,
     GRPC_EXPORTER_AVAILABLE,
     GRPC_LOG_EXPORTER_AVAILABLE,
     HTTP_EXPORTER_AVAILABLE,
@@ -36,7 +38,7 @@ def _create_otlp_exporter(endpoint: str, headers: dict[str, str], protocol: str)
                 "pip install opentelemetry-exporter-otlp-proto-grpc"
             )
         return OTLPSpanExporter(**exporter_kwargs)
-    elif protocol in ("http/protobuf", "http"):
+    elif protocol in _HTTP_OTLP_PROTOCOLS:
         if not HTTP_EXPORTER_AVAILABLE:
             raise ImportError(
                 "HTTP OTLP exporter not available. Install with: "
@@ -89,7 +91,7 @@ def _create_otlp_log_exporter(
                 "pip install opentelemetry-exporter-otlp-proto-grpc"
             )
         return OTLPLogExporter(**exporter_kwargs)
-    elif protocol in ("http/protobuf", "http"):
+    elif protocol in _HTTP_OTLP_PROTOCOLS:
         if not HTTP_LOG_EXPORTER_AVAILABLE:
             raise ImportError(
                 "HTTP OTLP log exporter not available. Install with: "
@@ -134,26 +136,44 @@ def _get_signal_endpoint(base_endpoint: str, protocol: str, signal_path: str) ->
     for ``http/protobuf`` (and its ``http`` alias), appends ``signal_path``
     (e.g. ``/v1/traces``) to a base endpoint that doesn't already end in it.
 
-    The "already has it" check is anchored to the *end* of the path (modulo a
-    single trailing slash), via ``str.endswith``, rather than a plain
-    substring test. A substring test would wrongly treat an endpoint that
-    merely *contains* the signal path somewhere in the middle of an unrelated
-    route (e.g. a gateway path like ``http://gw:8200/foo/v1/traces/bar``, or a
-    differently-named sibling path like ``.../v1/traces-ingest/foo``) as
-    already-correct and leave it un-suffixed -- silently reproducing the
-    wrong-path defect these helpers exist to fix. The comparison is
-    case-sensitive by design: URL paths are case-sensitive, so ``/V1/Traces``
-    is genuinely not ``/v1/traces`` and still needs the real path appended.
+    The endpoint is parsed with :func:`urllib.parse.urlsplit` so both the
+    "already has it" check and the append operate on the URL's *path*
+    component only, never on the raw string:
+
+    * **Anchoring.** The check is anchored to the end of the path (modulo a
+      single trailing slash) via ``str.endswith``, not a plain substring
+      test. A substring test would wrongly treat an endpoint that merely
+      *contains* the signal path somewhere in the middle of an unrelated
+      route (e.g. a gateway path like ``http://gw:8200/foo/v1/traces/bar``,
+      or a differently-named sibling path like ``.../v1/traces-ingest/foo``)
+      as already-correct and leave it un-suffixed -- silently reproducing the
+      wrong-path defect these helpers exist to fix. The comparison is
+      case-sensitive by design: URL paths are case-sensitive, so
+      ``/V1/Traces`` is genuinely not ``/v1/traces`` and still needs the real
+      path appended.
+    * **Query/fragment preservation.** Checking or appending against the raw
+      string would corrupt an endpoint that has a query string or fragment
+      (e.g. ``http://h/v1/traces?foo=bar``: an anchored check against the raw
+      string sees it ending in ``?foo=bar``, not ``/v1/traces``, and would
+      append *after* the query, producing ``...?foo=bar/v1/traces``).
+      Operating on ``urlsplit(...).path`` and reassembling with
+      :func:`urllib.parse.urlunsplit` keeps the query and fragment exactly
+      where they were.
 
     gRPC has no such HTTP resource path -- the endpoint is a bare
-    ``host:port`` -- so it passes through untouched regardless.
+    ``host:port`` -- so it passes through untouched regardless (returned
+    verbatim, never reassembled).
     """
-    if base_endpoint.rstrip("/").endswith(signal_path):
+    parsed = urlsplit(base_endpoint)
+    path = parsed.path
+    if path.rstrip("/").endswith(signal_path):
         return base_endpoint
-    if protocol in ("http/protobuf", "http"):
-        if base_endpoint.endswith("/"):
-            return f"{base_endpoint}{signal_path.lstrip('/')}"
-        return f"{base_endpoint}{signal_path}"
+    if protocol in _HTTP_OTLP_PROTOCOLS:
+        if path.endswith("/"):
+            new_path = f"{path}{signal_path.lstrip('/')}"
+        else:
+            new_path = f"{path}{signal_path}"
+        return urlunsplit(parsed._replace(path=new_path))
     return base_endpoint
 
 

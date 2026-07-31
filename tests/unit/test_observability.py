@@ -412,6 +412,36 @@ class TestAPMServerIntegration:
         result = _get_trace_endpoint(endpoint, "http/protobuf")
         assert result == "http://localhost:4318/V1/Traces/v1/traces"
 
+    def test_get_trace_endpoint_query_string_already_correct_untouched(self):
+        """An already-correct endpoint with a query string must be left
+        untouched -- the anchored check must compare against the URL's PATH
+        component, not the raw string (which ends in the query, not the
+        path)."""
+        from kibana.observability import _get_trace_endpoint
+
+        endpoint = "http://h/v1/traces?foo=bar"
+        result = _get_trace_endpoint(endpoint, "http/protobuf")
+        assert result == "http://h/v1/traces?foo=bar"
+
+    def test_get_trace_endpoint_bare_host_with_query_preserves_query(self):
+        """A bare host with only a query string (no path at all) must get
+        /v1/traces appended to the PATH, with the query preserved in place
+        -- not appended after the query string."""
+        from kibana.observability import _get_trace_endpoint
+
+        endpoint = "http://h:8200?token=x"
+        result = _get_trace_endpoint(endpoint, "http/protobuf")
+        assert result == "http://h:8200/v1/traces?token=x"
+
+    def test_get_trace_endpoint_fragment_already_correct_untouched(self):
+        """An already-correct endpoint with a fragment must be left
+        untouched."""
+        from kibana.observability import _get_trace_endpoint
+
+        endpoint = "http://h/v1/traces#frag"
+        result = _get_trace_endpoint(endpoint, "http/protobuf")
+        assert result == "http://h/v1/traces#frag"
+
     @patch("socket.socket")
     def test_validate_apm_connectivity_success(self, mock_socket):
         """Test successful APM server connectivity validation."""
@@ -904,6 +934,26 @@ class TestAPMServerIntegration:
         mock_create_exporter.assert_called_once_with(
             "http://localhost:4317", {}, "bogus"
         )
+
+    @patch.dict("os.environ", {}, clear=True)
+    def test_configure_opentelemetry_unsupported_protocol_warning_accurate_for_console_exporter(
+        self, caplog
+    ):
+        """The unrecognized-protocol warning must not unconditionally claim
+        exporter creation will raise a clear error -- that's only true for
+        exporter='otlp'; for exporter='console' nothing downstream ever
+        constructs an OTLP exporter at all, so the wording must be gated on
+        (or explicit about) the otlp path rather than an unconditional claim."""
+        from kibana.observability import KibanaInstrumentor, configure_opentelemetry
+
+        instrumentor = KibanaInstrumentor.get_instance()
+        instrumentor.disable()
+
+        with caplog.at_level("WARNING", logger="kibana.observability"):
+            configure_opentelemetry(enabled=True, exporter="console", protocol="BOGUS")
+
+        assert "Unrecognized OTLP protocol 'bogus'" in caplog.text
+        assert "for exporter='otlp'" in caplog.text
 
 
 @pytest.mark.skipif(not OTEL_AVAILABLE, reason="OpenTelemetry not installed")
@@ -1657,6 +1707,33 @@ class TestLogExporterCreation:
         endpoint = "http://localhost:4318/V1/Logs"
         result = _get_log_endpoint(endpoint, "http/protobuf")
         assert result == "http://localhost:4318/V1/Logs/v1/logs"
+
+    def test_get_log_endpoint_query_string_already_correct_untouched(self):
+        """Mirrors the trace-endpoint query-string regression: an
+        already-correct endpoint with a query string must be left untouched."""
+        from kibana.observability import _get_log_endpoint
+
+        endpoint = "http://h/v1/logs?foo=bar"
+        result = _get_log_endpoint(endpoint, "http/protobuf")
+        assert result == "http://h/v1/logs?foo=bar"
+
+    def test_get_log_endpoint_bare_host_with_query_preserves_query(self):
+        """A bare host with only a query string must get /v1/logs appended
+        to the PATH, with the query preserved in place."""
+        from kibana.observability import _get_log_endpoint
+
+        endpoint = "http://h:8200?token=x"
+        result = _get_log_endpoint(endpoint, "http/protobuf")
+        assert result == "http://h:8200/v1/logs?token=x"
+
+    def test_get_log_endpoint_fragment_already_correct_untouched(self):
+        """An already-correct endpoint with a fragment must be left
+        untouched."""
+        from kibana.observability import _get_log_endpoint
+
+        endpoint = "http://h/v1/logs#frag"
+        result = _get_log_endpoint(endpoint, "http/protobuf")
+        assert result == "http://h/v1/logs#frag"
 
     @patch("kibana.observability._create_otlp_log_exporter")
     def test_create_otlp_log_exporter_with_error_handling_success(self, mock_create):

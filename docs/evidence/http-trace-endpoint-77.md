@@ -505,3 +505,165 @@ already proven in the original battle-test.
 `_get_signal_endpoint`; nothing about *where* they're called from changed (still only from
 `configure_opentelemetry` / `_setup_log_forwarding`, never from the exporter-creation
 functions themselves) — the first "Scope & caveats" bullet above still holds.
+
+## Round 2 — the anchored check itself had a NEW MAJOR bug (query/fragment corruption)
+
+A scoped re-review of the round-1 fix (commit `449a2a6`) found that the anchored
+`rstrip("/").endswith(signal_path)` check introduced 1 NEW MAJOR + 2 minors. Addressed in the
+round-2 commit that follows on the same branch (see `git log`).
+
+### [MAJOR] Anchored check compared against the raw string, corrupting query strings/fragments
+
+`base_endpoint.rstrip("/").endswith(signal_path)` anchors correctly against the *end of the
+raw string* — but the end of the raw string is the query string or fragment when either is
+present, not the path. `http://h/v1/traces?foo=bar` ends in `?foo=bar`, not `/v1/traces`, so
+the already-correct check failed and `/v1/traces` was appended *after* the query string:
+`http://h/v1/traces?foo=bar/v1/traces` — a new double-suffix corruption for exactly the class
+of endpoint the round-1 fix was supposed to leave alone (the pre-round-1 unanchored substring
+check happened to leave these alone, by accident, since `"/v1/traces" in base_endpoint` is
+still `True` regardless of what follows it).
+
+**Fix:** `_get_signal_endpoint` now parses `base_endpoint` with
+`urllib.parse.urlsplit`, and both the already-correct check and the append operate on
+`parsed.path` only. When appending, the new path is spliced in via
+`parsed._replace(path=new_path)` + `urllib.parse.urlunsplit`, which reassembles the full URL
+with the original query and fragment untouched in their original position.
+
+RED (new query/fragment cases, run against the round-1 code as committed at `449a2a6`):
+
+```
+$ .venv/bin/pytest tests/unit/test_observability.py \
+    -k "query_string_already_correct or bare_host_with_query or fragment_already_correct or warning_accurate_for_console" \
+    --no-cov -v
+...
+FAILED ...test_get_trace_endpoint_query_string_already_correct_untouched
+  AssertionError: assert 'http://h/v1/traces?foo=bar/v1/traces' == 'http://h/v1/traces?foo=bar'
+FAILED ...test_get_trace_endpoint_bare_host_with_query_preserves_query
+FAILED ...test_get_trace_endpoint_fragment_already_correct_untouched
+  AssertionError: assert 'http://h/v1/traces#frag/v1/traces' == 'http://h/v1/traces#frag'
+FAILED ...test_get_log_endpoint_query_string_already_correct_untouched
+FAILED ...test_get_log_endpoint_bare_host_with_query_preserves_query
+FAILED ...test_get_log_endpoint_fragment_already_correct_untouched
+FAILED ...test_configure_opentelemetry_unsupported_protocol_warning_accurate_for_console_exporter
+  AssertionError: assert "for exporter='otlp'" in "... exporter creation will still raise a
+  clear error for this protocol\n"
+7 failed, 117 deselected
+```
+
+GREEN (after the fix), **including a full re-run of the entire round-1 matrix** to confirm no
+regression (mid-path collision still appended, suffix-with-extra-segment still appended,
+true-trailing-slash still untouched, case-sensitivity ruling unchanged, `http` alias still
+works, protocol normalization/port-bias alignment unchanged):
+
+```
+$ .venv/bin/pytest tests/unit/test_observability.py \
+    -k "query_string_already_correct or bare_host_with_query or fragment_already_correct or warning_accurate_for_console or mid_path_collision or suffix_with_extra_segment or true_trailing_slash or case_sensitive or http_alias_protocol or protocol_case_normalized or unsupported_protocol_warns or grpc_port_bias or uses_4318_port" \
+    --no-cov -v
+...
+22 passed, 102 deselected
+```
+
+### Minor 1 — softened the unrecognized-protocol warning's overclaim
+
+The warning added in round 1 unconditionally said "exporter creation will still raise a clear
+error for this protocol" — true only when `exporter="otlp"`; for `exporter="console"` nothing
+downstream ever builds an OTLP exporter, so the claim was false in that case. Reworded to
+scope the claim explicitly: "...for exporter='otlp' this will still surface as a clear logged
+error during exporter creation." Pinned by
+`test_configure_opentelemetry_unsupported_protocol_warning_accurate_for_console_exporter`
+(RED → GREEN, shown above) — calls with `exporter="console"` and asserts the scoped phrasing
+is present.
+
+### Minor 2 — single source of truth for the `("http/protobuf", "http")` tuple
+
+`_HTTP_OTLP_PROTOCOLS = frozenset({"http/protobuf", "http"})` now lives once, in
+`kibana/observability/_imports.py` (the one module `_config.py`, `_exporters.py`, and
+`_validation.py` all already depend on, directly or transitively, with no circular-import
+risk — `_exporters.py` already imports from `_validation.py`, so the reverse direction was
+not available). `_SUPPORTED_OTLP_PROTOCOLS` moved there too, built from
+`{"grpc"} | _HTTP_OTLP_PROTOCOLS`. All four previously-independent occurrences of the literal
+tuple (`_config.py`'s default-port calc, `_exporters.py`'s `_get_signal_endpoint` and both
+`_create_otlp_exporter`/`_create_otlp_log_exporter` protocol branches, `_validation.py`'s port
+guess) now reference the one constant; the cross-referencing comments between `_config.py`
+and `_validation.py` about the aligned port-fallback bias are kept and updated to point at the
+shared constant.
+
+### Verify: "already-correct explicit endpoints are unaffected" (changelog/evidence wording)
+
+Per the review instruction, checked whether this claim (originally written after round 1)
+needed a query/fragment caveat. Before this round's fix it was **false** for that specific
+subclass (query/fragment endpoints got corrupted, not "unaffected") — after this round's fix
+it is **true again**, and now demonstrably covers query strings and fragments too (see the RED
+→ GREEN cases above). The changelog bullet has been extended, not just left as-is, to say so
+explicitly: endpoints "carrying a query string/fragment" are now named as one of the
+unaffected/already-correct cases, with a short note on how (`urlsplit`/`urlunsplit`, path-only).
+
+### Full verification after round 2
+
+```
+$ .venv/bin/pytest tests/unit/ --cov=kibana --cov-fail-under=90 -q
+3295 passed
+Required test coverage of 90% reached. Total coverage: 94.33%
+
+$ .venv/bin/mypy kibana/
+Success: no issues found in 103 source files
+
+$ .venv/bin/pre-commit run --files kibana/observability/_config.py kibana/observability/_exporters.py \
+    kibana/observability/_validation.py kibana/observability/_imports.py \
+    kibana/observability/__init__.py tests/unit/test_observability.py
+black.................................................................................Passed
+isort.................................................................................Passed
+ruff check............................................................................Passed
+(all other hooks: Passed)
+```
+
+(`isort` reordered the new underscore-prefixed imports in `_config.py`/`_exporters.py` on its
+first run in this round; re-run was clean. Full suite + mypy re-confirmed green after.)
+
+### Live re-check against `:8200` with a query-param endpoint (the reviewer's mandatory wire test)
+
+```
+$ curl -s -o /dev/null -w "APM reachable, HTTP %{http_code}\n" --max-time 3 http://localhost:8200
+APM reachable, HTTP 200
+
+$ .venv/bin/python -c "
+from kibana.observability import configure_opentelemetry, create_span
+configure_opentelemetry(
+    enabled=True, protocol='http/protobuf',
+    endpoint='http://localhost:8200?wu5round2=queryparam',
+    validate_endpoint=False, logs_enabled=False,
+    service_name='kibana-py-wu5-round2-query-recheck',
+)
+span = create_span('wu5.round2-query-recheck-smoke'); span.end()
+"
+INFO:kibana.observability:OTLP exporter configured: http://localhost:8200/v1/traces?wu5round2=queryparam (protocol: http/protobuf)
+configure_opentelemetry(...) completed WITHOUT EXCEPTION (round-2 query-param re-check)
+```
+
+Confirms at the log line itself: `/v1/traces` was inserted **into the path**, before the query
+string (`...8200/v1/traces?wu5round2=queryparam`), not appended after it
+(`...8200?wu5round2=queryparam/v1/traces`, which is what round 1's code would have produced).
+
+```
+$ curl -s -u "elastic:${ES_LOCAL_PASSWORD}" "http://localhost:9200/traces-apm*/_search" \
+    -H "Content-Type: application/json" -d '{
+  "query": { "match": { "service.name": "kibana-py-wu5-round2-query-recheck" } },
+  "_source": ["service.name","transaction.name","@timestamp"]
+}'
+{ "hits": { "total": { "value": 1, "relation": "eq" }, "hits": [ { "_source": {
+  "service": { "name": "kibana-py-wu5-round2-query-recheck" },
+  "transaction": { "name": "wu5.round2-query-recheck-smoke" }
+} } ] } }
+```
+
+**PASS** — the query-param endpoint was correctly transformed, POSTed to `/v1/traces` with
+the query string intact, accepted by the APM server, and indexed. Confirms the MAJOR fix at
+the wire, not just at the unit-test level.
+
+### Scope note (round 2)
+
+No change to *where* `_get_signal_endpoint` is called from, its two-signal wrapper structure,
+or the documented port-bias ruling from round 1 (still gRPC-biased for anything not a
+recognized HTTP variant) — round 2 only changed how the path component is detected/modified
+within the same call sites, plus the two minors above. All round-1 scope notes and caveats
+still hold.

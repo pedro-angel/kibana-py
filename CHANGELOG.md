@@ -30,8 +30,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   signal path appended instead of being wrongly treated as already-correct.
   `configure_opentelemetry`'s `protocol` argument is now case-normalized, and
   an unrecognized value logs a warning instead of silently picking a default.
-  gRPC endpoints and already-correct explicit endpoints (with or without a
-  trailing slash, or already ending in `/v1/traces`) are unaffected.
+  The check and append both operate on the URL's *path* component only (via
+  `urllib.parse.urlsplit`/`urlunsplit`), so an endpoint with a query string or
+  fragment (e.g. `http://h:8200?token=x`) still gets the signal path inserted
+  into the path — not appended after the query — and query/fragment are
+  preserved unchanged. gRPC endpoints and already-correct explicit endpoints
+  (with or without a trailing slash, already ending in `/v1/traces`, or
+  carrying a query string/fragment) are unaffected.
 - **A malformed `space_id` now fails the same way in async as in sync: locally,
   with no request and nothing cached.** Sync checks the id's *format* before
   anything else, so `client.slos.get(slo_id="x", space_id="Bad Space!")` raised
