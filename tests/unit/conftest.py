@@ -1,5 +1,7 @@
 """Fixtures for unit tests, including OTel cleanup between tests."""
 
+import logging
+
 import pytest
 
 
@@ -16,7 +18,16 @@ def _reset_otel_state():
     test and disables the ``KibanaInstrumentor`` singleton so no state leaks
     between tests.
     """
+    # A real `_setup_log_forwarding` run calls setLevel() on every configured
+    # logger and never restores it, so a single test that enables log
+    # forwarding would pin the shared "kibana" logger at WARNING for the rest
+    # of the session — silently changing what every later test's caplog sees.
+    kibana_logger = logging.getLogger("kibana")
+    original_level = kibana_logger.level
+
     yield
+
+    kibana_logger.setLevel(original_level)
 
     try:
         from opentelemetry import trace
@@ -41,5 +52,23 @@ def _reset_otel_state():
 
         instrumentor = KibanaInstrumentor.get_instance()
         instrumentor.disable()
+    except ImportError:
+        pass
+
+    try:
+        # Drop kibana-py's reference to the provider it installed, so the next
+        # test starts from "nothing installed" rather than holding a
+        # shut-down provider alive. (configure_opentelemetry survives this
+        # either way — it re-checks that its provider is still the OTel
+        # global before reusing it — but the reference would keep a dead
+        # provider and its exporters reachable for the rest of the session.)
+        import kibana.observability._tracing as _tracing_mod
+
+        _tracing_mod._installed_provider_state = None
+        # Also the record of what kibana-py put in the process-global slot:
+        # the fixture resets that slot itself above, so leaving the record
+        # behind would make the next test think its own global provider is a
+        # leftover of a previous one.
+        _tracing_mod._global_slot_provider = None
     except ImportError:
         pass

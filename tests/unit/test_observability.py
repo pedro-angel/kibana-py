@@ -30,6 +30,59 @@ class TestKibanaInstrumentor:
 
         assert instance1 is instance2
 
+    def test_get_instance_is_thread_safe(self):
+        """Concurrent ``get_instance()`` callers must all get the same object.
+
+        Pre-fix ``get_instance()`` was an unsynchronized check-then-set: every
+        thread that passed ``cls._instance is None`` before the winner's
+        assignment built its own instance, so an ``enable()`` applied to a
+        loser instance was silently lost (issue #76, problem 3).
+
+        The race window is made deterministic rather than hoped-for: a slowed
+        ``__init__`` holds every thread that got past the ``is None`` check
+        inside the constructor at the same time, and a barrier makes them
+        arrive together. Without a lock this fails every run, not one in a
+        hundred.
+        """
+        import threading
+        import time
+
+        from kibana.observability import KibanaInstrumentor
+
+        thread_count = 16
+        barrier = threading.Barrier(thread_count)
+        results: list[KibanaInstrumentor] = []
+        results_lock = threading.Lock()
+        original_instance = KibanaInstrumentor._instance
+        original_init = KibanaInstrumentor.__init__
+
+        def slow_init(self):
+            time.sleep(0.05)
+            original_init(self)
+
+        def worker():
+            barrier.wait(timeout=10)
+            instance = KibanaInstrumentor.get_instance()
+            with results_lock:
+                results.append(instance)
+
+        KibanaInstrumentor._instance = None
+        KibanaInstrumentor.__init__ = slow_init
+        try:
+            threads = [threading.Thread(target=worker) for _ in range(thread_count)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(timeout=30)
+        finally:
+            KibanaInstrumentor.__init__ = original_init
+            KibanaInstrumentor._instance = original_instance
+
+        assert len(results) == thread_count
+        assert (
+            len({id(instance) for instance in results}) == 1
+        ), "get_instance() handed out more than one instance under concurrency"
+
     def test_enable_sets_enabled_flag(self):
         """Test that enable() sets the enabled flag."""
         from kibana.observability import KibanaInstrumentor
@@ -151,6 +204,848 @@ class TestConfigureOpenTelemetry:
         configure_opentelemetry(enabled=True)
 
         assert instrumentor.is_enabled() is True
+
+
+class _RecordingSpanExporter:
+    """Minimal in-memory SpanExporter stand-in.
+
+    A real exporter object (not a ``Mock``) so the SDK's ``BatchSpanProcessor``
+    exercises its genuine export path -- these tests assert *which* exporter a
+    span actually reached, which is the whole question in issue #76's
+    problem 2.
+    """
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+        self.exported: list[str] = []
+        self.shutdown_calls = 0
+
+    def export(self, spans):  # noqa: ANN001
+        from opentelemetry.sdk.trace.export import SpanExportResult
+
+        self.exported.extend(span.name for span in spans)
+        return SpanExportResult.SUCCESS
+
+    def shutdown(self):
+        self.shutdown_calls += 1
+
+    def force_flush(self, timeout_millis=30000):  # noqa: ANN001
+        return True
+
+
+class _RecordingLogExporter:
+    """Minimal in-memory LogExporter stand-in (see _RecordingSpanExporter)."""
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+        self.exported: list[str] = []
+
+    def export(self, batch):  # noqa: ANN001
+        from opentelemetry.sdk._logs.export import LogExportResult
+
+        self.exported.extend(str(item.log_record.body) for item in batch)
+        return LogExportResult.SUCCESS
+
+    def shutdown(self):
+        return None
+
+    def force_flush(self, timeout_millis=30000):  # noqa: ANN001
+        return True
+
+
+def _force_tracked_provider_state(tracing_mod, provider, processor):
+    """Forge kibana-py's tracked (provider, processor) pair."""
+    tracing_mod._installed_provider_state = (provider, processor)
+
+
+def _read_tracked_provider_state(tracing_mod):
+    """Read the tracked pair.
+
+    Deliberately a plain attribute read with no fallback: a getattr default
+    would let a future change that publishes nothing at all still satisfy
+    every assertion built on this helper.
+    """
+    return tracing_mod._installed_provider_state
+
+
+def _is_registered_on(tracer_provider, processor):
+    """Whether ``processor`` really sits on ``tracer_provider``.
+
+    Reads the SDK's own private structure rather than calling kibana-py's
+    equivalent helper: the assertion this backs is about the SDK's actual
+    state, so it must not be able to pass because the library's idea of
+    "registered" agrees with the library.
+    """
+    active = getattr(tracer_provider, "_active_span_processor", None)
+    registered = getattr(active, "_span_processors", ())
+    return any(candidate is processor for candidate in registered)
+
+
+@pytest.mark.skipif(not OTEL_AVAILABLE, reason="OpenTelemetry not installed")
+class TestConfigureOpenTelemetryIdempotency:
+    """Repeat ``configure_opentelemetry()`` calls must be idempotent (issue #76).
+
+    Three separate defects, one per test below: log handlers stacked on the
+    "kibana" logger because the cleanup branch read a different binding than
+    the one it wrote; a second configure built an exporter that was never
+    reached because the global tracer provider refuses to be replaced, yet
+    still logged success; and the instrumentor singleton was an unsynchronized
+    check-then-set.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _cleanup_handlers(self):
+        """Detach any handler this class's configure calls created.
+
+        These tests deliberately attach real ``OTelLogHandler``s to the shared
+        "kibana" logger; without cleanup they would leak into every later test
+        in the session.
+        """
+        yield
+
+        import kibana.observability._logging as _logging_mod
+
+        handlers = _logging_mod._created_log_handlers
+        if handlers:
+            _logging_mod._cleanup_log_handlers(handlers)
+            _logging_mod._created_log_handlers = []
+
+    @staticmethod
+    def _otel_handlers():
+        from kibana.observability import OTelLogHandler
+
+        return [
+            handler
+            for handler in logging.getLogger("kibana").handlers
+            if isinstance(handler, OTelLogHandler)
+        ]
+
+    @patch.dict("os.environ", {}, clear=True)
+    @patch("kibana.observability._create_otlp_log_exporter_with_error_handling")
+    @patch("kibana.observability._create_otlp_exporter_with_error_handling")
+    def test_repeat_configure_does_not_stack_log_handlers(
+        self, mock_span_exporter, mock_log_exporter
+    ):
+        """Two configure calls must leave exactly one handler, first one closed.
+
+        Pre-fix, ``_config.py`` read ``_created_log_handlers`` through the
+        ``kibana.observability`` package attribute (a stale snapshot of the
+        empty list captured at import time) but wrote the new handlers to
+        ``kibana.observability._logging``'s module global, so the cleanup
+        branch never saw anything to clean and every call stacked another
+        handler on the "kibana" logger -- duplicated log export, handlers
+        never closed.
+        """
+        from kibana.observability import configure_opentelemetry
+
+        mock_span_exporter.side_effect = [
+            _RecordingSpanExporter("first"),
+            _RecordingSpanExporter("second"),
+        ]
+        mock_log_exporter.side_effect = [
+            _RecordingLogExporter("first"),
+            _RecordingLogExporter("second"),
+        ]
+
+        assert self._otel_handlers() == []
+
+        def _configure():
+            configure_opentelemetry(
+                enabled=True,
+                endpoint="http://localhost:8200",
+                protocol="http/protobuf",
+                validate_endpoint=False,
+                logs_enabled=True,
+                logs_loggers=["kibana"],
+            )
+
+        _configure()
+        after_first = self._otel_handlers()
+        assert len(after_first) == 1
+        first_handler = after_first[0]
+
+        _configure()
+        after_second = self._otel_handlers()
+
+        assert len(after_second) == 1, (
+            "repeat configure stacked log handlers on the 'kibana' logger: "
+            f"{after_second}"
+        )
+        assert after_second[0] is not first_handler
+        assert first_handler not in logging.getLogger("kibana").handlers
+        # close() flips _enabled to False -- the observable proof the previous
+        # handler was closed, not merely dropped on the floor.
+        assert first_handler._enabled is False
+
+    @patch.dict("os.environ", {}, clear=True)
+    @patch("kibana.observability._create_otlp_exporter_with_error_handling")
+    def test_reconfigure_applies_new_endpoint_exporter(self, mock_span_exporter):
+        """A second configure must actually route spans to the new exporter.
+
+        Pre-fix, the second call built a fresh ``TracerProvider``, OTel
+        refused the ``set_tracer_provider`` override, the instrumentor's
+        ``enable()`` early-returned, and spans kept flowing to the *first*
+        exporter -- while the log line still claimed "OpenTelemetry
+        configured".
+        """
+        from opentelemetry import trace
+
+        from kibana.observability import KibanaInstrumentor, configure_opentelemetry
+
+        first = _RecordingSpanExporter("first")
+        second = _RecordingSpanExporter("second")
+        mock_span_exporter.side_effect = [first, second]
+
+        KibanaInstrumentor.get_instance().disable()
+
+        configure_opentelemetry(
+            enabled=True,
+            endpoint="http://localhost:8200",
+            protocol="http/protobuf",
+            validate_endpoint=False,
+        )
+        provider_after_first = trace.get_tracer_provider()
+
+        configure_opentelemetry(
+            enabled=True,
+            endpoint="http://localhost:8200?run=second",
+            protocol="http/protobuf",
+            validate_endpoint=False,
+        )
+
+        assert (
+            trace.get_tracer_provider() is provider_after_first
+        ), "reconfigure must reuse the installed provider, not orphan a new one"
+        assert mock_span_exporter.call_args[0][0] == (
+            "http://localhost:8200/v1/traces?run=second"
+        )
+
+        tracer = KibanaInstrumentor.get_instance().get_tracer()
+        assert tracer is not None
+        tracer.start_span("after-reconfigure").end()
+        provider_after_first.force_flush()
+
+        assert second.exported == [
+            "after-reconfigure"
+        ], "span did not reach the exporter built by the second configure"
+        assert first.exported == []
+        assert (
+            first.shutdown_calls == 1
+        ), "the superseded span processor/exporter must be shut down"
+
+    @patch.dict("os.environ", {}, clear=True)
+    @patch("kibana.observability._create_otlp_exporter_with_error_handling")
+    def test_reconfigure_without_a_span_exporter_keeps_the_working_config(
+        self, mock_span_exporter, caplog
+    ):
+        """A configuration that exports nothing must not be applied on top of
+        one that works.
+
+        `exporter="OTLP"` (miscased), `exporter="none"`, or a console exporter
+        that fails to construct all produce an empty processor list. Applying
+        that swapped the working exporter out for nothing and logged success —
+        #76's own failure mode (a call that claims to have configured
+        telemetry and silently stops it), re-entered from the other side.
+        """
+        from opentelemetry import trace
+
+        from kibana.observability import KibanaInstrumentor, configure_opentelemetry
+
+        working = _RecordingSpanExporter("working")
+        mock_span_exporter.return_value = working
+        KibanaInstrumentor.get_instance().disable()
+
+        configure_opentelemetry(
+            enabled=True,
+            exporter="otlp",
+            endpoint="http://localhost:8200",
+            protocol="http/protobuf",
+            validate_endpoint=False,
+        )
+        provider = trace.get_tracer_provider()
+
+        caplog.clear()
+        with caplog.at_level(logging.DEBUG, logger="kibana.observability"):
+            configure_opentelemetry(
+                enabled=True,
+                exporter="not-a-real-exporter",
+                endpoint="http://localhost:8200",
+                protocol="http/protobuf",
+                validate_endpoint=False,
+            )
+
+        tracer = KibanaInstrumentor.get_instance().get_tracer()
+        assert tracer is not None
+        tracer.start_span("still-exporting").end()
+        provider.force_flush()
+
+        assert working.exported == ["still-exporting"], (
+            "the working exporter must survive a configuration that creates "
+            "no exporter of its own"
+        )
+        assert working.shutdown_calls == 0
+        assert "none of it is being applied" in caplog.text
+        assert (
+            "configured for service" not in caplog.text
+        ), "a call that changed nothing must not report success"
+
+    @patch.dict("os.environ", {}, clear=True)
+    @patch("kibana.observability._create_otlp_exporter_with_error_handling")
+    def test_concurrent_no_exporter_configure_cannot_tear_down_a_working_one(
+        self, mock_span_exporter, caplog
+    ):
+        """The no-exporter refusal must hold under concurrency, not just
+        sequentially.
+
+        Deciding "is there a working configuration to protect?" before taking
+        the installer's lock describes a world another thread can change in
+        the meantime: a call with no exporter that looked first and installed
+        later still tore down a configuration published in between, and both
+        calls logged success. The decision therefore belongs inside the lock,
+        which is what this test pins.
+
+        The interleaving is forced, not hoped for: the no-exporter call is
+        parked at the install boundary — after every decision it makes — and
+        only then does the working configuration land.
+        """
+        import threading
+
+        from opentelemetry import trace
+
+        import kibana.observability as _obs
+        from kibana.observability import KibanaInstrumentor, configure_opentelemetry
+
+        working = _RecordingSpanExporter("working")
+        mock_span_exporter.return_value = working
+        KibanaInstrumentor.get_instance().disable()
+
+        real_install = _obs._install_span_processors
+        parked_at_install = threading.Event()
+        working_installed = threading.Event()
+
+        def gated_install(*args, **kwargs):
+            if threading.current_thread().name == "no-exporter-configure":
+                parked_at_install.set()
+                working_installed.wait(timeout=10)
+            return real_install(*args, **kwargs)
+
+        def configure_without_exporter():
+            configure_opentelemetry(
+                enabled=True, exporter="bogus", validate_endpoint=False
+            )
+
+        with (
+            caplog.at_level(logging.DEBUG, logger="kibana.observability"),
+            patch(
+                "kibana.observability._install_span_processors",
+                side_effect=gated_install,
+            ),
+        ):
+            no_exporter_thread = threading.Thread(
+                target=configure_without_exporter, name="no-exporter-configure"
+            )
+            no_exporter_thread.start()
+            assert parked_at_install.wait(
+                timeout=10
+            ), "the no-exporter call never reached the install boundary"
+
+            configure_opentelemetry(
+                enabled=True,
+                exporter="otlp",
+                endpoint="http://localhost:8200",
+                protocol="http/protobuf",
+                validate_endpoint=False,
+            )
+            working_installed.set()
+            no_exporter_thread.join(timeout=30)
+
+        assert not no_exporter_thread.is_alive()
+
+        tracer = KibanaInstrumentor.get_instance().get_tracer()
+        assert tracer is not None
+        tracer.start_span("survived-the-race").end()
+        trace.get_tracer_provider().force_flush()
+
+        assert working.exported == [
+            "survived-the-race"
+        ], "a concurrent no-exporter call tore down the working exporter"
+        assert working.shutdown_calls == 0
+        assert caplog.text.count("for service:") == 1, (
+            "exactly one call configured anything, so exactly one success "
+            f"line is honest:\n{caplog.text}"
+        )
+        assert caplog.text.count("none of it is being applied") == 1
+
+    @patch.dict("os.environ", {}, clear=True)
+    @patch("kibana.observability._create_otlp_exporter_with_error_handling")
+    def test_first_configure_without_a_span_exporter_warns(
+        self, mock_span_exporter, caplog
+    ):
+        """With nothing configured yet there is nothing to protect, but the
+        caller still has to be told that no spans will leave the process —
+        and the process-global provider slot must be left alone."""
+        from opentelemetry import trace
+        from opentelemetry.sdk.trace import TracerProvider as SDKTracerProvider
+
+        from kibana.observability import KibanaInstrumentor, configure_opentelemetry
+
+        KibanaInstrumentor.get_instance().disable()
+
+        with caplog.at_level(logging.DEBUG, logger="kibana.observability"):
+            configure_opentelemetry(
+                enabled=True, exporter="none", validate_endpoint=False
+            )
+
+        assert "nothing was configured" in caplog.text
+        assert mock_span_exporter.call_count == 0
+        # An exporter-less provider must not claim the process-global slot:
+        # OTel fills it once, so squatting it would lock out the next call
+        # that does have exporters.
+        assert not isinstance(trace.get_tracer_provider(), SDKTracerProvider)
+
+    @patch.dict("os.environ", {}, clear=True)
+    @patch("kibana.observability._create_otlp_exporter_with_error_handling")
+    def test_configure_normalizes_exporter_case(self, mock_span_exporter):
+        """``exporter="OTLP"`` must behave like ``"otlp"``.
+
+        Every downstream check is case-sensitive, so an uppercase value used
+        to match no branch and silently produce a configuration with no
+        exporter at all.
+        """
+        from kibana.observability import KibanaInstrumentor, configure_opentelemetry
+
+        exporter = _RecordingSpanExporter("normalized")
+        mock_span_exporter.return_value = exporter
+        KibanaInstrumentor.get_instance().disable()
+
+        configure_opentelemetry(
+            enabled=True,
+            exporter="OTLP",
+            endpoint="http://localhost:8200",
+            protocol="http/protobuf",
+            validate_endpoint=False,
+        )
+
+        mock_span_exporter.assert_called_once()
+        tracer = KibanaInstrumentor.get_instance().get_tracer()
+        assert tracer is not None
+        tracer.start_span("normalized-exporter").end()
+        KibanaInstrumentor.get_instance()._tracer_provider.force_flush()
+        assert exporter.exported == ["normalized-exporter"]
+
+    @patch.dict("os.environ", {}, clear=True)
+    @patch("kibana.observability._config.TracerProvider")
+    @patch("kibana.observability._validate_apm_connectivity")
+    def test_abandoned_configure_builds_no_tracer_provider(
+        self, mock_validate, mock_provider_class
+    ):
+        """Give-up paths must not leave an abandoned provider behind.
+
+        ``TracerProvider.__init__`` registers an atexit flush, so one built
+        before the early returns outlives the call that abandoned it and
+        fires at interpreter shutdown.
+        """
+        from kibana.observability import configure_opentelemetry
+
+        mock_validate.return_value = False
+
+        configure_opentelemetry(
+            enabled=True, endpoint="http://localhost:8200", validate_endpoint=True
+        )
+
+        mock_provider_class.assert_not_called()
+
+    @patch.dict("os.environ", {}, clear=True)
+    @patch("kibana.observability._create_otlp_exporter_with_error_handling")
+    def test_reconfigure_repairs_a_mismatched_tracked_pair(
+        self, mock_span_exporter, caplog
+    ):
+        """A tracked processor that is not on the tracked provider must be
+        repaired, not swapped into.
+
+        This is the state a two-thread first-configure race produced while the
+        provider and the processor were published as two separate assignments:
+        the pair could interleave into (thread A's provider, thread B's
+        processor). Every later reconfiguration then swapped exporters into a
+        processor registered on nothing, while spans kept flowing out of the
+        old exporter — configuration that logs success and changes nothing,
+        which is the whole of #76.
+        """
+        from opentelemetry import trace
+        from opentelemetry.sdk.trace import TracerProvider
+        from opentelemetry.sdk.trace.export import BatchSpanProcessor
+
+        import kibana.observability._tracing as _tracing_mod
+        from kibana.observability import KibanaInstrumentor, configure_opentelemetry
+
+        first = _RecordingSpanExporter("first")
+        second = _RecordingSpanExporter("second")
+        orphaned = _RecordingSpanExporter("orphaned")
+        mock_span_exporter.side_effect = [first, second]
+        KibanaInstrumentor.get_instance().disable()
+
+        configure_opentelemetry(
+            enabled=True,
+            endpoint="http://localhost:8200",
+            protocol="http/protobuf",
+            validate_endpoint=False,
+        )
+        provider = trace.get_tracer_provider()
+
+        # Forge the interleaved publication: the tracked provider is the one
+        # that is genuinely global, but the tracked processor belongs to a
+        # different provider entirely.
+        orphan_provider = TracerProvider()
+        orphan_processor = _tracing_mod._SwappableSpanProcessor(
+            [BatchSpanProcessor(orphaned)]
+        )
+        orphan_provider.add_span_processor(orphan_processor)
+        _force_tracked_provider_state(_tracing_mod, provider, orphan_processor)
+
+        with caplog.at_level(logging.DEBUG, logger="kibana.observability"):
+            configure_opentelemetry(
+                enabled=True,
+                endpoint="http://localhost:8200?run=second",
+                protocol="http/protobuf",
+                validate_endpoint=False,
+            )
+
+        tracer = KibanaInstrumentor.get_instance().get_tracer()
+        assert tracer is not None
+        tracer.start_span("after-repair").end()
+        provider.force_flush()
+
+        assert second.exported == ["after-repair"], (
+            "the reconfigured exporter must actually receive spans, not be "
+            "swapped into a processor registered on nothing"
+        )
+        assert orphaned.exported == []
+        assert "Inconsistent OpenTelemetry state" in caplog.text
+        orphan_provider.shutdown()
+
+    def test_concurrent_first_configure_publishes_a_consistent_pair(self):
+        """Racing first-configure calls must leave one coherent installation.
+
+        The tracked processor has to be registered on the tracked provider,
+        and the tracked provider has to be the OTel global — publishing those
+        two facts as two separate assignments allowed them to interleave
+        between threads.
+        """
+        import threading
+
+        from opentelemetry import trace
+
+        import kibana.observability._tracing as _tracing_mod
+        from kibana.observability import KibanaInstrumentor, configure_opentelemetry
+
+        rounds, thread_count = 25, 4
+
+        for round_index in range(rounds):
+            # Each round is a fresh "nothing configured yet" process state.
+            trace._TRACER_PROVIDER = None
+            trace._TRACER_PROVIDER_SET_ONCE._done = False
+            _tracing_mod._installed_provider_state = None
+            _tracing_mod._global_slot_provider = None
+            KibanaInstrumentor.get_instance().disable()
+
+            barrier = threading.Barrier(thread_count)
+            failures: list[BaseException] = []
+
+            def worker():
+                try:
+                    barrier.wait(timeout=10)
+                    configure_opentelemetry(
+                        enabled=True, exporter="console", validate_endpoint=False
+                    )
+                except BaseException as exc:  # noqa: BLE001
+                    failures.append(exc)
+
+            threads = [threading.Thread(target=worker) for _ in range(thread_count)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(timeout=30)
+
+            assert not failures, f"round {round_index}: {failures!r}"
+
+            provider, processor = _read_tracked_provider_state(_tracing_mod)
+            assert provider is not None and processor is not None
+            assert (
+                trace.get_tracer_provider() is provider
+            ), f"round {round_index}: tracked provider is not the global one"
+            assert _is_registered_on(provider, processor), (
+                f"round {round_index}: tracked processor is not registered on "
+                "the tracked provider — a mismatched pair was published"
+            )
+            provider.shutdown()
+
+    @patch.dict("os.environ", {}, clear=True)
+    @patch("kibana.observability._create_otlp_exporter_with_error_handling")
+    def test_reconfigure_warns_that_resource_attributes_stay_pinned(
+        self, mock_span_exporter, caplog
+    ):
+        """A changed service name must warn instead of appearing to apply.
+
+        An OpenTelemetry provider's ``Resource`` is fixed when the provider is
+        constructed, and reconfiguration deliberately keeps the installed
+        provider (that is what makes the new exporter take effect at all). So
+        a second call with a different ``service_name`` changes the exporters
+        but *cannot* change the service name on spans — the one thing about
+        reconfiguration that genuinely does not apply, and therefore the one
+        thing that must be said out loud rather than left for the caller to
+        discover in the APM UI.
+        """
+        from opentelemetry import trace
+
+        from kibana.observability import KibanaInstrumentor, configure_opentelemetry
+
+        mock_span_exporter.side_effect = [
+            _RecordingSpanExporter("first"),
+            _RecordingSpanExporter("second"),
+        ]
+        KibanaInstrumentor.get_instance().disable()
+
+        def _configure(service_name):
+            configure_opentelemetry(
+                enabled=True,
+                service_name=service_name,
+                endpoint="http://localhost:8200",
+                protocol="http/protobuf",
+                validate_endpoint=False,
+            )
+
+        _configure("first-service")
+        provider = trace.get_tracer_provider()
+        assert provider.resource.attributes["service.name"] == "first-service"
+
+        with caplog.at_level(logging.WARNING, logger="kibana.observability"):
+            _configure("second-service")
+
+        assert "resource attributes" in caplog.text
+        assert "for spans" in caplog.text, (
+            "the warning must scope itself to spans: forwarded logs get a "
+            "fresh logger provider per call and do pick up the new attributes"
+        )
+        assert trace.get_tracer_provider() is provider
+        assert (
+            provider.resource.attributes["service.name"] == "first-service"
+        ), "spans must keep the first configuration's service name"
+
+    @patch.dict("os.environ", {}, clear=True)
+    @patch("kibana.observability._create_otlp_exporter_with_error_handling")
+    def test_configure_warns_but_still_exports_under_foreign_provider(
+        self, mock_span_exporter, caplog
+    ):
+        """A global provider owned by someone else must be reported, not hidden.
+
+        OTel allows exactly one global tracer provider per process. When
+        another component got there first, kibana-py cannot own process-wide
+        tracing -- and must say so -- but its *own* spans still have to be
+        created and exported (through its own provider), including when the
+        configuration is later changed.
+        """
+        from opentelemetry import trace
+        from opentelemetry.sdk.trace import TracerProvider
+
+        from kibana.observability import KibanaInstrumentor, configure_opentelemetry
+
+        first = _RecordingSpanExporter("first")
+        second = _RecordingSpanExporter("second")
+        mock_span_exporter.side_effect = [first, second]
+
+        foreign = TracerProvider()
+        trace.set_tracer_provider(foreign)
+        KibanaInstrumentor.get_instance().disable()
+
+        def _configure(endpoint):
+            configure_opentelemetry(
+                enabled=True,
+                endpoint=endpoint,
+                protocol="http/protobuf",
+                validate_endpoint=False,
+            )
+
+        with caplog.at_level(logging.DEBUG, logger="kibana.observability"):
+            _configure("http://localhost:8200")
+
+        assert trace.get_tracer_provider() is foreign
+        assert "already installed the global OpenTelemetry tracer" in caplog.text
+        assert "OpenTelemetry configured for service" in caplog.text
+
+        instrumentor = KibanaInstrumentor.get_instance()
+        tracer = instrumentor.get_tracer()
+        assert tracer is not None
+        tracer.start_span("private-provider-span").end()
+        instrumentor._tracer_provider.force_flush()
+        assert first.exported == ["private-provider-span"], (
+            "kibana-py must keep exporting its own spans when the global "
+            "provider belongs to another component"
+        )
+
+        # ...and reconfiguration must apply there too, without leaking the
+        # superseded exporter.
+        caplog.clear()
+        with caplog.at_level(logging.DEBUG, logger="kibana.observability"):
+            _configure("http://localhost:8200?run=second")
+        tracer = KibanaInstrumentor.get_instance().get_tracer()
+        tracer.start_span("after-reconfigure").end()
+        KibanaInstrumentor.get_instance()._tracer_provider.force_flush()
+
+        assert second.exported == ["after-reconfigure"]
+        assert first.exported == ["private-provider-span"]
+        assert first.shutdown_calls == 1
+        # The wording must follow whether kibana-py had a previous
+        # configuration, not whether it happens to own the global provider:
+        # this second call is a reconfiguration by every meaning the caller
+        # cares about, even though a fresh private provider was built for it.
+        assert "OpenTelemetry reconfigured for service" in caplog.text
+        assert "OpenTelemetry configured for service" not in caplog.text.replace(
+            "OpenTelemetry reconfigured for service", ""
+        )
+
+
+class _FlushRecordingDelegate:
+    """Span-processor stand-in that records the flush budget it was given."""
+
+    def __init__(self, *, flush_result: bool = True, flush_delay: float = 0.0) -> None:
+        self.flush_result = flush_result
+        self.flush_delay = flush_delay
+        self.flush_timeouts: list[int] = []
+        self.shutdown_calls = 0
+        self.ended: list[str] = []
+
+    def on_start(self, span, parent_context=None):  # noqa: ANN001
+        return None
+
+    def on_end(self, span):  # noqa: ANN001
+        self.ended.append(getattr(span, "name", "?"))
+
+    def shutdown(self):
+        self.shutdown_calls += 1
+
+    def force_flush(self, timeout_millis=30000):  # noqa: ANN001
+        import time
+
+        self.flush_timeouts.append(timeout_millis)
+        if self.flush_delay:
+            time.sleep(self.flush_delay)
+        return self.flush_result
+
+
+@pytest.mark.skipif(not OTEL_AVAILABLE, reason="OpenTelemetry not installed")
+class TestSwappableSpanProcessor:
+    """The stable processor kibana-py registers on the tracer provider."""
+
+    def test_force_flush_shares_one_deadline_and_never_short_circuits(self):
+        """Each delegate gets what is left of the caller's budget, and all of
+        them get flushed.
+
+        Handing the full timeout to every delegate lets N delegates take N
+        times what the caller asked for, and stopping at the first failure
+        skips flushing the rest — losing spans the caller explicitly asked to
+        have flushed. This mirrors the SDK's own multi-processor contract.
+        """
+        import kibana.observability._tracing as _tracing_mod
+
+        slow_failing = _FlushRecordingDelegate(flush_result=False, flush_delay=0.05)
+        fast = _FlushRecordingDelegate(flush_result=True)
+        processor = _tracing_mod._SwappableSpanProcessor([slow_failing, fast])
+
+        assert (
+            processor.force_flush(1000) is False
+        ), "a delegate that failed to flush must be reported, not hidden"
+        assert (
+            fast.flush_timeouts
+        ), "flushing must not short-circuit on the first failing delegate"
+        # The first delegate gets (essentially) the whole budget; the second
+        # gets what the first left. Compared as an inequality rather than an
+        # exact 1000: the budget is a wall-clock deadline, so the first
+        # delegate's share is 1000 minus however long the arithmetic itself
+        # took, and pinning the exact value would make this test a clock race.
+        assert 900 <= slow_failing.flush_timeouts[0] <= 1000
+        assert fast.flush_timeouts[0] < slow_failing.flush_timeouts[0] - 40, (
+            "the second delegate must get the remainder of the deadline "
+            "(the first one slept 50ms of it), not a fresh full budget: "
+            f"{slow_failing.flush_timeouts} then {fast.flush_timeouts}"
+        )
+
+    def test_shutdown_releases_delegates_and_stops_advertising_the_provider(self):
+        """A shut-down processor must stop feeding spans to dead delegates and
+        stop presenting its provider as reconfigurable.
+
+        The SDK cannot remove a processor from a provider, so this processor
+        stays registered forever — leaving shut-down delegates in place would
+        keep handing them every later span.
+        """
+        import kibana.observability._tracing as _tracing_mod
+
+        delegate = _FlushRecordingDelegate()
+        processor = _tracing_mod._SwappableSpanProcessor([delegate])
+        _force_tracked_provider_state(_tracing_mod, object(), processor)
+
+        processor.shutdown()
+
+        assert delegate.shutdown_calls == 1
+        assert processor._delegates == ()
+        processor.on_end(object())
+        assert delegate.ended == []
+        assert (
+            _tracing_mod._installed_provider_state is None
+        ), "a shut-down provider must not stay tracked as reconfigurable"
+
+    @patch.dict("os.environ", {}, clear=True)
+    def test_configure_after_provider_shutdown_reports_a_reconfiguration(self, caplog):
+        """After a shutdown, the next call is still a *re*configuration.
+
+        The tracked pair is gone, but the global provider slot is still held
+        by the provider kibana-py put there — which is why the same call
+        warns that the slot holds its own shut-down provider. Calling that
+        first-time "configured" in the very next line contradicts the
+        warning: two statements about one call, one of them false.
+        """
+        from opentelemetry import trace
+
+        from kibana.observability import KibanaInstrumentor, configure_opentelemetry
+
+        KibanaInstrumentor.get_instance().disable()
+        configure_opentelemetry(
+            enabled=True, exporter="console", validate_endpoint=False
+        )
+        trace.get_tracer_provider().shutdown()
+
+        # The assertions below are about *this* call's log lines, and the
+        # setup call above emitted its own "configured for service" line —
+        # captured whenever the run's log level lets it through (a plain
+        # `pytest --log-level=INFO` does).
+        caplog.clear()
+        with caplog.at_level(logging.DEBUG, logger="kibana.observability"):
+            configure_opentelemetry(
+                enabled=True, exporter="console", validate_endpoint=False
+            )
+
+        assert "since been shut down" in caplog.text
+        assert "OpenTelemetry reconfigured for service" in caplog.text
+        assert "OpenTelemetry configured for service" not in caplog.text.replace(
+            "OpenTelemetry reconfigured for service", ""
+        )
+
+    def test_configure_then_provider_shutdown_clears_tracked_state(self):
+        """The same, through the real path: shutting the provider down (what
+        the SDK does at exit) unregisters kibana-py's tracked pair."""
+        from opentelemetry import trace
+
+        import kibana.observability._tracing as _tracing_mod
+        from kibana.observability import KibanaInstrumentor, configure_opentelemetry
+
+        KibanaInstrumentor.get_instance().disable()
+        configure_opentelemetry(
+            enabled=True, exporter="console", validate_endpoint=False
+        )
+        assert _tracing_mod._installed_provider_state is not None
+
+        trace.get_tracer_provider().shutdown()
+
+        assert _tracing_mod._installed_provider_state is None
 
 
 @pytest.mark.skipif(not OTEL_AVAILABLE, reason="OpenTelemetry not installed")
@@ -1554,26 +2449,33 @@ class TestLogForwardingConfiguration:
     def test_configure_cleans_up_existing_handlers(
         self, mock_validate, mock_setup_logs, mock_cleanup
     ):
-        """Test that configure_opentelemetry cleans up existing log handlers."""
+        """Test that configure_opentelemetry cleans up existing log handlers.
+
+        The handler list is patched on ``kibana.observability._logging`` — the
+        module that defines it, and the only binding ``configure_opentelemetry``
+        reads or writes. Patching the (no longer re-exported)
+        ``kibana.observability`` package attribute instead is what made this
+        assertion pass while the real cleanup branch never fired (#76).
+        """
         from unittest.mock import Mock
 
-        import kibana.observability
+        import kibana.observability._logging as _logging_mod
         from kibana.observability import configure_opentelemetry
 
         mock_validate.return_value = True
         mock_setup_logs.return_value = []
 
-        # Simulate existing handlers by directly modifying the module variable
-        original_handlers = kibana.observability._created_log_handlers
-        kibana.observability._created_log_handlers = [Mock(), Mock()]
+        original_handlers = _logging_mod._created_log_handlers
+        existing = [Mock(), Mock()]
+        _logging_mod._created_log_handlers = existing
 
         try:
             configure_opentelemetry(enabled=True, logs_enabled=True)
-            mock_cleanup.assert_called_once()
+            mock_cleanup.assert_called_once_with(existing)
             mock_setup_logs.assert_called_once()
         finally:
             # Restore original state
-            kibana.observability._created_log_handlers = original_handlers
+            _logging_mod._created_log_handlers = original_handlers
 
 
 @pytest.mark.skipif(not OTEL_AVAILABLE, reason="OpenTelemetry not installed")
@@ -1902,6 +2804,50 @@ class TestLogForwardingSetup:
         handler1.close.assert_called_once()
         handler2.close.assert_called_once()
 
+    def test_cleanup_survives_a_logger_created_during_the_sweep(self, caplog):
+        """Cleanup must not abort when the global logger registry grows.
+
+        ``logging.Logger.manager.loggerDict`` is process-global: any thread
+        calling ``logging.getLogger("some.new.name")`` mutates it. Iterating
+        it live raised "dictionary changed size during iteration" and left
+        the handler attached to every logger not yet visited — the stacking
+        this cleanup exists to prevent, reported at debug level where nobody
+        would see it.
+        """
+        from kibana.observability import _cleanup_log_handlers
+
+        target = logging.getLogger("kibana_py_test_cleanup_target")
+        handler = logging.Handler()
+        target.addHandler(handler)
+        real_get_logger = logging.getLogger
+        newcomers = []
+
+        def get_logger_and_register_a_newcomer(name=None):
+            if not newcomers:
+                newcomers.append(name)
+                real_get_logger("kibana_py_test_cleanup_newcomer")
+            return real_get_logger(name) if name else real_get_logger()
+
+        try:
+            with (
+                caplog.at_level(logging.WARNING, logger="kibana.observability"),
+                patch(
+                    "logging.getLogger",
+                    side_effect=get_logger_and_register_a_newcomer,
+                ),
+            ):
+                _cleanup_log_handlers([handler])
+
+            assert handler not in target.handlers, (
+                "the sweep stopped early and left the handler attached: "
+                f"{caplog.text}"
+            )
+            assert (
+                caplog.text == ""
+            ), "a clean sweep must not report an error at any level"
+        finally:
+            target.removeHandler(handler)
+
 
 @pytest.mark.skipif(not OTEL_AVAILABLE, reason="OpenTelemetry not installed")
 class TestLogForwardingStatus:
@@ -2068,11 +3014,16 @@ class TestObservabilityWithoutOpenTelemetry:
 
 
 def _run_with_blocked_imports(
-    blocked_prefixes: tuple[str, ...], probe: str
+    blocked_prefixes: tuple[str, ...],
+    probe: str,
+    error: str = "ImportError",
+    interpreter_args: tuple[str, ...] = (),
 ) -> subprocess.CompletedProcess:
     """Run ``probe`` in a fresh subprocess where importing any module whose
     dotted name equals (or is nested under) one of ``blocked_prefixes`` raises
-    ``ImportError``, simulating that distribution being uninstalled.
+    ``error``, simulating that distribution being uninstalled (``ImportError``)
+    or corrupted/version-mismatched (``AttributeError`` — what a module body
+    raises when it reaches for a symbol its own dependency no longer exports).
 
     A real subprocess is required rather than monkeypatching ``sys.modules``
     in-process: ``kibana.observability._imports`` resolves its try/except
@@ -2081,7 +3032,16 @@ def _run_with_blocked_imports(
     "un-import" it for a later test — only a fresh interpreter can.
     """
     setup = textwrap.dedent(f"""
+        import logging
         import sys
+
+        # `kibana/__init__.py` attaches a NullHandler to the "kibana" logger,
+        # so logging's lastResort fallback never fires and anything the
+        # import-time guards report would be invisible here. Configure the
+        # root handler *before* importing kibana so the probe can see what a
+        # user with default logging would see. WARNING level on purpose: the
+        # "package is simply not installed" path is debug and must stay quiet.
+        logging.basicConfig(level=logging.WARNING, stream=sys.stderr)
 
         class _Blocker:
             _blocked = {blocked_prefixes!r}
@@ -2091,13 +3051,18 @@ def _run_with_blocked_imports(
                     name == prefix or name.startswith(prefix + ".")
                     for prefix in self._blocked
                 ):
-                    raise ImportError(f"blocked for test: {{name}}")
+                    raise {error}(f"blocked for test: {{name}}")
                 return None
 
         sys.meta_path.insert(0, _Blocker())
         """)
     return subprocess.run(
-        [sys.executable, "-c", setup + "\n" + textwrap.dedent(probe)],
+        [
+            sys.executable,
+            *interpreter_args,
+            "-c",
+            setup + "\n" + textwrap.dedent(probe),
+        ],
         capture_output=True,
         text=True,
         timeout=30,
@@ -2132,6 +3097,15 @@ class TestImportGuardMatrix:
             + repr(getattr(m, "HTTPOTLPSpanExporter", "MISSING") is not None)
         )
         print("OTEL_LOGS_AVAILABLE=" + flag("OTEL_LOGS_AVAILABLE"))
+        # ConsoleLogExporter belongs to the logs try/except and must be *bound*
+        # (to None) by the except-branch too -- an unbound name is the same
+        # crash-on-import class as #68/#70, just one import away
+        # (_logging.py imports it inside _setup_log_forwarding).
+        print("ConsoleLogExporter_present=" + repr(hasattr(m, "ConsoleLogExporter")))
+        print(
+            "ConsoleLogExporter_bound="
+            + repr(getattr(m, "ConsoleLogExporter", None) is not None)
+        )
         """)
 
     @staticmethod
@@ -2155,6 +3129,8 @@ class TestImportGuardMatrix:
                     "OTLPSpanExporter_bound": "True",
                     "HTTPOTLPSpanExporter_bound": "True",
                     "OTEL_LOGS_AVAILABLE": "True",
+                    "ConsoleLogExporter_present": "True",
+                    "ConsoleLogExporter_bound": "True",
                 },
                 id="baseline-everything-present",
             ),
@@ -2167,6 +3143,8 @@ class TestImportGuardMatrix:
                     "OTLPSpanExporter_bound": "False",
                     "HTTPOTLPSpanExporter_bound": "True",
                     "OTEL_LOGS_AVAILABLE": "True",
+                    "ConsoleLogExporter_present": "True",
+                    "ConsoleLogExporter_bound": "True",
                 },
                 id="issue68-grpc-exporter-absent-sdk-and-http-present",
             ),
@@ -2179,6 +3157,8 @@ class TestImportGuardMatrix:
                     "OTLPSpanExporter_bound": "True",
                     "HTTPOTLPSpanExporter_bound": "False",
                     "OTEL_LOGS_AVAILABLE": "True",
+                    "ConsoleLogExporter_present": "True",
+                    "ConsoleLogExporter_bound": "True",
                 },
                 id="http-exporter-absent-sdk-and-grpc-present",
             ),
@@ -2201,6 +3181,8 @@ class TestImportGuardMatrix:
                     "OTLPSpanExporter_bound": "False",
                     "HTTPOTLPSpanExporter_bound": "True",
                     "OTEL_LOGS_AVAILABLE": "False",
+                    "ConsoleLogExporter_present": "True",
+                    "ConsoleLogExporter_bound": "False",
                 },
                 id="issue70-logs-absent-must-not-clobber-trace-exporters",
             ),
@@ -2213,6 +3195,8 @@ class TestImportGuardMatrix:
                     "OTLPSpanExporter_bound": "False",
                     "HTTPOTLPSpanExporter_bound": "False",
                     "OTEL_LOGS_AVAILABLE": "False",
+                    "ConsoleLogExporter_present": "True",
+                    "ConsoleLogExporter_bound": "False",
                 },
                 id="sdk-entirely-absent-api-only",
             ),
@@ -2225,6 +3209,8 @@ class TestImportGuardMatrix:
                     "OTLPSpanExporter_bound": "False",
                     "HTTPOTLPSpanExporter_bound": "False",
                     "OTEL_LOGS_AVAILABLE": "False",
+                    "ConsoleLogExporter_present": "True",
+                    "ConsoleLogExporter_bound": "False",
                 },
                 id="otel-entirely-absent",
             ),
@@ -2241,3 +3227,158 @@ class TestImportGuardMatrix:
             f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
         )
         assert self._parse(result.stdout) == expected
+        # A package that is simply not installed is an expected, opt-in
+        # state: it must not be reported as a broken environment, and must
+        # not warn at all in a default-logging process.
+        assert "is installed but failed to import" not in result.stderr
+        assert (
+            result.stderr == ""
+        ), f"a missing optional package must stay quiet:\n{result.stderr}"
+
+    @pytest.mark.parametrize(
+        ("blocked", "expected"),
+        [
+            pytest.param(
+                ("opentelemetry.exporter.otlp.proto.grpc",),
+                {
+                    "OTEL_AVAILABLE": "True",
+                    "GRPC_EXPORTER_AVAILABLE": "False",
+                    "HTTP_EXPORTER_AVAILABLE": "True",
+                    "OTLPSpanExporter_bound": "False",
+                    "HTTPOTLPSpanExporter_bound": "True",
+                    "OTEL_LOGS_AVAILABLE": "True",
+                    "ConsoleLogExporter_present": "True",
+                    "ConsoleLogExporter_bound": "True",
+                },
+                id="corrupt-grpc-exporter",
+            ),
+            pytest.param(
+                ("opentelemetry.sdk._logs",),
+                {
+                    "OTEL_AVAILABLE": "True",
+                    "GRPC_EXPORTER_AVAILABLE": "False",
+                    "HTTP_EXPORTER_AVAILABLE": "True",
+                    "OTLPSpanExporter_bound": "False",
+                    "HTTPOTLPSpanExporter_bound": "True",
+                    "OTEL_LOGS_AVAILABLE": "False",
+                    "ConsoleLogExporter_present": "True",
+                    "ConsoleLogExporter_bound": "False",
+                },
+                id="corrupt-logs-sdk",
+            ),
+            pytest.param(
+                ("opentelemetry",),
+                {
+                    "OTEL_AVAILABLE": "False",
+                    "GRPC_EXPORTER_AVAILABLE": "False",
+                    "HTTP_EXPORTER_AVAILABLE": "False",
+                    "OTLPSpanExporter_bound": "False",
+                    "HTTPOTLPSpanExporter_bound": "False",
+                    "OTEL_LOGS_AVAILABLE": "False",
+                    "ConsoleLogExporter_present": "True",
+                    "ConsoleLogExporter_bound": "False",
+                },
+                id="corrupt-otel",
+            ),
+        ],
+    )
+    @pytest.mark.parametrize(
+        "error",
+        [
+            # AttributeError: an exporter reaching for a symbol its pinned
+            # dependency no longer exports. TypeError: what a protobuf/exporter
+            # version conflict actually raises out of generated descriptor
+            # code — the failure people hit in the wild, and the reason the
+            # guards stopped trying to enumerate exception types.
+            "AttributeError",
+            "TypeError",
+        ],
+    )
+    def test_import_kibana_under_corrupted_install(self, blocked, expected, error):
+        """A *corrupted* OTEL install must degrade, not kill ``import kibana``.
+
+        The guards in ``_imports.py`` originally caught ``ImportError`` only,
+        which covers a cleanly *missing* distribution. A corrupted or
+        version-mismatched one fails differently: its module body executes and
+        raises whatever it raises — classically ``AttributeError`` against a
+        dependency that no longer exports some symbol — and that propagated
+        straight out of ``import kibana`` for every user of this client,
+        observability opted into or not (#76, folded-in review item).
+
+        The expected maps are the *same* ones the ImportError matrix asserts
+        for these prefixes: degradation must not depend on which exception a
+        broken install happens to raise. Asserting the whole map (not just
+        "it imported") is what keeps a corrupted grpc exporter from quietly
+        taking the working HTTP one down with it (#70's defect class).
+        """
+        result = _run_with_blocked_imports(blocked, self.PROBE, error=error)
+
+        assert result.returncode == 0, (
+            f"`import kibana` crashed on a corrupted install ({blocked!r}):\n"
+            f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+        )
+        assert self._parse(result.stdout) == expected
+        # A broken install is not a missing one: it must say so, and must not
+        # tell the user to install a package that is already there. Reported
+        # twice on purpose — a log warning for applications that configure
+        # logging, and a RuntimeWarning for those that do not, since this
+        # package's own NullHandler on the "kibana" logger suppresses
+        # logging's lastResort stderr fallback.
+        assert (
+            "is installed but failed to import" in result.stderr
+        ), f"no warning for a corrupted install:\nstderr:\n{result.stderr}"
+        assert "RuntimeWarning" in result.stderr, (
+            "the corrupted-install report must not depend on the application "
+            f"having configured logging:\nstderr:\n{result.stderr}"
+        )
+        assert error in result.stderr
+
+    def test_corrupted_install_survives_warnings_as_errors(self):
+        """Reporting a broken install must not become a second way to break.
+
+        Under ``-W error`` (or a ``filterwarnings("error")`` in a test suite,
+        which is a common house rule) ``warnings.warn`` *raises*. Raising it
+        from inside an import guard defeats the guard for exactly the case it
+        exists to survive: the exception escapes the inner ``except``, the
+        *outer* guard catches it, and kibana-py concludes the whole tracing
+        SDK failed — flipping ``OTEL_AVAILABLE`` off over a fault in one
+        optional exporter — before that report's own warning takes
+        ``import kibana`` down with it.
+
+        The visibility fix must therefore be best-effort: if warning is fatal
+        here, the log line is what remains.
+        """
+        expected = {
+            "OTEL_AVAILABLE": "True",
+            "GRPC_EXPORTER_AVAILABLE": "False",
+            "HTTP_EXPORTER_AVAILABLE": "True",
+            "OTLPSpanExporter_bound": "False",
+            "HTTPOTLPSpanExporter_bound": "True",
+            "OTEL_LOGS_AVAILABLE": "True",
+            "ConsoleLogExporter_present": "True",
+            "ConsoleLogExporter_bound": "True",
+        }
+
+        result = _run_with_blocked_imports(
+            ("opentelemetry.exporter.otlp.proto.grpc",),
+            self.PROBE,
+            error="TypeError",
+            # Fatal for exactly the category this fix must survive, and
+            # nothing else: a blanket `-W error` would also turn any future
+            # transitive DeprecationWarning into a failure of this test,
+            # blaming the import guards for someone else's deprecation.
+            interpreter_args=("-W", "error::RuntimeWarning"),
+        )
+
+        assert result.returncode == 0, (
+            "`import kibana` died reporting a corrupted install under "
+            f"-W error:\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+        )
+        assert self._parse(result.stdout) == expected, (
+            "a fault in one optional exporter must not be misreported as the "
+            f"whole SDK failing:\nstderr:\n{result.stderr}"
+        )
+        assert "is installed but failed to import" in result.stderr, (
+            "the log report must survive even when warnings are fatal:\n"
+            f"{result.stderr}"
+        )

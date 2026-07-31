@@ -20,7 +20,6 @@ except ImportError:
 from kibana.observability import (
     KibanaInstrumentor,
     _cleanup_log_handlers,
-    _created_log_handlers,
     configure_opentelemetry,
     create_span,
     get_log_forwarding_status,
@@ -65,19 +64,24 @@ def clean_observability():
     instrumentor = KibanaInstrumentor.get_instance()
     instrumentor.disable()
 
-    # Cleanup any existing log handlers
-    global _created_log_handlers
-    if _created_log_handlers:
-        _cleanup_log_handlers(_created_log_handlers)
-        _created_log_handlers.clear()
+    # Cleanup any existing log handlers via the live module reference: the
+    # handler list is rebound on `kibana.observability._logging`, so a name
+    # imported from the package is a stale empty snapshot (#76).
+    import kibana.observability._logging as _logging_mod
+
+    handlers = _logging_mod._created_log_handlers
+    if handlers:
+        _cleanup_log_handlers(handlers)
+        _logging_mod._created_log_handlers = []
 
     yield
 
     # Cleanup after test
     instrumentor.disable()
-    if _created_log_handlers:
-        _cleanup_log_handlers(_created_log_handlers)
-        _created_log_handlers.clear()
+    handlers = _logging_mod._created_log_handlers
+    if handlers:
+        _cleanup_log_handlers(handlers)
+        _logging_mod._created_log_handlers = []
 
 
 @pytest.fixture(scope="function")

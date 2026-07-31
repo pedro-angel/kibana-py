@@ -8,6 +8,95 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **`configure_opentelemetry()` is now idempotent: repeat calls no longer stack
+  log handlers, and reconfiguring actually takes effect instead of silently
+  doing nothing** ([#76](https://github.com/pedro-angel/kibana-py/issues/76)).
+  Three independent defects, all confirmed live against a local APM server:
+  (1) `_config.py` *read* `_created_log_handlers` through the
+  `kibana.observability` package attribute — a snapshot of the empty list taken
+  at import time — but *wrote* the new handlers to `_logging`'s module global,
+  so the cleanup branch never fired and every repeat
+  `configure_opentelemetry(..., logs_enabled=True)` attached another
+  `OTelLogHandler` to the "kibana" logger: N calls meant N copies of every log
+  record shipped to the APM server (two configure calls produced two identical
+  documents in `logs-apm*`), and the superseded handlers were never closed. The
+  list is now read and written through its defining module only, and repeat
+  calls close and detach the previous handlers before attaching new ones —
+  measured as one handler and one indexed document after two calls. Mutable
+  module state is no longer re-exported from `kibana/observability/__init__.py`
+  at all, which is what made the split binding possible.
+  (2) OpenTelemetry installs the global tracer provider exactly once per
+  process and refuses every later `set_tracer_provider()`, so a second
+  `configure_opentelemetry()` with a new endpoint built a provider and exporter
+  that nothing ever reached, while still logging "OpenTelemetry configured" —
+  spans kept going to the *first* endpoint (verified at the wire: after
+  reconfiguring from a dead port to the live APM server, spans still hit the
+  dead port and never arrived). Reconfiguration now applies: kibana-py
+  registers one swappable span processor on the provider and swaps the
+  exporters behind it, shutting the superseded ones down, so the next span
+  leaves via the new endpoint. `KibanaInstrumentor.enable()` likewise rebinds
+  its tracer when handed a different provider instead of returning early.
+  Two things OpenTelemetry genuinely cannot change in-process are now reported
+  rather than implied to have worked: a changed `service_name`/`resource` warns
+  that resource attributes keep the values from the first configuration **for
+  spans; forwarded logs pick up the new attributes** (log forwarding builds a
+  fresh logger provider per call, so the two signals genuinely differ here),
+  and a global provider already owned by another component warns that kibana-py
+  is tracing through a provider of its own (its spans are still exported — that
+  behavior is unchanged). The success line now distinguishes "configured" from
+  "reconfigured" — following whether kibana-py itself had configured before,
+  including when it never owned the global provider — and is only reached when
+  something actually changed.
+  (3) `KibanaInstrumentor.get_instance()` was an unsynchronized check-then-set
+  singleton: racing threads each built their own instrumentor and any
+  `enable()` applied to a loser was silently discarded (16 of 16 threads got
+  distinct instances with the constructor window widened). It now uses
+  double-checked locking.
+  Two further guarantees close the same failure mode from the other side. A
+  configuration that creates **no** span exporter (an unrecognized `exporter`
+  value — now type-checked, case-normalized and warned about — or a console
+  exporter that failed to construct) is never applied: over a working
+  configuration it would shut the running exporters down and report success,
+  and over nothing at all it would still claim the process-global provider
+  slot that OpenTelemetry fills exactly once, locking out the next call that
+  does have exporters. Such a call now changes nothing at all — including its
+  log-forwarding settings, which the warning says explicitly. And the
+  provider/processor pair kibana-py tracks is published as a single value
+  under a lock that also covers the decision to install, so concurrent
+  `configure_opentelemetry()` calls can neither interleave into a mismatched
+  pair (whose later reconfigurations would swap exporters into a processor
+  registered on nothing) nor tear down a configuration published between one
+  call's look and its leap. Concurrent first-time configuration converges on
+  one installation, a provider that is shut down stops being tracked, and a
+  superseded provider is shut down rather than left holding an atexit hook.
+- **A missing or corrupted OpenTelemetry logs SDK no longer breaks log
+  forwarding or `import kibana`.** `ConsoleLogExporter` was never bound in the
+  logs `except`-branch of `kibana/observability/_imports.py`, so an install
+  without the logs SDK did not degrade — it raised `ImportError` from inside
+  `_setup_log_forwarding`, the same unbound-name defect as
+  [#68](https://github.com/pedro-angel/kibana-py/issues/68)/[#70](https://github.com/pedro-angel/kibana-py/issues/70)
+  deferred by one import; it is now bound to `None` like every other name in
+  that branch. Separately, all six guards in that module now catch any
+  exception, not just `ImportError`: a *missing* distribution raises
+  `ImportError`, but a *corrupted or version-mismatched* one executes its
+  module body and raises whatever that raises — `AttributeError` against a
+  dependency that no longer exports a symbol, or `TypeError` out of generated
+  protobuf code when protobuf and an exporter disagree — which previously
+  propagated straight out of `import kibana` for every user of this client,
+  whether or not they opted into observability. Those `try` blocks contain
+  nothing but `import` statements, so the broad `except` can only absorb a
+  broken third-party install. The two cases are no longer conflated in the
+  logs either: a missing package stays a debug note that says how to install
+  it, while a package that is present but fails to import now reports a
+  **warning** saying exactly that, instead of advising an install that would
+  not help — and reports it both through logging and, best effort, as a
+  `RuntimeWarning`, since this package's own `NullHandler` suppresses
+  logging's stderr fallback and an application that never configured logging
+  would otherwise see nothing. Best effort because `warnings.warn` *raises*
+  under `-W error`: a reporting channel must not be able to turn a degraded
+  install into a failed `import kibana`, so when warnings are fatal the log
+  line is what remains. All of it is pinned by the import-guard matrix
+  ([#76](https://github.com/pedro-angel/kibana-py/issues/76) review follow-ups).
 - **`configure_opentelemetry(protocol="http/protobuf")` now actually reaches the
   APM server instead of 404/405ing on every span.** Two compounding defects:
   (1) the OTLP/HTTP exporter got the raw configured (or default) endpoint

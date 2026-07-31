@@ -170,6 +170,45 @@ configure_opentelemetry(
 )
 ```
 
+### Calling `configure_opentelemetry()` More Than Once
+
+Repeat calls are safe and apply: the exporters behind the already-installed
+tracer provider are swapped for the new ones (the superseded exporters are shut
+down), and the log-forwarding handler on each configured logger is closed and
+replaced rather than stacked, so **no record is exported twice**. Records
+emitted *during* the reconfiguration — after the old handler is detached and
+before the new one is attached, a window of well under a millisecond — are not
+forwarded at all; reconfiguring while a request is in flight can therefore drop
+a record, which is the deliberate trade for never duplicating one.
+
+One rule is kibana-py's own policy:
+
+- **A configuration that creates no span exporter is never applied.**
+  `exporter="otlp"` and `exporter="console"` are the values that produce one
+  (case-insensitively, and `console_export=True` adds one alongside); anything
+  else logs a warning and the call does nothing at all — *including* its
+  log-forwarding settings. On a repeat call that means the exporters already
+  running keep running instead of being silently stopped. On a **first** call
+  it means nothing is configured and no tracer provider is installed, which
+  deliberately leaves the one-shot global provider slot free for a later call
+  that does have an exporter.
+
+Two more come from OpenTelemetry itself and are reported rather than silently
+absorbed:
+
+- **Resource attributes are fixed when the provider is created.** A later call
+  with a different `service_name`/`resource` logs a warning and keeps the
+  original values **for spans** — only a new process can change those.
+  Forwarded **logs** do pick up the new attributes, because log forwarding
+  builds a fresh logger provider on every call.
+- **The global tracer provider can only be installed once per process.** If
+  another component installed one first, kibana-py logs a warning and traces
+  through a provider of its own — its spans are still exported, but
+  `trace.get_tracer_provider()` keeps returning the other component's provider.
+  Configure kibana-py first if you want it to own process-wide tracing. (The
+  same warning, worded for the case, appears if the slot holds a provider
+  kibana-py installed earlier and something has since shut it down.)
+
 ### Example Configuration Detection
 
 The examples include utilities for automatic configuration detection:
