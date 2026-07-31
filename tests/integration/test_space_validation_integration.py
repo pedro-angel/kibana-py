@@ -2,12 +2,18 @@
 
 import time
 import uuid
+from contextlib import contextmanager
 
 import pytest
 
+from kibana import AsyncKibana
 from kibana.exceptions import InvalidSpaceIdError, SpaceNotFoundError
 
-from .utils import create_test_kibana_client, is_kibana_available
+from .utils import (
+    create_test_async_kibana_client,
+    create_test_kibana_client,
+    is_kibana_available,
+)
 
 # Skip all integration tests if Kibana is not available
 pytestmark = pytest.mark.skipif(
@@ -22,6 +28,14 @@ def kibana_client():
     client = create_test_kibana_client(auth_method="auto")
     yield client
     client.close()
+
+
+@pytest.fixture
+async def async_kibana_client():
+    """Create an AsyncKibana client for testing with automatic configuration."""
+    client = create_test_async_kibana_client(auth_method="auto")
+    yield client
+    await client.close()
 
 
 @pytest.fixture
@@ -62,6 +76,45 @@ def created_connectors(kibana_client):
             kibana_client.actions.delete(id=connector_id, space_id=space_id)
         except Exception:
             pass
+
+
+@contextmanager
+def count_space_lookups(client, space_id):
+    """Count the ``GET /api/spaces/space/{space_id}`` requests a client sends.
+
+    Wraps the live transport (nothing is stubbed: every request still goes to
+    the real Kibana) and yields a one-key dict whose ``"count"`` holds the
+    number of space-existence lookups seen so far.
+
+    :param client: Kibana or AsyncKibana client to observe
+    :param space_id: Space ID whose validation lookups are counted
+    """
+    target = f"/api/spaces/space/{space_id}"
+    seen = {"count": 0}
+    transport = client._transport
+    original = transport.perform_request
+
+    def note(kwargs):
+        if kwargs.get("method") == "GET" and kwargs.get("target") == target:
+            seen["count"] += 1
+
+    if isinstance(client, AsyncKibana):
+
+        async def counting(**kwargs):
+            note(kwargs)
+            return await original(**kwargs)
+
+    else:
+
+        def counting(**kwargs):
+            note(kwargs)
+            return original(**kwargs)
+
+    transport.perform_request = counting
+    try:
+        yield seen
+    finally:
+        transport.perform_request = original
 
 
 def create_test_space(client, created_spaces, space_id, name, **kwargs):
@@ -582,3 +635,110 @@ class TestSpaceValidationPerformance:
 
         # This should complete quickly (under 5 seconds even on slow networks)
         assert global_operation_time < 5.0
+
+
+class TestSpaceCacheInvalidationOnMutation:
+    """Live proof for #72: create/delete invalidate the validation cache.
+
+    Each test replays the exact sequence from the issue against the real stack,
+    with no TTL wait anywhere: the fix must be immediate, not eventual.
+    """
+
+    def test_create_then_delete_take_effect_immediately(
+        self, kibana_client, created_spaces, unique_space_id
+    ):
+        """Miss -> create -> success -> delete -> miss, with no sleep between."""
+        dashboards = kibana_client.dashboards
+
+        # 1. The space does not exist: the namespace call fails and the miss is cached.
+        with pytest.raises(SpaceNotFoundError):
+            dashboards.get_all(space_id=unique_space_id)
+
+        # 2. Create it. Track it first so a failure below still cleans up.
+        created_spaces.append(unique_space_id)
+        kibana_client.spaces.create(id=unique_space_id, name="Cache Invalidation")
+
+        # 3. The very next call must succeed -- the cached miss is gone.
+        response = dashboards.get_all(space_id=unique_space_id)
+        assert response.meta.status == 200
+
+        # 4. Delete it (the space now has a *positive* cache entry).
+        kibana_client.spaces.delete(id=unique_space_id)
+        created_spaces.remove(unique_space_id)  # the test deleted it itself
+
+        # 5. The very next call must fail again -- the cached hit is gone.
+        with pytest.raises(SpaceNotFoundError):
+            dashboards.get_all(space_id=unique_space_id)
+
+    async def test_create_then_delete_take_effect_immediately_async(
+        self, async_kibana_client, created_spaces, unique_space_id
+    ):
+        """Async twin of the sequence above."""
+        dashboards = async_kibana_client.dashboards
+
+        with pytest.raises(SpaceNotFoundError):
+            await dashboards.get_all(space_id=unique_space_id)
+
+        created_spaces.append(unique_space_id)
+        await async_kibana_client.spaces.create(
+            id=unique_space_id, name="Cache Invalidation Async"
+        )
+
+        response = await dashboards.get_all(space_id=unique_space_id)
+        assert response.meta.status == 200
+
+        await async_kibana_client.spaces.delete(id=unique_space_id)
+        created_spaces.remove(unique_space_id)
+
+        with pytest.raises(SpaceNotFoundError):
+            await dashboards.get_all(space_id=unique_space_id)
+
+
+class TestSpaceLookupDeduplication:
+    """Live proof for #73: one lookup per space per client, not per namespace."""
+
+    def test_many_namespaces_trigger_one_space_lookup(
+        self, kibana_client, created_spaces, unique_space_id
+    ):
+        """Six namespace clients validating one space send exactly one GET."""
+        create_test_space(
+            kibana_client,
+            created_spaces,
+            space_id=unique_space_id,
+            name="Test Space for Lookup Dedup",
+        )
+        # Start from a cold cache so the count is unambiguous.
+        kibana_client.dashboards._clear_space_cache()
+
+        with count_space_lookups(kibana_client, unique_space_id) as lookups:
+            kibana_client.dashboards.get_all(space_id=unique_space_id)
+            kibana_client.actions.get_all(space_id=unique_space_id)
+            kibana_client.saved_objects.find(type="dashboard", space_id=unique_space_id)
+            kibana_client.data_views.get_all(space_id=unique_space_id)
+            kibana_client.cases.find(space_id=unique_space_id)
+            # A sub-client (alerting.rule) shares the same cache as its parent.
+            kibana_client.alerting.rule.find(space_id=unique_space_id)
+
+        assert lookups["count"] == 1
+
+    async def test_many_namespaces_trigger_one_space_lookup_async(
+        self, async_kibana_client, created_spaces, unique_space_id
+    ):
+        """Async twin: six namespace clients, one space-existence lookup."""
+        response = await async_kibana_client.spaces.create(
+            id=unique_space_id, name="Test Space for Lookup Dedup Async"
+        )
+        created_spaces.append(response.body["id"])
+        async_kibana_client.dashboards._clear_space_cache()
+
+        with count_space_lookups(async_kibana_client, unique_space_id) as lookups:
+            await async_kibana_client.dashboards.get_all(space_id=unique_space_id)
+            await async_kibana_client.actions.get_all(space_id=unique_space_id)
+            await async_kibana_client.saved_objects.find(
+                type="dashboard", space_id=unique_space_id
+            )
+            await async_kibana_client.data_views.get_all(space_id=unique_space_id)
+            await async_kibana_client.cases.find(space_id=unique_space_id)
+            await async_kibana_client.alerting.rule.find(space_id=unique_space_id)
+
+        assert lookups["count"] == 1

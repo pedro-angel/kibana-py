@@ -14,6 +14,8 @@ from elastic_transport import (
     TransportApiResponse,
 )
 
+from kibana._space_cache import SpaceValidationCache
+
 # Import shared helpers from the sync version (they're not async)
 from kibana._sync.client._base import (
     DEFAULT,
@@ -56,6 +58,9 @@ class AsyncBaseClient:
         self._request_timeout: float | None = None
         self._custom_headers: Mapping[str, str] | None = None
         self._rate_limiter: Any | None = None
+        # One space-existence cache for the whole client: every namespace client
+        # borrows it, and SpacesClient invalidates it (see kibana._space_cache).
+        self._space_validation_cache = SpaceValidationCache()
 
     def options(
         self,

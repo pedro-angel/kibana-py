@@ -104,7 +104,8 @@ class TestSpaceValidationComprehensive:
         # Test with custom TTL
         client._cache_ttl = 60  # 1 minute
 
-        with patch("time.time") as mock_time:
+        # The cache TTL is measured on the monotonic clock, not the wall clock.
+        with patch("time.monotonic") as mock_time:
             # First validation at time 0
             mock_time.return_value = 0
             client._validate_space_exists("marketing")
@@ -482,7 +483,7 @@ class TestSpaceCachingPerformance:
         assert len(client._space_cache) == 1
         assert len(client._cache_timestamps) == 1
 
-    @patch("time.time")
+    @patch("time.monotonic")  # the cache TTL is measured on the monotonic clock
     def test_cache_expiry_with_mixed_ages(self, mock_time):
         """Test cache expiry with entries of different ages."""
         mock_client = Mock()

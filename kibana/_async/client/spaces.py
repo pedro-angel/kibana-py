@@ -142,11 +142,17 @@ class AsyncSpacesClient(AsyncNamespaceClient):
         if solution is not None:
             body["solution"] = solution
 
-        return await self.perform_request(
+        response = await self.perform_request(
             "POST",
             "/api/spaces/space",
             body=body,
         )
+        # The space exists now: drop any cached verdict about it (typically a
+        # negative one from a lookup that ran before this call) so the next
+        # space-scoped request re-validates instead of raising
+        # SpaceNotFoundError for the rest of the TTL window.
+        self._clear_space_cache(id)
+        return response
 
     async def get(
         self,
@@ -364,10 +370,15 @@ class AsyncSpacesClient(AsyncNamespaceClient):
         if not id:
             raise ValueError("Parameter 'id' is required")
 
-        return await self.perform_request(
+        response = await self.perform_request(
             "DELETE",
             f"/api/spaces/space/{_quote(id)}",
         )
+        # The space is gone: drop the cached verdict (typically a positive one)
+        # so the next space-scoped request re-validates and fails loudly
+        # instead of targeting a space that no longer exists.
+        self._clear_space_cache(id)
+        return response
 
     async def copy_saved_objects(
         self,

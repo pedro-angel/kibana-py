@@ -20,6 +20,7 @@ from elastic_transport import (
     TransportApiResponse,
 )
 
+from kibana._space_cache import SpaceValidationCache
 from kibana.exceptions import HTTP_EXCEPTIONS, ApiError, translate_transport_errors
 from kibana.observability import KibanaInstrumentor, span_context
 
@@ -293,6 +294,9 @@ class BaseClient:
         self._request_timeout: float | None = None
         self._custom_headers: Mapping[str, str] | None = None
         self._rate_limiter: Any | None = None
+        # One space-existence cache for the whole client: every namespace client
+        # borrows it, and SpacesClient invalidates it (see kibana._space_cache).
+        self._space_validation_cache = SpaceValidationCache()
 
     def options(
         self,

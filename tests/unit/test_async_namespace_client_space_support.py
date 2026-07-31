@@ -203,7 +203,7 @@ class TestAsyncNamespaceClientSpaceSupport:
         # Verify cache state
         assert client._space_cache["nonexistent"] is False
 
-    @patch("time.time")
+    @patch("time.monotonic")  # the cache TTL is measured on the monotonic clock
     @pytest.mark.asyncio
     async def test_space_validation_cache_expiry(self, mock_time):
         """Test that cache expires after TTL."""

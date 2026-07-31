@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import re
-import time
 from typing import Any
 
 from elastic_transport import ObjectApiResponse
 
 from kibana._async.client._base import AsyncBaseClient
+from kibana._space_cache import SpaceValidationCache, shared_space_cache
 from kibana.exceptions import InvalidSpaceIdError, NotFoundError, SpaceNotFoundError
 
 
@@ -37,9 +37,28 @@ class AsyncNamespaceClient:
         self._client = client
         self._default_space_id = default_space_id
         self._validate_spaces = validate_spaces
-        self._space_cache: dict[str, bool] = {}  # Cache for space existence
-        self._cache_ttl = 300  # 5 minutes cache TTL
-        self._cache_timestamps: dict[str, float] = {}
+        # Borrowed, never owned: one cache per top-level client, so all
+        # namespaces share verdicts and AsyncSpacesClient can invalidate them.
+        self._space_validation_cache: SpaceValidationCache = shared_space_cache(client)
+
+    @property
+    def _space_cache(self) -> dict[str, bool]:
+        """Live view of the shared cache's space-existence verdicts."""
+        return self._space_validation_cache.entries
+
+    @property
+    def _cache_timestamps(self) -> dict[str, float]:
+        """Live view of the shared cache's verdict timestamps (monotonic)."""
+        return self._space_validation_cache.timestamps
+
+    @property
+    def _cache_ttl(self) -> float:
+        """Seconds a cached verdict stays valid (shared with all namespaces)."""
+        return self._space_validation_cache.ttl
+
+    @_cache_ttl.setter
+    def _cache_ttl(self, value: float) -> None:
+        self._space_validation_cache.ttl = value
 
     def _build_space_path(self, base_path: str, space_id: str | None = None) -> str:
         """
@@ -110,28 +129,24 @@ class AsyncNamespaceClient:
 
     async def _validate_space_exists(self, space_id: str) -> None:
         """
-        Validate that a space exists, using cache when possible.
+        Validate that a space exists, using the shared cache when possible.
 
         Optimized for performance:
         - Fast cache lookup with minimal overhead
-        - Efficient timestamp comparison
         - Early returns to minimize execution path
 
         :param space_id: Space ID to validate
         :raises SpaceNotFoundError: If space doesn't exist
         """
-        # Fast cache lookup - check existence first to avoid timestamp lookup if not cached
-        if space_id in self._space_cache:
-            # Only get timestamp if space is in cache
-            cache_time = self._cache_timestamps.get(space_id, 0)
-            if time.time() - cache_time < self._cache_ttl:
-                if self._space_cache[space_id]:
-                    return  # Space exists and cache is valid - fast path
-                else:
-                    raise SpaceNotFoundError(space_id)
+        # Fast path: a live verdict from the client-wide cache, whichever
+        # namespace (or space-scoped client) first paid for the lookup.
+        cached = self._space_validation_cache.lookup(space_id)
+        if cached is not None:
+            if cached:
+                return  # Space exists and cache is valid - fast path
+            raise SpaceNotFoundError(space_id)
 
         # Cache miss or expired - validate with API
-        current_time = time.time()
         try:
             # Use the spaces client to check if space exists
             spaces_client = getattr(self._client, "spaces", None)
@@ -140,31 +155,27 @@ class AsyncNamespaceClient:
 
             await spaces_client.get(id=space_id)
             # Space exists - cache the result
-            self._space_cache[space_id] = True
-            self._cache_timestamps[space_id] = current_time
+            self._space_validation_cache.remember(space_id, True)
         except NotFoundError:
             # The space genuinely does not exist (404): cache the negative result
             # so repeated calls fast-path, and surface it as SpaceNotFoundError.
             # Any OTHER error (auth, network, serialization) propagates WITHOUT
             # negatively caching -- a transient failure must not pin the space as
             # "missing" for the cache TTL.
-            self._space_cache[space_id] = False
-            self._cache_timestamps[space_id] = current_time
+            self._space_validation_cache.remember(space_id, False)
             raise SpaceNotFoundError(space_id) from None
 
     def _clear_space_cache(self, space_id: str | None = None) -> None:
         """
-        Clear space cache for specific space or all spaces.
+        Clear the shared space cache for a specific space or all spaces.
+
+        Affects every namespace client of this Kibana client, since they all
+        share one cache.
 
         :param space_id: Optional specific space ID to clear from cache.
                         If None, clears entire cache.
         """
-        if space_id:
-            self._space_cache.pop(space_id, None)
-            self._cache_timestamps.pop(space_id, None)
-        else:
-            self._space_cache.clear()
-            self._cache_timestamps.clear()
+        self._space_validation_cache.invalidate(space_id)
 
     async def perform_request(
         self,
