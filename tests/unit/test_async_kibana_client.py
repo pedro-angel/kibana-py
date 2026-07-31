@@ -97,6 +97,23 @@ class TestAsyncKibanaClientInitialization:
             AsyncKibana()
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "host",
+        [
+            "localhost:5601",
+            "myhost:5601",
+            "myhost",
+        ],
+    )
+    async def test_init_with_scheme_less_host_raises_value_error(self, host):
+        """A host string lacking '://' must fail fast instead of silently
+        mis-parsing into scheme=<host>, host='localhost' (issue #71)."""
+        from kibana import AsyncKibana
+
+        with pytest.raises(ValueError, match="http://host:port"):
+            AsyncKibana(host)
+
+    @pytest.mark.asyncio
     async def test_init_stores_authentication_credentials(self):
         """Test that authentication credentials are stored correctly."""
         from kibana import AsyncKibana
