@@ -20,13 +20,21 @@ in the code it checks:
      ``async for``/``async with``, the ``Async`` class-name prefix, ``_async``
      module paths, and the ``__aenter__``/``__aexit__``/``aclose`` dunders.
   2. Space validation: async cannot validate a space inside a sync helper, so it
-     calls the awaitable ``self._maybe_validate_space(space, validate)`` separately
-     and then ``self._build_space_path(base, space)``; sync folds it into
+     awaits ``self._maybe_validate_space(space, validate)`` separately and then
+     calls ``self._build_space_path(base, space)``; sync folds it into
      ``self._build_space_path(base, space, validate_spaces=validate)``. The
      normalizer canonicalizes both to ``_build_space_path(base, space, validate)``
      -- threading the async call's validate argument in rather than discarding it,
      so a drift in *which* space/flag is validated (or async skipping validation
      while sync keeps it) still fails.
+
+     The fold is narrow on purpose (#75): it applies only to a genuinely
+     ``await``-ed call standing immediately before the ``_build_space_path`` call
+     for the same space. A dropped ``await``, a build-then-validate order, a
+     detached check, or a check on a different space are NOT folded and fail as
+     drift -- which is what keeps the format-first convention (#74) CI-enforced
+     rather than conventional. ``test_normalizer_surfaces_broken_space_validation``
+     pins each of those four cases against the normalizer itself.
 
 Anything the normalizer does NOT fold is treated as real drift and fails -- unless
 listed in ``_BODY_DRIFT_ALLOWLIST`` with a reason.
@@ -173,6 +181,11 @@ _ASYNC_RENAMES = {
 }
 
 
+# Set on the ``ast.Expr`` node of a genuinely awaited ``_maybe_validate_space``
+# statement while the Await is still visible (see visit_AsyncFunctionDef).
+_AWAITED_VALIDATE = "_parity_awaited_validate"
+
+
 def _canon_ident(name: str) -> str:
     """Canonicalize an async identifier/attribute to its sync spelling.
 
@@ -205,6 +218,38 @@ class _Normalize(ast.NodeTransformer):
     def _is_self_call(cls, value, attr) -> bool:
         return isinstance(value, ast.Call) and cls._is_self_attr(value.func, attr)
 
+    @classmethod
+    def _is_validate_stmt(cls, stmt) -> bool:
+        """``self._maybe_validate_space(...)`` as a statement -- awaited or not."""
+        return isinstance(stmt, ast.Expr) and cls._is_self_call(
+            stmt.value, "_maybe_validate_space"
+        )
+
+    @classmethod
+    def _guarded_build_call(cls, validate_stmt, following):
+        """The ``_build_space_path`` call in ``following`` that ``validate_stmt`` guards.
+
+        ``None`` unless ``following`` holds exactly one ``self._build_space_path``
+        call *for the same space* the validate statement checked. That pairing is
+        the whole justification for folding the statement away: only a check that
+        immediately precedes -- and covers -- the path being built is equivalent
+        to sync doing both inside ``_build_space_path``.
+        """
+        if following is None or not validate_stmt.value.args:
+            return None
+        calls = [
+            sub
+            for sub in ast.walk(following)
+            if isinstance(sub, ast.Call)
+            and cls._is_self_attr(sub.func, "_build_space_path")
+        ]
+        if len(calls) != 1 or len(calls[0].args) < 2:
+            return None
+        validated_space = ast.dump(validate_stmt.value.args[0])
+        if ast.dump(calls[0].args[1]) != validated_space:
+            return None
+        return calls[0]
+
     def _clean_body(self, node):
         body = list(node.body)
         # Drop the docstring (async examples legitimately say ``await ...``).
@@ -215,38 +260,53 @@ class _Normalize(ast.NodeTransformer):
             and isinstance(body[0].value.value, str)
         ):
             body = body[1:]
-        # Space validation: async calls the awaitable
-        # ``self._maybe_validate_space(space, validate)`` separately, then
-        # ``self._build_space_path(base, space)``; sync folds it into
+        # Space validation: async awaits
+        # ``self._maybe_validate_space(space, validate)`` immediately before
+        # ``self._build_space_path(base, space)``; sync folds both into
         # ``self._build_space_path(base, space, validate_spaces=validate)``.
         # Canonicalize the async form to the sync form WITHOUT discarding the
         # ``validate`` argument: drop the _maybe_validate_space statement but
-        # thread its validate arg into the following _build_space_path call. So a
+        # thread its validate arg into the _build_space_path call it guards. So a
         # drift in which space/flag is validated -- or async omitting validation
         # while sync keeps it -- still surfaces as a body mismatch.
-        validate_arg = None
+        #
+        # The fold is deliberately narrow (#75): it applies ONLY to a genuinely
+        # awaited call sitting immediately before the build call for the same
+        # space. A forgotten ``await`` (the PR #60 bug: validation silently never
+        # runs), a validate-after-build order (#74), a check drifting away from
+        # the call it guards, or a check on a different space all leave the
+        # statement in place -- so the async body keeps a statement sync does not
+        # have and the parity assertion fails, which is the point.
         kept = []
-        for stmt in body:
-            if isinstance(stmt, ast.Expr) and self._is_self_call(
-                stmt.value, "_maybe_validate_space"
-            ):
-                if len(stmt.value.args) >= 2:
-                    validate_arg = stmt.value.args[1]
+        for index, stmt in enumerate(body):
+            if not self._is_validate_stmt(stmt):
+                kept.append(stmt)
                 continue
-            kept.append(stmt)
+            following = body[index + 1] if index + 1 < len(body) else None
+            build_call = self._guarded_build_call(stmt, following)
+            if not getattr(stmt, _AWAITED_VALIDATE, False) or build_call is None:
+                kept.append(stmt)  # not the sanctioned pattern -- let it surface
+                continue
+            if (
+                len(stmt.value.args) >= 2
+                and len(build_call.args) == 2
+                and not any(k.arg == "validate_spaces" for k in build_call.keywords)
+            ):
+                build_call.args = build_call.args + [stmt.value.args[1]]
         node.body = kept
-        if validate_arg is not None:
-            for sub in ast.walk(node):
-                if (
-                    isinstance(sub, ast.Call)
-                    and self._is_self_attr(sub.func, "_build_space_path")
-                    and len(sub.args) == 2
-                    and not any(k.arg == "validate_spaces" for k in sub.keywords)
-                ):
-                    sub.args = sub.args + [validate_arg]
         return node
 
     def visit_AsyncFunctionDef(self, node):
+        # Mark real ``await self._maybe_validate_space(...)`` statements BEFORE
+        # generic_visit unwraps the Await: afterwards an awaited call and a
+        # forgotten-await call are the same tree, and only one of them validates.
+        for stmt in node.body:
+            if (
+                isinstance(stmt, ast.Expr)
+                and isinstance(stmt.value, ast.Await)
+                and self._is_self_call(stmt.value.value, "_maybe_validate_space")
+            ):
+                setattr(stmt, _AWAITED_VALIDATE, True)
         sync = ast.FunctionDef(
             name=node.name,
             args=node.args,
@@ -317,12 +377,16 @@ class _Normalize(ast.NodeTransformer):
         return node
 
 
-def _normalize_body(func) -> str:
-    func = inspect.unwrap(func)  # see through any functools.wraps decorator
-    src = textwrap.dedent(inspect.getsource(func))
-    tree = _Normalize().visit(ast.parse(src).body[0])
+def _normalize_src(src: str) -> str:
+    """Normalize one method's *source* -- the path both trees and the self-tests use."""
+    tree = _Normalize().visit(ast.parse(textwrap.dedent(src)).body[0])
     ast.fix_missing_locations(tree)
     return ast.unparse(tree)
+
+
+def _normalize_body(func) -> str:
+    func = inspect.unwrap(func)  # see through any functools.wraps decorator
+    return _normalize_src(inspect.getsource(func))
 
 
 # Methods that legitimately diverge at the sync/async I/O boundary -- the body
@@ -398,3 +462,108 @@ def test_public_method_bodies_match(name, sync_cls, async_cls):
             f"--- normalized sync ---\n{sync_body}\n"
             f"--- normalized async ---\n{async_body}"
         )
+
+
+# --------------------------------------------------------------------------- #
+# Normalizer self-tests -- the guard must not blind itself (#75)
+# --------------------------------------------------------------------------- #
+# The space-validation fold is the one place the normalizer *removes* a
+# statement, so it is the one place it could hide a real bug. These pin what it
+# may and may not swallow, using hand-written method pairs rather than the tree:
+# they must keep failing even after every namespace has been fixed.
+_SYNC_METHOD = """
+def get(self, *, id, space_id=None, validate_spaces=None):
+    path = self._build_space_path("/api/thing", space_id, validate_spaces=validate_spaces)
+    return self.perform_request("GET", path)
+"""
+
+_ASYNC_METHOD = """
+async def get(self, *, id, space_id=None, validate_spaces=None):
+    await self._maybe_validate_space(space_id, validate_spaces)
+    path = self._build_space_path("/api/thing", space_id)
+    return await self.perform_request("GET", path)
+"""
+
+# The PR #60 bug class: the call is still there, so it reads as validated, but
+# the coroutine is never awaited and validation silently never happens.
+_ASYNC_METHOD_AWAIT_DROPPED = """
+async def get(self, *, id, space_id=None, validate_spaces=None):
+    self._maybe_validate_space(space_id, validate_spaces)
+    path = self._build_space_path("/api/thing", space_id)
+    return await self.perform_request("GET", path)
+"""
+
+# Issue #74's divergence: the path (and its format check) is built before the
+# space is validated, so a malformed id costs a request and the wrong exception.
+_ASYNC_METHOD_ORDER_SWAPPED = """
+async def get(self, *, id, space_id=None, validate_spaces=None):
+    path = self._build_space_path("/api/thing", space_id)
+    await self._maybe_validate_space(space_id, validate_spaces)
+    return await self.perform_request("GET", path)
+"""
+
+# Validation drifting away from the call it guards: anything may run (and fail,
+# or issue requests) in between, so it is no longer the same statement pair.
+# Its sync twin carries the same intervening statement, so only the detachment
+# can make the two bodies differ.
+_SYNC_METHOD_WITH_PARAMS = """
+def get(self, *, id, space_id=None, validate_spaces=None):
+    params = self._build_params(id)
+    path = self._build_space_path("/api/thing", space_id, validate_spaces=validate_spaces)
+    return self.perform_request("GET", path, params=params)
+"""
+
+_ASYNC_METHOD_DETACHED = """
+async def get(self, *, id, space_id=None, validate_spaces=None):
+    await self._maybe_validate_space(space_id, validate_spaces)
+    params = self._build_params(id)
+    path = self._build_space_path("/api/thing", space_id)
+    return await self.perform_request("GET", path, params=params)
+"""
+
+# Validating a different space than the path is built for.
+_ASYNC_METHOD_WRONG_SPACE = """
+async def get(self, *, id, space_id=None, validate_spaces=None):
+    await self._maybe_validate_space(self._default_space_id, validate_spaces)
+    path = self._build_space_path("/api/thing", space_id)
+    return await self.perform_request("GET", path)
+"""
+
+
+def test_normalizer_folds_the_canonical_validate_then_build_pair():
+    """The one intended divergence still normalizes to the sync form."""
+    assert _normalize_src(_ASYNC_METHOD) == _normalize_src(_SYNC_METHOD)
+
+
+@pytest.mark.parametrize(
+    "mutant,twin,why",
+    [
+        (
+            _ASYNC_METHOD_AWAIT_DROPPED,
+            _SYNC_METHOD,
+            "a dropped await (validation never runs)",
+        ),
+        (
+            _ASYNC_METHOD_ORDER_SWAPPED,
+            _SYNC_METHOD,
+            "path built before the space is validated",
+        ),
+        (
+            _ASYNC_METHOD_DETACHED,
+            _SYNC_METHOD_WITH_PARAMS,
+            "validation detached from the call it guards",
+        ),
+        (
+            _ASYNC_METHOD_WRONG_SPACE,
+            _SYNC_METHOD,
+            "a different space validated than built",
+        ),
+    ],
+    ids=["dropped-await", "swapped-order", "detached", "wrong-space"],
+)
+def test_normalizer_surfaces_broken_space_validation(mutant, twin, why):
+    """Only the exact ``await validate`` -> ``build`` pair may be folded away."""
+    assert _normalize_src(mutant) != _normalize_src(twin), (
+        f"the normalizer hid {why} -- the parity suite would pass a tree with "
+        f"this bug in it.\n--- normalized ---\n{_normalize_src(mutant)}"
+    )
