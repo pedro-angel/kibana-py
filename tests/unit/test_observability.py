@@ -254,28 +254,18 @@ class _RecordingLogExporter:
 
 
 def _force_tracked_provider_state(tracing_mod, provider, processor):
-    """Forge kibana-py's tracked (provider, processor) pair.
-
-    Written against both layouts on purpose: the current single-tuple name
-    (which is the fix) and the two independent names it replaced, so that the
-    tests using this helper can be replayed against the pre-fix tree to
-    witness them failing. Assigning the retired names on the current tree is
-    inert — nothing reads them.
-    """
+    """Forge kibana-py's tracked (provider, processor) pair."""
     tracing_mod._installed_provider_state = (provider, processor)
-    tracing_mod._installed_tracer_provider = provider
-    tracing_mod._installed_span_processor = processor
 
 
 def _read_tracked_provider_state(tracing_mod):
-    """Read the tracked pair under either layout (see the forge helper)."""
-    state = getattr(tracing_mod, "_installed_provider_state", None)
-    if state is not None:
-        return state
-    return (
-        getattr(tracing_mod, "_installed_tracer_provider", None),
-        getattr(tracing_mod, "_installed_span_processor", None),
-    )
+    """Read the tracked pair.
+
+    Deliberately a plain attribute read with no fallback: a getattr default
+    would let a future change that publishes nothing at all still satisfy
+    every assertion built on this helper.
+    """
+    return tracing_mod._installed_provider_state
 
 
 def _is_registered_on(tracer_provider, processor):
@@ -494,10 +484,97 @@ class TestConfigureOpenTelemetryIdempotency:
             "no exporter of its own"
         )
         assert working.shutdown_calls == 0
-        assert "not being applied" in caplog.text
+        assert "none of it is being applied" in caplog.text
         assert (
             "configured for service" not in caplog.text
         ), "a call that changed nothing must not report success"
+
+    @patch.dict("os.environ", {}, clear=True)
+    @patch("kibana.observability._create_otlp_exporter_with_error_handling")
+    def test_concurrent_no_exporter_configure_cannot_tear_down_a_working_one(
+        self, mock_span_exporter, caplog
+    ):
+        """The no-exporter refusal must hold under concurrency, not just
+        sequentially.
+
+        Deciding "is there a working configuration to protect?" before taking
+        the installer's lock describes a world another thread can change in
+        the meantime: a call with no exporter that looked first and installed
+        later still tore down a configuration published in between, and both
+        calls logged success. The decision therefore belongs inside the lock,
+        which is what this test pins.
+
+        The interleaving is forced, not hoped for: the no-exporter call is
+        parked at the install boundary — after every decision it makes — and
+        only then does the working configuration land.
+        """
+        import threading
+
+        from opentelemetry import trace
+
+        import kibana.observability as _obs
+        from kibana.observability import KibanaInstrumentor, configure_opentelemetry
+
+        working = _RecordingSpanExporter("working")
+        mock_span_exporter.return_value = working
+        KibanaInstrumentor.get_instance().disable()
+
+        real_install = _obs._install_span_processors
+        parked_at_install = threading.Event()
+        working_installed = threading.Event()
+
+        def gated_install(*args, **kwargs):
+            if threading.current_thread().name == "no-exporter-configure":
+                parked_at_install.set()
+                working_installed.wait(timeout=10)
+            return real_install(*args, **kwargs)
+
+        def configure_without_exporter():
+            configure_opentelemetry(
+                enabled=True, exporter="bogus", validate_endpoint=False
+            )
+
+        with (
+            caplog.at_level(logging.DEBUG, logger="kibana.observability"),
+            patch(
+                "kibana.observability._install_span_processors",
+                side_effect=gated_install,
+            ),
+        ):
+            no_exporter_thread = threading.Thread(
+                target=configure_without_exporter, name="no-exporter-configure"
+            )
+            no_exporter_thread.start()
+            assert parked_at_install.wait(
+                timeout=10
+            ), "the no-exporter call never reached the install boundary"
+
+            configure_opentelemetry(
+                enabled=True,
+                exporter="otlp",
+                endpoint="http://localhost:8200",
+                protocol="http/protobuf",
+                validate_endpoint=False,
+            )
+            working_installed.set()
+            no_exporter_thread.join(timeout=30)
+
+        assert not no_exporter_thread.is_alive()
+
+        tracer = KibanaInstrumentor.get_instance().get_tracer()
+        assert tracer is not None
+        tracer.start_span("survived-the-race").end()
+        trace.get_tracer_provider().force_flush()
+
+        assert working.exported == [
+            "survived-the-race"
+        ], "a concurrent no-exporter call tore down the working exporter"
+        assert working.shutdown_calls == 0
+        assert caplog.text.count("for service:") == 1, (
+            "exactly one call configured anything, so exactly one success "
+            f"line is honest:\n{caplog.text}"
+        )
+        assert caplog.text.count("none of it is being applied") == 1
 
     @patch.dict("os.environ", {}, clear=True)
     @patch("kibana.observability._create_otlp_exporter_with_error_handling")
@@ -505,7 +582,11 @@ class TestConfigureOpenTelemetryIdempotency:
         self, mock_span_exporter, caplog
     ):
         """With nothing configured yet there is nothing to protect, but the
-        caller still has to be told that no spans will leave the process."""
+        caller still has to be told that no spans will leave the process —
+        and the process-global provider slot must be left alone."""
+        from opentelemetry import trace
+        from opentelemetry.sdk.trace import TracerProvider as SDKTracerProvider
+
         from kibana.observability import KibanaInstrumentor, configure_opentelemetry
 
         KibanaInstrumentor.get_instance().disable()
@@ -515,8 +596,12 @@ class TestConfigureOpenTelemetryIdempotency:
                 enabled=True, exporter="none", validate_endpoint=False
             )
 
-        assert "no spans will be exported" in caplog.text
+        assert "nothing was configured" in caplog.text
         assert mock_span_exporter.call_count == 0
+        # An exporter-less provider must not claim the process-global slot:
+        # OTel fills it once, so squatting it would lock out the next call
+        # that does have exporters.
+        assert not isinstance(trace.get_tracer_provider(), SDKTracerProvider)
 
     @patch.dict("os.environ", {}, clear=True)
     @patch("kibana.observability._create_otlp_exporter_with_error_handling")
@@ -660,8 +745,7 @@ class TestConfigureOpenTelemetryIdempotency:
             trace._TRACER_PROVIDER = None
             trace._TRACER_PROVIDER_SET_ONCE._done = False
             _tracing_mod._installed_provider_state = None
-            _tracing_mod._installed_tracer_provider = None
-            _tracing_mod._installed_span_processor = None
+            _tracing_mod._global_slot_provider = None
             KibanaInstrumentor.get_instance().disable()
 
             barrier = threading.Barrier(thread_count)
@@ -906,8 +990,8 @@ class TestSwappableSpanProcessor:
         processor.on_end(object())
         assert delegate.ended == []
         assert (
-            _tracing_mod._has_configured_tracer_provider() is False
-        ), "a shut-down provider must not be advertised as reconfigurable"
+            _tracing_mod._installed_provider_state is None
+        ), "a shut-down provider must not stay tracked as reconfigurable"
 
     def test_configure_then_provider_shutdown_clears_tracked_state(self):
         """The same, through the real path: shutting the provider down (what
@@ -921,11 +1005,11 @@ class TestSwappableSpanProcessor:
         configure_opentelemetry(
             enabled=True, exporter="console", validate_endpoint=False
         )
-        assert _tracing_mod._has_configured_tracer_provider() is True
+        assert _tracing_mod._installed_provider_state is not None
 
         trace.get_tracer_provider().shutdown()
 
-        assert _tracing_mod._has_configured_tracer_provider() is False
+        assert _tracing_mod._installed_provider_state is None
 
 
 @pytest.mark.skipif(not OTEL_AVAILABLE, reason="OpenTelemetry not installed")
@@ -3192,10 +3276,17 @@ class TestImportGuardMatrix:
             f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
         )
         assert self._parse(result.stdout) == expected
-        # A broken install is not a missing one: it must be reported at
-        # WARNING (logging's lastResort handler puts it on stderr here) and
-        # must not tell the user to install a package that is already there.
+        # A broken install is not a missing one: it must say so, and must not
+        # tell the user to install a package that is already there. Reported
+        # twice on purpose — a log warning for applications that configure
+        # logging, and a RuntimeWarning for those that do not, since this
+        # package's own NullHandler on the "kibana" logger suppresses
+        # logging's lastResort stderr fallback.
         assert (
             "is installed but failed to import" in result.stderr
         ), f"no warning for a corrupted install:\nstderr:\n{result.stderr}"
+        assert "RuntimeWarning" in result.stderr, (
+            "the corrupted-install report must not depend on the application "
+            f"having configured logging:\nstderr:\n{result.stderr}"
+        )
         assert error in result.stderr

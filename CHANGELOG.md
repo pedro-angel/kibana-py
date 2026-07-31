@@ -52,17 +52,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `enable()` applied to a loser was silently discarded (16 of 16 threads got
   distinct instances with the constructor window widened). It now uses
   double-checked locking.
-  Two further guarantees close the same failure mode from the other side: a
+  Two further guarantees close the same failure mode from the other side. A
   configuration that creates **no** span exporter (an unrecognized `exporter`
-  value — now case-normalized, with a warning — or a console exporter that
-  failed to construct) is no longer *applied* on top of a working one, since
-  doing so shut the working exporters down and reported success; and the
+  value — now type-checked, case-normalized and warned about — or a console
+  exporter that failed to construct) is never applied: over a working
+  configuration it would shut the running exporters down and report success,
+  and over nothing at all it would still claim the process-global provider
+  slot that OpenTelemetry fills exactly once, locking out the next call that
+  does have exporters. Such a call now changes nothing at all — including its
+  log-forwarding settings, which the warning says explicitly. And the
   provider/processor pair kibana-py tracks is published as a single value
-  under a lock, so concurrent `configure_opentelemetry()` calls cannot
-  interleave into a mismatched pair whose later reconfigurations swap
-  exporters into a processor registered on nothing. Concurrent first-time
-  configuration converges on one installation, and a provider that is shut
-  down stops being advertised as reconfigurable.
+  under a lock that also covers the decision to install, so concurrent
+  `configure_opentelemetry()` calls can neither interleave into a mismatched
+  pair (whose later reconfigurations would swap exporters into a processor
+  registered on nothing) nor tear down a configuration published between one
+  call's look and its leap. Concurrent first-time configuration converges on
+  one installation, a provider that is shut down stops being tracked, and a
+  superseded provider is shut down rather than left holding an atexit hook.
 - **A missing or corrupted OpenTelemetry logs SDK no longer breaks log
   forwarding or `import kibana`.** `ConsoleLogExporter` was never bound in the
   logs `except`-branch of `kibana/observability/_imports.py`, so an install
@@ -81,9 +87,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   nothing but `import` statements, so the broad `except` can only absorb a
   broken third-party install. The two cases are no longer conflated in the
   logs either: a missing package stays a debug note that says how to install
-  it, while a package that is present but fails to import now logs a
+  it, while a package that is present but fails to import now reports a
   **warning** saying exactly that, instead of advising an install that would
-  not help. All of it is pinned by the subprocess-isolated import-guard matrix
+  not help — and reports it both through logging and as a `RuntimeWarning`,
+  since this package's own `NullHandler` suppresses logging's stderr fallback
+  and an application that never configured logging would otherwise see
+  nothing. All of it is pinned by the subprocess-isolated import-guard matrix
   ([#76](https://github.com/pedro-angel/kibana-py/issues/76) review follow-ups).
 - **`configure_opentelemetry(protocol="http/protobuf")` now actually reaches the
   APM server instead of 404/405ing on every span.** Two compounding defects:

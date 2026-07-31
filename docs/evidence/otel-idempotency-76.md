@@ -511,7 +511,8 @@ the winner's provider back (and its own is shut down rather than left with a
 live atexit hook); and a pair that is inconsistent anyway is *repaired* — the
 orphan is released and a fresh processor attached to the provider that is
 genuinely global — with a warning, instead of being swapped into. The threaded
-test reproduced the race naturally on the round-1 commit (round 1 of 25), so
+test reproduced the race naturally on the round-1 commit (the transcript's
+`round 1` is the loop's zero-based index — the *second* of 25 rounds), so
 this one is not a scheduling-luck regression guard: it is a witnessed failure.
 
 Ten minors were fixed in the same round: `exporter` normalization/validation;
@@ -562,6 +563,84 @@ after two configure calls; the live exporter swapped to the new endpoint with
 its query parameter preserved; the span indexed in `traces-apm*`; and not one
 connection attempt to the superseded `:8299` endpoint.
 
+## Round 3 (code-quality re-review) — the same refusal, now under the lock
+
+The re-review confirmed MAJOR 2 as addressed and found MAJOR 1 addressed only
+*sequentially*: the empty-processor decision was read at the top of
+`configure_opentelemetry` and acted on ~90 lines later, while installs happen
+under `_provider_lock`. A configuration published in that window was still torn
+down by a no-exporter call, and **both** calls logged success. Witnessed against
+the round-2 commit (`d8c9b11`) with the interleaving forced rather than hoped
+for — the no-exporter call is parked at the install boundary, after every
+decision it makes, and only then does the working configuration land:
+
+```
+        assert not no_exporter_thread.is_alive()
+        assert tracer is not None
+>       assert working.exported == ["survived-the-race"], (
+E       AssertionError: a concurrent no-exporter call tore down the working exporter
+E       assert [] == ['survived-the-race']
+FAILED tests/unit/test_observability.py::TestConfigureOpenTelemetryIdempotency::test_concurrent_no_exporter_configure_cannot_tear_down_a_working_one
+1 failed in 0.08s
+```
+
+**The fix moves the decision to where the truth is.** `_install_span_processors`
+now owns it: it takes `_provider_lock`, reads the tracked state there, and
+refuses an empty processor list under that lock. It also takes the provider as a
+*factory* rather than a provider, so the branch that does not install never
+constructs one (a `TracerProvider` registers an atexit flush on construction).
+It returns an `_InstallOutcome` — provider in use, `is_global`, `applied`,
+`reconfigured`, `global_slot_is_ours` — and every message the caller emits is
+now phrased from those locked observations. The pre-lock `reconfiguring`
+snapshot is gone, and with it `_has_configured_tracer_provider()` and
+`_get_reconfigurable_tracer_provider()`, which existed only to serve it.
+
+An empty configuration is now refused in *both* directions, not just over a live
+one: installing an exporter-less provider on a first call would claim the
+process-global slot that OpenTelemetry fills exactly once, locking out the next
+call that does have exporters.
+
+Eleven smaller items shipped with it: the superseded provider in the
+foreign-global leg is shut down instead of merely drained (three configures used
+to leave three atexit-hooked providers); a global slot still holding kibana-py's
+own shut-down provider now says so instead of blaming "another component" the
+reader would go hunting for; a non-string `exporter` warns and falls back rather
+than raising `AttributeError` out of a telemetry call; the resource-attributes
+warning is deferred until the call is known to be applied, so it cannot
+contradict a "nothing is being applied" warning about the same call; the flush
+deadline uses `time.monotonic_ns()` (a wall-clock step backwards would hand
+later delegates more than the caller's budget); the stall note extends to the
+shutdown/atexit path, which contends on the same lock; the user guide separates
+kibana-py's own refusal policy from OpenTelemetry's two constraints and states
+what a first empty-config call does; the corrupted-install report also goes
+through `warnings.warn` (this package's `NullHandler` suppresses logging's
+lastResort fallback, so the log line alone is invisible in a default
+application); and the dual-layout fallbacks in two test helpers are gone, since
+a `getattr` default could let a future "publishes nothing at all" regression
+still satisfy every assertion built on them.
+
+**Whole-call refusal, reported as such.** When a no-exporter call is refused, its
+log-forwarding settings are not applied either. The alternative — apply the logs
+half, skip the spans half — was rejected: it introduces a half-applied state
+that no message can describe honestly, and the case is reachable only by passing
+an `exporter` value that names nothing. The warning now says the whole call was
+ignored, log forwarding included.
+
+### Live re-run after round 3
+
+```
+[b] after configure #1 (dead http://localhost:8299): live exporters=[('BatchSpanProcessor', 'OTLPSpanExporter', 'http://localhost:8299/v1/traces')]
+INFO:kibana.observability:OTLP exporter configured: http://localhost:8200/v1/traces?wu6=round3 (protocol: http/protobuf)
+INFO:kibana.observability:OpenTelemetry reconfigured for service: kibana-py-wu6-round3-traces (logs: disabled)
+[b] after configure #2 (live http://localhost:8200?wu6=round3): live exporters=[('BatchSpanProcessor', 'OTLPSpanExporter', 'http://localhost:8200/v1/traces?wu6=round3')]
+[b] Elasticsearch traces-apm* documents for kibana-py-wu6-round3-traces: 1
+[b]   index=.ds-traces-apm-default-2026.07.31-000001 source={"@timestamp": "2026-07-31T12:53:04.163Z", "service": {"name": "kibana-py-wu6-round3-traces"}, "processor": {"event": "transaction"}, "transaction": {"name": "wu6.reconfigure.round3"}}
+```
+
+Reconfiguration still applies at the wire after the restructure: the live
+exporter is the new endpoint with its query parameter intact, the span is
+indexed, and the superseded `:8299` endpoint is never contacted.
+
 ## Known residuals (not fixed here, deliberately)
 
 - **The superseded `LoggerProvider` is not shut down on reconfigure.** Log *handlers*
@@ -584,10 +663,18 @@ connection attempt to the superseded `:8299` endpoint.
   `swap()` has just shut down (the SDK drops it with an INFO line). Closing that
   window means a lock on every span's `on_end` — a hot-path mutex to protect an
   operation that happens a handful of times per process.
-- **Releasing a superseded delegate is synchronous.** A `BatchSpanProcessor` whose
-  endpoint is unreachable can spend up to the SDK's 30s join inside the caller's
-  `configure_opentelemetry()` call. Off-thread release would hide the stall along
-  with any failure, and is a recorded non-goal rather than an oversight.
+- **Releasing a superseded delegate is synchronous, and holds the lock.** A
+  `BatchSpanProcessor` whose endpoint is unreachable can spend up to the SDK's 30s
+  join inside the caller's `configure_opentelemetry()` call — while holding
+  `_provider_lock`, so a concurrent configure waits it out, and so does any provider
+  shutdown (including the SDK's atexit hook, since `_forget_installed_processor`
+  takes the same lock). Off-thread release would hide the stall along with any
+  failure, and is a recorded non-goal rather than an oversight.
+- **A refused call is refused whole.** A configuration that creates no span
+  exporter does not apply its log-forwarding settings either. Applying half a call
+  would create a state no log line can describe honestly, and the case is only
+  reachable by naming an `exporter` that does not exist; the warning says the whole
+  call was ignored.
 - **`set_logger_provider()` is refused on every call after the first**
   (`Overriding of current LoggerProvider is not allowed`, visible in the (a)
   transcripts on both trees). Log forwarding is unaffected because each

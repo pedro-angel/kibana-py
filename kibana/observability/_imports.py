@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import warnings
 
 # Set up logger
 logger = logging.getLogger("kibana.observability")
@@ -47,7 +48,8 @@ def _report_guarded_import_failure(
             f"{component} not available ({error}). Install with: {install_hint}"
         )
         return
-    logger.warning(
+
+    message = (
         f"{component} is installed but failed to import "
         f"({type(error).__name__}: {error}). The features it provides are "
         "disabled. This is a corrupted or version-mismatched install — "
@@ -55,6 +57,14 @@ def _report_guarded_import_failure(
         "their dependencies; re-running the install command alone will not "
         "fix it."
     )
+    logger.warning(message)
+    # …and again through `warnings`, because the log line alone is not
+    # reliably visible: this package attaches a NullHandler to the "kibana"
+    # logger, which suppresses logging's lastResort stderr fallback, so an
+    # application that has not configured logging sees nothing at all. A
+    # broken install should not be something you discover from telemetry
+    # being mysteriously absent in production.
+    warnings.warn(message, RuntimeWarning, stacklevel=2)
 
 
 # ---------- Trace SDK availability ----------

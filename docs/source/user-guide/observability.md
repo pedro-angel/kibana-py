@@ -181,14 +181,20 @@ before the new one is attached, a window of well under a millisecond — are not
 forwarded at all; reconfiguring while a request is in flight can therefore drop
 a record, which is the deliberate trade for never duplicating one.
 
-Three constraints come from OpenTelemetry itself and are reported rather than
-silently absorbed:
+One rule is kibana-py's own policy:
 
-- **A configuration that creates no span exporter is not applied on top of one
-  that works.** `exporter="otlp"` and `exporter="console"` are the values that
-  produce an exporter (case-insensitively); anything else logs a warning, and
-  on a repeat call kibana-py keeps the exporters that are already running
-  instead of silently stopping them.
+- **A configuration that creates no span exporter is never applied.**
+  `exporter="otlp"` and `exporter="console"` are the values that produce one
+  (case-insensitively, and `console_export=True` adds one alongside); anything
+  else logs a warning and the call does nothing at all — *including* its
+  log-forwarding settings. On a repeat call that means the exporters already
+  running keep running instead of being silently stopped. On a **first** call
+  it means nothing is configured and no tracer provider is installed, which
+  deliberately leaves the one-shot global provider slot free for a later call
+  that does have an exporter.
+
+Two more come from OpenTelemetry itself and are reported rather than silently
+absorbed:
 
 - **Resource attributes are fixed when the provider is created.** A later call
   with a different `service_name`/`resource` logs a warning and keeps the
@@ -199,7 +205,9 @@ silently absorbed:
   another component installed one first, kibana-py logs a warning and traces
   through a provider of its own — its spans are still exported, but
   `trace.get_tracer_provider()` keeps returning the other component's provider.
-  Configure kibana-py first if you want it to own process-wide tracing.
+  Configure kibana-py first if you want it to own process-wide tracing. (The
+  same warning, worded for the case, appears if the slot holds a provider
+  kibana-py installed earlier and something has since shut it down.)
 
 ### Example Configuration Detection
 

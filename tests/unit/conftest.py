@@ -65,5 +65,10 @@ def _reset_otel_state():
         import kibana.observability._tracing as _tracing_mod
 
         _tracing_mod._installed_provider_state = None
+        # Also the record of what kibana-py put in the process-global slot:
+        # the fixture resets that slot itself above, so leaving the record
+        # behind would make the next test think its own global provider is a
+        # leftover of a previous one.
+        _tracing_mod._global_slot_provider = None
     except ImportError:
         pass

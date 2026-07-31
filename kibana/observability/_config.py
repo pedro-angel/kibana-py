@@ -107,6 +107,13 @@ def configure_opentelemetry(
         service_name = os.getenv("OTEL_SERVICE_NAME", "kibana-py")
     if exporter is None:
         exporter = os.getenv("KIBANA_OTEL_EXPORTER", "otlp")
+    if not isinstance(exporter, str):
+        # Same treatment as `logs_loggers` below: a wrong-typed argument is a
+        # caller mistake to report, not an AttributeError thrown from inside
+        # a telemetry setup call that the caller most likely wrapped in
+        # "observability is optional" hope.
+        logger.warning(f"exporter must be a string, got {type(exporter)}, using 'otlp'")
+        exporter = "otlp"
     # Normalized for the same reason as `protocol` below: every downstream
     # decision is a case-sensitive `exporter == "otlp"` / `== "console"`
     # check, so an unnormalized "OTLP" matched no branch at all and produced
@@ -178,41 +185,6 @@ def configure_opentelemetry(
             default_attrs.update(resource_attributes)
         resource = Resource(attributes=default_attrs)
 
-    # Reconfiguration (issue #76, problem 2). OTel installs the global tracer
-    # provider exactly once per process, so building a second provider here
-    # would silently orphan everything hung off it — the exporter created
-    # below would never see a span, yet the success line at the end of this
-    # function would still claim otherwise. Reuse the provider we installed
-    # (if it is still the global one) and swap its span processors instead;
-    # only the first configuration creates and installs a provider.
-    #
-    # Whether this call is a *reconfiguration* is a different question from
-    # whether the provider can be reused: when another component owns the
-    # global provider, kibana-py builds a fresh private provider every time,
-    # and calling each of those a first-time "configured" would be the same
-    # overclaim in a different disguise. Read before installing anything,
-    # since installing is what changes the answer.
-    reconfiguring = _obs._has_configured_tracer_provider()
-    reusable_provider = _obs._get_reconfigurable_tracer_provider()
-    if reusable_provider is not None and (
-        getattr(reusable_provider, "resource", None) != resource
-    ):
-        # A provider's Resource is fixed at construction, so a changed
-        # service name/resource genuinely cannot be applied to spans without
-        # a new process. Say so rather than let the caller assume it took.
-        # Scoped to spans on purpose: log forwarding builds a fresh
-        # LoggerProvider on every call, so forwarded logs *do* pick up the
-        # new attributes — an asymmetry worth naming rather than papering
-        # over with a blanket "resource changes don't apply".
-        logger.warning(
-            "Reconfiguring the existing OpenTelemetry tracer provider: "
-            "exporters are being replaced, but resource attributes (service "
-            "name/version) keep the values from the first configuration "
-            "for spans; forwarded logs pick up the new attributes. "
-            "OpenTelemetry fixes a provider's resource at creation — restart "
-            "the process to change the attributes on spans."
-        )
-
     span_processors: list[Any] = []
 
     if exporter == "otlp":
@@ -274,53 +246,92 @@ def configure_opentelemetry(
         except Exception as e:
             logger.error(f"Failed to configure console exporter: {e}")
 
-    # A configuration with no span exporter must never be *applied* on top of
-    # one that has them: installing it would shut the working exporters down
-    # and export nothing, while the line at the end of this function reported
-    # success — #76's own failure mode, re-entered from the other side. The
-    # empty case is reachable from an unrecognized `exporter` value and from
-    # a console exporter that failed to construct (#76 round 2).
-    if not span_processors:
-        if reconfiguring:
-            logger.warning(
-                "This configuration creates no span exporter, so it is not "
-                "being applied: kibana-py's previous exporter configuration "
-                "is left untouched rather than silently stopped. Pass "
-                "exporter='otlp' or exporter='console' (or console_export="
-                "True) to change span export."
-            )
-            return
-        logger.warning(
-            "No span exporter was created, so no spans will be exported. "
-            "Pass exporter='otlp' or exporter='console' (or console_export="
-            "True) to export spans."
-        )
-
-    # Built here, not earlier: a TracerProvider registers an atexit flush on
-    # construction, so building one before the early returns above left an
-    # abandoned provider hooked into interpreter shutdown on every path that
-    # gave up (bad endpoint, exporter creation failure, …).
-    tracer_provider = (
-        reusable_provider
-        if reusable_provider is not None
-        else TracerProvider(resource=resource)
-    )
-
     # Nothing above this line touched global state, so every early return so
     # far left any previous configuration working and untouched.
-    tracer_provider, is_global = _obs._install_span_processors(
-        tracer_provider, span_processors
+    #
+    # The provider is passed as a factory, and whether to build it at all is
+    # decided under the installer's lock: a `TracerProvider` registers an
+    # atexit flush on construction, and every question this call still has to
+    # answer — is there a live configuration? does this one have exporters? —
+    # is only answerable without a race while that lock is held. Deciding out
+    # here is what let a concurrent no-exporter call tear down a working
+    # configuration it had not yet observed (#76 round 3).
+    outcome = _obs._install_span_processors(
+        span_processors, lambda: TracerProvider(resource=resource)
     )
-    if not is_global:
+
+    if not outcome.applied:
+        # A configuration with no span exporter is never installed: over a
+        # live one it would shut working exporters down and export nothing,
+        # and over nothing at all it would still claim the process-global
+        # provider slot — which OTel fills exactly once — locking out the
+        # next call that does have exporters. Reachable from an unrecognized
+        # `exporter` value and from a console exporter that failed to build.
+        if outcome.reconfigured:
+            logger.warning(
+                "This configuration creates no span exporter, so none of it "
+                "is being applied — including its log-forwarding settings. "
+                "kibana-py's previous configuration is left untouched rather "
+                "than silently stopped. Pass exporter='otlp' or "
+                "exporter='console' (or console_export=True) to change span "
+                "export."
+            )
+        else:
+            logger.warning(
+                "No span exporter was created, so nothing was configured — "
+                "including log forwarding, and no tracer provider was "
+                "installed. Pass exporter='otlp' or exporter='console' (or "
+                "console_export=True) to export spans."
+            )
+        return
+
+    tracer_provider = outcome.tracer_provider
+
+    # Only now, once the call is known to be applied: saying "your resource
+    # attributes will not change" in the same breath as "none of this is
+    # being applied" would be two contradictory warnings about one call.
+    if outcome.reconfigured and getattr(tracer_provider, "resource", None) != resource:
+        # A provider's Resource is fixed at construction, so a changed
+        # service name/resource genuinely cannot be applied to spans without
+        # a new process. Say so rather than let the caller assume it took.
+        # Scoped to spans on purpose: log forwarding builds a fresh
+        # LoggerProvider on every call, so forwarded logs *do* pick up the
+        # new attributes — an asymmetry worth naming rather than papering
+        # over with a blanket "resource changes don't apply".
         logger.warning(
-            "Another component already installed the global OpenTelemetry "
-            "tracer provider, and OpenTelemetry does not allow replacing it. "
-            "kibana-py's own spans are still created and exported with this "
-            "configuration, through a tracer provider of its own, but "
-            "trace.get_tracer_provider() keeps returning the other "
-            "component's provider — configure kibana-py first if you want it "
-            "to own process-wide tracing."
+            "Reconfiguring the existing OpenTelemetry tracer provider: "
+            "exporters are being replaced, but resource attributes (service "
+            "name/version) keep the values from the first configuration "
+            "for spans; forwarded logs pick up the new attributes. "
+            "OpenTelemetry fixes a provider's resource at creation — restart "
+            "the process to change the attributes on spans."
         )
+
+    if not outcome.is_global:
+        if outcome.global_slot_is_ours:
+            # Naming the squatter matters: this one is kibana-py's own
+            # earlier provider, already shut down, and telling the reader to
+            # go find "another component" would send them hunting a phantom.
+            logger.warning(
+                "The global OpenTelemetry tracer provider slot still holds a "
+                "provider kibana-py installed earlier and that has since been "
+                "shut down; OpenTelemetry fills that slot exactly once per "
+                "process, so it cannot be replaced. kibana-py's own spans are "
+                "still created and exported with this configuration, through "
+                "a tracer provider of its own, but trace.get_tracer_provider()"
+                " keeps returning the shut-down one. Restart the process to "
+                "get a clean global provider."
+            )
+        else:
+            logger.warning(
+                "Another component already installed the global OpenTelemetry "
+                "tracer provider, and OpenTelemetry does not allow replacing "
+                "it. kibana-py's own spans are still created and exported with "
+                "this configuration, through a tracer provider of its own, but "
+                "trace.get_tracer_provider() keeps returning the other "
+                "component's provider — configure kibana-py first if you want "
+                "it to own process-wide tracing."
+            )
 
     instrumentor = _obs.KibanaInstrumentor.get_instance()
     # The provider that came *back* is the one in use — a concurrent caller
@@ -362,9 +373,12 @@ def configure_opentelemetry(
         )
 
     # Reached only when the configuration actually took effect: every path
-    # that changed nothing returned above with a warning instead.
+    # that changed nothing returned above with a warning instead. Both the
+    # fact and the wording come from the installer's locked observation — a
+    # "have we configured before?" answer read before the lock describes a
+    # world a concurrent call may already have changed.
     logger.info(
-        f"OpenTelemetry {'reconfigured' if reconfiguring else 'configured'} "
+        f"OpenTelemetry {'reconfigured' if outcome.reconfigured else 'configured'} "
         f"for service: {service_name} "
         f"(logs: {'enabled' if logs_enabled else 'disabled'})"
     )

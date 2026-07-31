@@ -62,8 +62,6 @@ from kibana.observability._tracing import (  # noqa: F401
     _get_opentelemetry_logs_version,
     _get_opentelemetry_version,
     _get_python_version,
-    _get_reconfigurable_tracer_provider,
-    _has_configured_tracer_provider,
     _install_span_processors,
     create_span,
     safe_span_operation,
