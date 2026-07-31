@@ -170,6 +170,26 @@ configure_opentelemetry(
 )
 ```
 
+### Calling `configure_opentelemetry()` More Than Once
+
+Repeat calls are safe and apply: the exporters behind the already-installed
+tracer provider are swapped for the new ones (the superseded exporters are shut
+down), and the log-forwarding handler on each configured logger is closed and
+replaced rather than stacked, so every log record is still exported exactly
+once.
+
+Two constraints come from OpenTelemetry itself and are reported rather than
+silently absorbed:
+
+- **Resource attributes are fixed when the provider is created.** A later call
+  with a different `service_name`/`resource` logs a warning and keeps the
+  original values for spans; only a new process can change them.
+- **The global tracer provider can only be installed once per process.** If
+  another component installed one first, kibana-py logs a warning and traces
+  through a provider of its own — its spans are still exported, but
+  `trace.get_tracer_provider()` keeps returning the other component's provider.
+  Configure kibana-py first if you want it to own process-wide tracing.
+
 ### Example Configuration Detection
 
 The examples include utilities for automatic configuration detection:
