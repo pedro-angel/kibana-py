@@ -993,6 +993,37 @@ class TestSwappableSpanProcessor:
             _tracing_mod._installed_provider_state is None
         ), "a shut-down provider must not stay tracked as reconfigurable"
 
+    @patch.dict("os.environ", {}, clear=True)
+    def test_configure_after_provider_shutdown_reports_a_reconfiguration(self, caplog):
+        """After a shutdown, the next call is still a *re*configuration.
+
+        The tracked pair is gone, but the global provider slot is still held
+        by the provider kibana-py put there — which is why the same call
+        warns that the slot holds its own shut-down provider. Calling that
+        first-time "configured" in the very next line contradicts the
+        warning: two statements about one call, one of them false.
+        """
+        from opentelemetry import trace
+
+        from kibana.observability import KibanaInstrumentor, configure_opentelemetry
+
+        KibanaInstrumentor.get_instance().disable()
+        configure_opentelemetry(
+            enabled=True, exporter="console", validate_endpoint=False
+        )
+        trace.get_tracer_provider().shutdown()
+
+        with caplog.at_level(logging.DEBUG, logger="kibana.observability"):
+            configure_opentelemetry(
+                enabled=True, exporter="console", validate_endpoint=False
+            )
+
+        assert "since been shut down" in caplog.text
+        assert "OpenTelemetry reconfigured for service" in caplog.text
+        assert "OpenTelemetry configured for service" not in caplog.text.replace(
+            "OpenTelemetry reconfigured for service", ""
+        )
+
     def test_configure_then_provider_shutdown_clears_tracked_state(self):
         """The same, through the real path: shutting the provider down (what
         the SDK does at exit) unregisters kibana-py's tracked pair."""
@@ -2981,6 +3012,7 @@ def _run_with_blocked_imports(
     blocked_prefixes: tuple[str, ...],
     probe: str,
     error: str = "ImportError",
+    interpreter_args: tuple[str, ...] = (),
 ) -> subprocess.CompletedProcess:
     """Run ``probe`` in a fresh subprocess where importing any module whose
     dotted name equals (or is nested under) one of ``blocked_prefixes`` raises
@@ -3020,7 +3052,12 @@ def _run_with_blocked_imports(
         sys.meta_path.insert(0, _Blocker())
         """)
     return subprocess.run(
-        [sys.executable, "-c", setup + "\n" + textwrap.dedent(probe)],
+        [
+            sys.executable,
+            *interpreter_args,
+            "-c",
+            setup + "\n" + textwrap.dedent(probe),
+        ],
         capture_output=True,
         text=True,
         timeout=30,
@@ -3290,3 +3327,49 @@ class TestImportGuardMatrix:
             f"having configured logging:\nstderr:\n{result.stderr}"
         )
         assert error in result.stderr
+
+    def test_corrupted_install_survives_warnings_as_errors(self):
+        """Reporting a broken install must not become a second way to break.
+
+        Under ``-W error`` (or a ``filterwarnings("error")`` in a test suite,
+        which is a common house rule) ``warnings.warn`` *raises*. Raising it
+        from inside an import guard defeats the guard for exactly the case it
+        exists to survive: the exception escapes the inner ``except``, the
+        *outer* guard catches it, and kibana-py concludes the whole tracing
+        SDK failed — flipping ``OTEL_AVAILABLE`` off over a fault in one
+        optional exporter — before that report's own warning takes
+        ``import kibana`` down with it.
+
+        The visibility fix must therefore be best-effort: if warning is fatal
+        here, the log line is what remains.
+        """
+        expected = {
+            "OTEL_AVAILABLE": "True",
+            "GRPC_EXPORTER_AVAILABLE": "False",
+            "HTTP_EXPORTER_AVAILABLE": "True",
+            "OTLPSpanExporter_bound": "False",
+            "HTTPOTLPSpanExporter_bound": "True",
+            "OTEL_LOGS_AVAILABLE": "True",
+            "ConsoleLogExporter_present": "True",
+            "ConsoleLogExporter_bound": "True",
+        }
+
+        result = _run_with_blocked_imports(
+            ("opentelemetry.exporter.otlp.proto.grpc",),
+            self.PROBE,
+            error="TypeError",
+            interpreter_args=("-W", "error"),
+        )
+
+        assert result.returncode == 0, (
+            "`import kibana` died reporting a corrupted install under "
+            f"-W error:\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+        )
+        assert self._parse(result.stdout) == expected, (
+            "a fault in one optional exporter must not be misreported as the "
+            f"whole SDK failing:\nstderr:\n{result.stderr}"
+        )
+        assert "is installed but failed to import" in result.stderr, (
+            "the log report must survive even when warnings are fatal:\n"
+            f"{result.stderr}"
+        )

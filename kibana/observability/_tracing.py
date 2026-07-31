@@ -436,7 +436,14 @@ def _install_span_processors(
 
     with _provider_lock:
         state = _installed_provider_state
-        reconfigured = state is not None
+        # A previous configuration leaves two possible traces, and either one
+        # makes this call a *re*configuration: the tracked pair, and — once
+        # that pair has been dropped because its provider was shut down — the
+        # record of what kibana-py put in the process-global slot. Reading
+        # only the first made the post-shutdown call describe itself as a
+        # first-time "configured" in the same breath as warning that the slot
+        # holds kibana-py's own earlier, shut-down provider.
+        reconfigured = state is not None or _global_slot_provider is not None
 
         if not span_processors:
             # Refused, both when there is a working configuration to protect

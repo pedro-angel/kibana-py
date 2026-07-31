@@ -641,6 +641,43 @@ Reconfiguration still applies at the wire after the restructure: the live
 exporter is the new endpoint with its query parameter intact, the span is
 indexed, and the superseded `:8299` endpoint is never contacted.
 
+## Round 4 (re-review) — the visibility fix could not be allowed to raise
+
+Round 3's `warnings.warn` for corrupted installs was a blocker in disguise:
+`warnings.warn` **raises** under `-W error` (or a suite-wide
+`filterwarnings("error")`), and it runs inside the import guards whose entire
+purpose is to survive a broken install. Witnessed against the round-3 commit —
+one optional exporter is corrupted, the interpreter runs with `-W error`:
+
+```
+E       AssertionError: `import kibana` died reporting a corrupted install under -W error:
+E         stderr:
+E         WARNING:kibana.observability:gRPC OTLP trace exporter is installed but failed to import (TypeError: blocked for test: opentelemetry.exporter.otlp.proto.grpc). …
+E         WARNING:kibana.observability:OpenTelemetry tracing SDK is installed but failed to import (RuntimeWarning: gRPC OTLP trace exporter is installed but failed to import …
+E         Traceback (most recent call last):
+E           File "…/kibana/observability/_imports.py", line 106, in <module>
+E             from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
+E         TypeError: blocked for test: opentelemetry.exporter.otlp.proto.grpc
+```
+
+Read the second warning: the raised `RuntimeWarning` escaped the *inner* guard,
+the *outer* guard caught it, and kibana-py concluded the whole tracing SDK had
+failed — `OTEL_AVAILABLE` off over a fault in one optional exporter — before
+that report's own warning killed `import kibana` (rc=1). A reporting channel had
+become a second way to break.
+
+The warning is now best effort: wrapped in its own `try/except`, with the log
+line as what remains when warnings are fatal. `-W error` with a corrupted
+exporter now exits 0 with `OTEL_AVAILABLE=True`, `GRPC_EXPORTER_AVAILABLE=False`
+and the HTTP exporter untouched.
+
+The same round fixed one contradiction left over from round 3: after a provider
+shutdown, the next configure warned that the global slot holds kibana-py's own
+shut-down provider and then called itself a first-time "configured". A previous
+configuration leaves two possible traces — the tracked pair, and the record of
+what kibana-py put in the global slot — and either one makes the next call a
+reconfiguration, so `reconfigured` now reads both.
+
 ## Known residuals (not fixed here, deliberately)
 
 - **The superseded `LoggerProvider` is not shut down on reconfigure.** Log *handlers*

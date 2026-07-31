@@ -58,13 +58,24 @@ def _report_guarded_import_failure(
         "fix it."
     )
     logger.warning(message)
-    # …and again through `warnings`, because the log line alone is not
-    # reliably visible: this package attaches a NullHandler to the "kibana"
-    # logger, which suppresses logging's lastResort stderr fallback, so an
-    # application that has not configured logging sees nothing at all. A
-    # broken install should not be something you discover from telemetry
-    # being mysteriously absent in production.
-    warnings.warn(message, RuntimeWarning, stacklevel=2)
+    # …and, best effort, again through `warnings`, because the log line alone
+    # is not reliably visible: this package attaches a NullHandler to the
+    # "kibana" logger, which suppresses logging's lastResort stderr fallback,
+    # so an application that has not configured logging sees nothing at all.
+    #
+    # Best effort is not hedging. Under `-W error` (or a test suite's
+    # `filterwarnings("error")`) `warnings.warn` RAISES, and this function
+    # runs inside the very import guards whose whole job is to survive a
+    # broken install: an exception here escapes the inner guard, gets caught
+    # by the outer one, and makes kibana-py conclude the entire tracing SDK
+    # failed over a fault in one optional exporter — before killing
+    # `import kibana` outright. A reporting channel must never be able to
+    # turn a degraded install into a dead one, so if warning is fatal in this
+    # process, the log line above is what remains.
+    try:
+        warnings.warn(message, RuntimeWarning, stacklevel=2)
+    except Exception:  # pragma: no cover - depends on the process's -W flags
+        pass
 
 
 # ---------- Trace SDK availability ----------

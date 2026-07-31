@@ -89,10 +89,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   logs either: a missing package stays a debug note that says how to install
   it, while a package that is present but fails to import now reports a
   **warning** saying exactly that, instead of advising an install that would
-  not help — and reports it both through logging and as a `RuntimeWarning`,
-  since this package's own `NullHandler` suppresses logging's stderr fallback
-  and an application that never configured logging would otherwise see
-  nothing. All of it is pinned by the subprocess-isolated import-guard matrix
+  not help — and reports it both through logging and, best effort, as a
+  `RuntimeWarning`, since this package's own `NullHandler` suppresses
+  logging's stderr fallback and an application that never configured logging
+  would otherwise see nothing. Best effort because `warnings.warn` *raises*
+  under `-W error`: a reporting channel must not be able to turn a degraded
+  install into a failed `import kibana`, so when warnings are fatal the log
+  line is what remains. All of it is pinned by the import-guard matrix
   ([#76](https://github.com/pedro-angel/kibana-py/issues/76) review follow-ups).
 - **`configure_opentelemetry(protocol="http/protobuf")` now actually reaches the
   APM server instead of 404/405ing on every span.** Two compounding defects:
