@@ -38,9 +38,11 @@ construction — instead of allocating its own, so all namespaces (and sub-clien
 such as `alerting.rule`, and the namespaces of a `client.space(...)`-scoped
 client, which are constructed against the same parent) read and write one set of
 verdicts. `SpacesClient.create` and `.delete` call `self._clear_space_cache(id)`
-after the request succeeds — create drops a stale negative entry, delete drops a
-stale positive one; clearing unconditionally is correct for both directions and
-simpler than branching. TTL comparisons use `time.monotonic()`.
+in a `finally` — create drops a stale negative entry, delete drops a stale
+positive one; clearing unconditionally is correct for both directions and
+simpler than branching, and clearing even when the call raised means a failure
+on the response path cannot leave a stale verdict behind (worst case: one extra
+lookup). TTL comparisons use `time.monotonic()`.
 `NamespaceClient._space_cache`, `._cache_timestamps` and `._cache_ttl` remain as
 views onto the shared cache, so `_clear_space_cache` and existing
 cache-inspecting tests keep working against the new structure.
@@ -67,19 +69,36 @@ change a space id, only its presentation/features — existence is unaffected),
 `update_objects_spaces` (all move or read saved objects *between existing
 spaces*; none creates or deletes a space).
 
-**Concurrency stance (unchanged by design):** entries are plain `dict` items and
-every cache operation is a single get/set/pop, matching the rest of the client,
-which takes no lock on this path. Two threads or tasks can duplicate a lookup or
-race a verdict against an invalidation; the cost is one redundant HTTP request
-or a verdict already bounded by the TTL. Documented in the module docstring of
-`kibana/_space_cache.py`.
+**Concurrency:** every cache operation holds a `threading.Lock` (the precedent
+is `kibana/_rate_limiter.py`, and the sync client documents itself as
+thread-safe). An earlier revision of this change relied on plain dict
+operations; a code-quality review reproduced two real failures against it, both
+now closed and both regression-tested:
+
+- an unsynchronized `lookup` could raise `KeyError` out of an ordinary client
+  call when an `invalidate` landed between its membership check and its value
+  read. The lock makes the read atomic, and the expiry branch now evicts under
+  the same lock (so ids validated once cannot accumulate);
+- an `invalidate` landing between a validator's cache miss and its post-`GET`
+  write was silently overwritten — an explicit `spaces.delete` undone for the
+  whole TTL. Validators now snapshot `SpaceValidationCache.generation` *before*
+  asking the server and pass it to `remember()`, which drops a verdict an
+  invalidation has already outdated. The counter is global, so an unrelated
+  invalidation can discard a concurrent verdict: the price is one extra lookup.
+
+No I/O ever happens under the lock, so the class serves the async tree
+unchanged, and two callers that miss simultaneously still both ask the server —
+a redundant request, never a wrong verdict. The TTL is read through a
+module-level `_now` seam so tests can drive the clock without patching the
+process-wide `time.monotonic` that asyncio's event loop also reads. All of this
+is documented in the module docstring of `kibana/_space_cache.py`.
 
 ## TDD — RED then GREEN
 
-New unit module `tests/unit/test_space_cache_sharing.py` (14 tests: 7 scenarios ×
-sync/async), driving real `Kibana` / `AsyncKibana` clients over a transport
-double that tracks which spaces exist and counts
-`GET /api/spaces/space/team-a` requests.
+New unit module `tests/unit/test_space_cache_sharing.py` (22 tests: 8 scenarios ×
+sync/async, plus 6 on the cache object itself), driving real `Kibana` /
+`AsyncKibana` clients over a transport double that tracks which spaces exist and
+counts `GET /api/spaces/space/team-a` requests.
 
 **RED (against pre-fix code, watched fail for the right reason):**
 
@@ -138,6 +157,33 @@ E   assert 2 == 1     (options() clone re-validated a space the original had cac
 
 $ .venv/bin/pytest tests/unit/test_space_cache_sharing.py tests/unit/test_sync_async_parity.py -p no:randomly -o addopts="" -q
 153 passed in 0.65s
+```
+
+**Third RED/GREEN round** (code-quality review: two races, both reproduced by
+the reviewer). Seven more tests — six on the cache object itself
+(`TestSpaceValidationCacheUnit`) plus the delete-during-validation race in each
+tree — watched fail first:
+
+```
+$ .venv/bin/pytest tests/unit/test_space_cache_sharing.py -p no:randomly -o addopts="" -q --tb=line
+E   KeyError: 'team-a'                                   (lookup racing an invalidate)
+E   AssertionError: assert {} == {'team-a': True}         (expired entry never evicted)
+E   AssertionError: assert {} == {'team-a': True}         (invalidate("") wiped everything)
+E   AttributeError: 'SpaceValidationCache' object has no attribute 'generation'
+E   AttributeError: 'Slotted' object has no attribute '_space_validation_cache'
+E   Failed: DID NOT RAISE SpaceNotFoundError              (sync: delete undone by a late verdict)
+E   Failed: DID NOT RAISE SpaceNotFoundError              (async: same, via gather + a latency double)
+7 failed, 15 passed in 0.13s
+```
+
+The two race tests are deterministic, not timing-hopeful: the sync one parks the
+lookup on the clock seam while another thread invalidates, and the async one
+answers the space lookup from pre-delete state but delivers the reply after the
+`spaces.delete` task has run, via `asyncio.gather`.
+
+```
+$ .venv/bin/pytest tests/unit/test_space_cache_sharing.py tests/unit/test_sync_async_parity.py -p no:randomly -o addopts="" -q
+161 passed in 1.29s
 ```
 
 Four existing unit tests that froze `time.time` to exercise TTL expiry now
@@ -227,8 +273,11 @@ tests/integration/test_space_validation_integration.py::TestSpaceLookupDeduplica
 tests/integration/test_space_validation_integration.py::TestSpaceLookupDeduplication::test_scoped_client_and_its_namespaces_trigger_one_space_lookup PASSED [ 66%]
 tests/integration/test_space_validation_integration.py::TestSpaceLookupDeduplication::test_scoped_client_and_its_namespaces_trigger_one_space_lookup_async PASSED [ 83%]
 tests/integration/test_space_validation_integration.py::TestSpaceLookupDeduplication::test_many_namespaces_trigger_one_space_lookup_async PASSED [100%]
-6 passed in 11.41s
+6 passed in 11.87s
 ```
+
+(Output above is the re-run after the locking/generation round; the counts are
+unchanged from the run that preceded it, 11.41 s vs 11.87 s wall time.)
 
 Measured live, post-fix: six namespaces → **1** lookup; `client.space(X)` plus
 two namespace calls → **1** lookup (was 2).
@@ -239,10 +288,10 @@ two namespace calls → **1** lookup (was 2).
 $ .venv/bin/pytest tests/integration/test_space_validation_integration.py \
                    tests/integration/test_space_scoped_operations_integration.py \
                    tests/integration/test_spaces_integration.py -p no:randomly -o addopts="" -q
-45 passed in 143.67s (0:02:23)
+45 passed in 143.00s (0:02:22)
 
 $ .venv/bin/pytest tests/benchmark/test_space_performance.py -p no:randomly -o addopts="" -q
-10 passed in 126.48s (0:02:06)
+10 passed in 127.06s (0:02:07)
 ```
 
 The benchmark suite exercises `_clear_space_cache()`, `_cache_ttl` mutation and
@@ -267,8 +316,8 @@ $ .venv/bin/mypy kibana/
 Success: no issues found in 103 source files
 $ .venv/bin/bandit -r kibana/ -ll -q              # exit 0, no findings
 $ .venv/bin/pytest tests/unit/ --cov=kibana --cov-fail-under=90 -q
-3213 passed
-Required test coverage of 90% reached. Total coverage: 94.27%   (kibana/_space_cache.py: 100%)
+3221 passed
+Required test coverage of 90% reached. Total coverage: 94.29%   (kibana/_space_cache.py: 100%)
 $ .venv/bin/sphinx-build -W --keep-going -b html docs/source docs/build/html   # exit 0
 ```
 

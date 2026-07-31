@@ -10,6 +10,7 @@ from elastic_transport import NodeConfig, Transport
 from elastic_transport.client_utils import parse_cloud_id
 
 from kibana._rate_limiter import RateLimiter
+from kibana._space_cache import shared_space_cache
 from kibana._sync.client._base import DEFAULT, BaseClient, DefaultType
 from kibana._sync.client.actions import ActionsClient
 from kibana._sync.client.agent_builder import AgentBuilderClient
@@ -643,7 +644,8 @@ class SpaceScopedKibana:
 
         :raises SpaceNotFoundError: If the space doesn't exist
         """
-        cache = self._client._space_validation_cache
+        cache = shared_space_cache(self._client)
+        generation = cache.generation  # snapshot before asking (see _space_cache)
         try:
             self._client.spaces.get(id=self._space_id)
         except NotFoundError:
@@ -651,9 +653,9 @@ class SpaceScopedKibana:
             # network, serialization) propagates unchanged rather than being
             # mislabeled as a missing space -- and, like elsewhere, is not
             # cached, so a transient failure cannot pin the space as "missing".
-            cache.remember(self._space_id, False)
+            cache.remember(self._space_id, False, generation=generation)
             raise SpaceNotFoundError(self._space_id) from None
-        cache.remember(self._space_id, True)
+        cache.remember(self._space_id, True, generation=generation)
 
     @property
     def spaces(self) -> SpacesClient:

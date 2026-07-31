@@ -196,7 +196,9 @@ class TestNamespaceClientSpaceSupport:
         # Verify cache state
         assert client._space_cache["nonexistent"] is False
 
-    @patch("time.monotonic")  # the cache TTL is measured on the monotonic clock
+    # TTL is measured on the cache module's monotonic clock seam; patching
+    # time.monotonic itself would also move asyncio's event-loop clock.
+    @patch("kibana._space_cache._now")
     def test_space_validation_cache_expiry(self, mock_time):
         """Test that cache expires after TTL."""
         mock_client = Mock()
@@ -232,8 +234,8 @@ class TestNamespaceClientSpaceSupport:
         # Set up cache
         client._space_cache["marketing"] = True
         client._space_cache["sales"] = True
-        client._cache_timestamps["marketing"] = time.time()
-        client._cache_timestamps["sales"] = time.time()
+        client._cache_timestamps["marketing"] = time.monotonic()
+        client._cache_timestamps["sales"] = time.monotonic()
 
         # Clear specific space
         client._clear_space_cache("marketing")
@@ -252,8 +254,8 @@ class TestNamespaceClientSpaceSupport:
         # Set up cache
         client._space_cache["marketing"] = True
         client._space_cache["sales"] = True
-        client._cache_timestamps["marketing"] = time.time()
-        client._cache_timestamps["sales"] = time.time()
+        client._cache_timestamps["marketing"] = time.monotonic()
+        client._cache_timestamps["sales"] = time.monotonic()
 
         # Clear all cache
         client._clear_space_cache()

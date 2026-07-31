@@ -13,6 +13,8 @@ The transport is a double, so the assertions count the space-lookup requests
 that would have gone on the wire.
 """
 
+import asyncio
+import threading
 import time
 from unittest.mock import AsyncMock, Mock
 
@@ -24,7 +26,9 @@ from elastic_transport import (
     Transport,
 )
 
+import kibana._space_cache as space_cache
 from kibana import AsyncKibana, Kibana
+from kibana._space_cache import SpaceValidationCache
 from kibana.exceptions import SpaceNotFoundError
 
 SPACE_ID = "team-a"
@@ -77,14 +81,150 @@ def _sync_client(double: _SpacesDouble) -> Kibana:
     return Kibana(_transport=transport)
 
 
-def _async_client(double: _SpacesDouble) -> AsyncKibana:
+def _async_client(double: _SpacesDouble, lookup_latency: float = 0.0) -> AsyncKibana:
+    """An async client whose space lookups may answer *late*.
+
+    ``lookup_latency`` delays the space-lookup *reply*, not the server's
+    decision: the double answers from the state it saw when the request
+    arrived, then the reply lands after the delay. That is what lets a test
+    interleave a `spaces.delete` with a validation already in flight.
+    """
+
+    async def perform(**kwargs):
+        response = double.handle(**kwargs)
+        if (
+            lookup_latency
+            and kwargs.get("method") == "GET"
+            and kwargs.get("target") == SPACE_PATH
+        ):
+            await asyncio.sleep(lookup_latency)
+        return response
+
     transport = Mock(spec=AsyncTransport)
-    transport.perform_request = AsyncMock(side_effect=lambda **kw: double.handle(**kw))
+    transport.perform_request = AsyncMock(side_effect=perform)
     return AsyncKibana(_transport=transport)
+
+
+class TestSpaceValidationCacheUnit:
+    """The cache object on its own: atomicity, expiry, invalidation edges."""
+
+    def test_lookup_is_atomic_against_a_concurrent_invalidate(self, monkeypatch):
+        """A lookup racing an invalidate returns a verdict, never a KeyError.
+
+        Drives the race deterministically: the clock seam parks the lookup at
+        the exact point (between "is it cached?" and reading the value) where an
+        unsynchronized lookup used to blow up, and another thread invalidates
+        while it is parked.
+        """
+        cache = SpaceValidationCache()
+        cache.remember(SPACE_ID, True)
+        parked = threading.Event()
+        released = threading.Event()
+
+        def parking_now():
+            parked.set()
+            released.wait(0.5)  # the invalidator must not be able to slip in
+            return time.monotonic()
+
+        monkeypatch.setattr(space_cache, "_now", parking_now)
+
+        def invalidator():
+            parked.wait(1.0)
+            cache.invalidate(SPACE_ID)
+            released.set()
+
+        thread = threading.Thread(target=invalidator)
+        thread.start()
+        try:
+            verdict = cache.lookup(SPACE_ID)
+        finally:
+            released.set()
+            thread.join(2.0)
+
+        assert verdict is True  # coherent, and above all not a KeyError
+
+    def test_expired_entries_are_dropped_on_lookup(self, monkeypatch):
+        """An expired verdict is evicted, not left to accumulate."""
+        now = {"t": 1_000.0}
+        monkeypatch.setattr(space_cache, "_now", lambda: now["t"])
+        cache = SpaceValidationCache()
+        cache.remember(SPACE_ID, True)
+
+        now["t"] += cache.ttl + 1.0
+        assert cache.lookup(SPACE_ID) is None
+        assert cache.entries == {}
+        assert cache.timestamps == {}
+
+    def test_a_verdict_exactly_at_the_ttl_boundary_is_expired(self, monkeypatch):
+        """``elapsed == ttl`` expires: the live window is strictly shorter."""
+        now = {"t": 1_000.0}
+        monkeypatch.setattr(space_cache, "_now", lambda: now["t"])
+        cache = SpaceValidationCache()
+        cache.remember(SPACE_ID, True)
+
+        now["t"] += cache.ttl - 0.001
+        assert cache.lookup(SPACE_ID) is True
+        now["t"] += 0.001  # exactly ttl since the verdict was recorded
+        assert cache.lookup(SPACE_ID) is None
+
+    def test_invalidating_an_empty_id_does_not_wipe_the_cache(self):
+        """Only ``None`` means "forget everything"."""
+        cache = SpaceValidationCache()
+        cache.remember(SPACE_ID, True)
+
+        cache.invalidate("")
+
+        assert cache.entries == {SPACE_ID: True}
+
+    def test_a_verdict_outdated_by_an_invalidation_is_discarded(self):
+        """A write is dropped when an invalidate landed after its snapshot."""
+        cache = SpaceValidationCache()
+        generation = cache.generation  # snapshot taken before the "server call"
+
+        cache.invalidate(SPACE_ID)  # ... an explicit invalidation lands ...
+        cache.remember(SPACE_ID, True, generation=generation)  # ... reply arrives
+
+        assert cache.lookup(SPACE_ID) is None
+
+    def test_a_parent_that_refuses_attributes_still_gets_a_cache(self):
+        """An exotic parent (``__slots__``) cannot be given a cache -- no crash."""
+
+        class Slotted:
+            __slots__ = ()
+
+        cache = space_cache.shared_space_cache(Slotted())
+
+        assert isinstance(cache, SpaceValidationCache)
 
 
 class TestSharedSpaceCacheSync:
     """Sync tree: invalidation on space mutation, sharing, monotonic TTL."""
+
+    def test_a_delete_during_a_validation_is_not_overwritten(self):
+        """#72: a validation in flight must not resurrect a deleted space.
+
+        The transport hook deletes the space (and so invalidates the cache)
+        while the existence verdict is on its way back, i.e. exactly between the
+        cache miss and the write that follows it.
+        """
+        double = _SpacesDouble(existing=[SPACE_ID])
+        client = _sync_client(double)
+
+        def delete_while_the_verdict_is_in_flight(**kwargs):
+            response = double.handle(**kwargs)  # answered while it still existed
+            if kwargs.get("method") == "GET" and kwargs.get("target") == SPACE_PATH:
+                client.spaces.delete(id=SPACE_ID)  # ... and then it is deleted
+            return response
+
+        client._transport.perform_request = Mock(
+            side_effect=delete_while_the_verdict_is_in_flight
+        )
+
+        client.dashboards.get_all(space_id=SPACE_ID)
+
+        # The delete's invalidation must win over the late verdict.
+        with pytest.raises(SpaceNotFoundError):
+            client.dashboards.get_all(space_id=SPACE_ID)
 
     def test_create_invalidates_the_negative_cache(self):
         """#72: a failed lookup must not outlive the create that fixes it."""
@@ -126,20 +266,21 @@ class TestSharedSpaceCacheSync:
         assert double.space_lookups == 1
 
     def test_ttl_is_measured_with_the_monotonic_clock(self, monkeypatch):
-        """#73: TTL follows ``time.monotonic``, not the steppable wall clock."""
+        """#73: TTL runs on the monotonic clock, not the steppable wall clock."""
+        # The seam the cache reads *is* the monotonic clock; the test drives the
+        # seam rather than patching time.monotonic, which asyncio also reads.
+        assert space_cache._now is time.monotonic
         double = _SpacesDouble(existing=[SPACE_ID])
         client = _sync_client(double)
-        now = {"monotonic": 1_000.0}
-        monkeypatch.setattr(time, "monotonic", lambda: now["monotonic"])
-        # Wall clock frozen: a time.time()-based TTL could never expire here.
-        monkeypatch.setattr(time, "time", lambda: 1_700_000_000.0)
+        now = {"t": 1_000.0}
+        monkeypatch.setattr(space_cache, "_now", lambda: now["t"])
 
         client.dashboards.get_all(space_id=SPACE_ID)
-        now["monotonic"] += 299.0  # still inside the 300 s default TTL
+        now["t"] += 299.0  # still inside the 300 s default TTL
         client.dashboards.get_all(space_id=SPACE_ID)
         assert double.space_lookups == 1
 
-        now["monotonic"] += 2.0  # past the TTL -> re-validate
+        now["t"] += 2.0  # past the TTL -> re-validate
         client.dashboards.get_all(space_id=SPACE_ID)
         assert double.space_lookups == 2
 
@@ -191,6 +332,24 @@ class TestSharedSpaceCacheSync:
 class TestSharedSpaceCacheAsync:
     """Async twin of :class:`TestSharedSpaceCacheSync`."""
 
+    async def test_a_delete_during_a_validation_is_not_overwritten(self):
+        """#72: a validation in flight must not resurrect a deleted space.
+
+        Two concurrent tasks: one validates the space (its lookup is answered
+        while the space still exists, but the reply lands late), the other
+        deletes it. The delete's invalidation must survive the late verdict.
+        """
+        double = _SpacesDouble(existing=[SPACE_ID])
+        client = _async_client(double, lookup_latency=0.05)
+
+        await asyncio.gather(
+            client.dashboards.get_all(space_id=SPACE_ID),
+            client.spaces.delete(id=SPACE_ID),
+        )
+
+        with pytest.raises(SpaceNotFoundError):
+            await client.dashboards.get_all(space_id=SPACE_ID)
+
     async def test_create_invalidates_the_negative_cache(self):
         """#72: a failed lookup must not outlive the create that fixes it."""
         double = _SpacesDouble()  # space does not exist yet
@@ -231,20 +390,19 @@ class TestSharedSpaceCacheAsync:
         assert double.space_lookups == 1
 
     async def test_ttl_is_measured_with_the_monotonic_clock(self, monkeypatch):
-        """#73: TTL follows ``time.monotonic``, not the steppable wall clock."""
+        """#73: TTL runs on the monotonic clock, not the steppable wall clock."""
+        assert space_cache._now is time.monotonic
         double = _SpacesDouble(existing=[SPACE_ID])
         client = _async_client(double)
-        now = {"monotonic": 1_000.0}
-        monkeypatch.setattr(time, "monotonic", lambda: now["monotonic"])
-        # Wall clock frozen: a time.time()-based TTL could never expire here.
-        monkeypatch.setattr(time, "time", lambda: 1_700_000_000.0)
+        now = {"t": 1_000.0}
+        monkeypatch.setattr(space_cache, "_now", lambda: now["t"])
 
         await client.dashboards.get_all(space_id=SPACE_ID)
-        now["monotonic"] += 299.0  # still inside the 300 s default TTL
+        now["t"] += 299.0  # still inside the 300 s default TTL
         await client.dashboards.get_all(space_id=SPACE_ID)
         assert double.space_lookups == 1
 
-        now["monotonic"] += 2.0  # past the TTL -> re-validate
+        now["t"] += 2.0  # past the TTL -> re-validate
         await client.dashboards.get_all(space_id=SPACE_ID)
         assert double.space_lookups == 2
 

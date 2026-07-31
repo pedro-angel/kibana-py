@@ -138,13 +138,18 @@ class NamespaceClient:
         """
         # Fast path: a live verdict from the client-wide cache, whichever
         # namespace (or space-scoped client) first paid for the lookup.
-        cached = self._space_validation_cache.lookup(space_id)
+        cache = self._space_validation_cache
+        cached = cache.lookup(space_id)
         if cached is not None:
             if cached:
                 return  # Space exists and cache is valid - fast path
             raise SpaceNotFoundError(space_id)
 
-        # Cache miss or expired - validate with API
+        # Cache miss or expired - validate with API. Snapshot the generation
+        # BEFORE asking: if an invalidation (a spaces.create/delete, say) lands
+        # while this lookup is in flight, our answer is older than it and must
+        # not overwrite it.
+        generation = cache.generation
         try:
             spaces_client = getattr(self._client, "spaces", None)
             if not spaces_client:
@@ -152,14 +157,14 @@ class NamespaceClient:
 
             spaces_client.get(id=space_id)
             # Space exists - cache the result
-            self._space_validation_cache.remember(space_id, True)
+            cache.remember(space_id, True, generation=generation)
         except NotFoundError:
             # The space genuinely does not exist (404): cache the negative result
             # so repeated calls fast-path, and surface it as SpaceNotFoundError.
             # Any OTHER error (auth, network, serialization) propagates WITHOUT
             # negatively caching -- a transient failure must not pin the space as
             # "missing" for the cache TTL.
-            self._space_validation_cache.remember(space_id, False)
+            cache.remember(space_id, False, generation=generation)
             raise SpaceNotFoundError(space_id) from None
 
     def _clear_space_cache(self, space_id: str | None = None) -> None:

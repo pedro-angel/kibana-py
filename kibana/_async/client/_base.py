@@ -74,14 +74,27 @@ class AsyncBaseClient:
         """
         Create a new client instance with modified options.
 
-        This allows per-request configuration without modifying the original client.
+        This allows per-request configuration without changing the original
+        client's options.
+
+        The copy is not fully independent: it keeps the original's transport
+        and shares its space-validation cache, so a space verdict cached (or
+        invalidated) through either client is seen by both. That cache is
+        deliberately NOT scoped per identity -- it records whether a space
+        *exists*, not what a caller may do with it, and every request is still
+        authorized by Kibana on its own credentials. The only visible
+        consequence is that a clone whose credentials cannot see a space may
+        get the endpoint's own 403/404 for a space-scoped call instead of this
+        client's pre-flight ``SpaceNotFoundError``.
 
         :param api_key: API key for authentication
         :param basic_auth: Basic auth credentials (username, password)
         :param bearer_auth: Bearer token for authentication
         :param headers: Custom headers to include in requests
         :param request_timeout: Request timeout in seconds
-        :return: New AsyncBaseClient instance with updated options
+        :return: New AsyncBaseClient instance with updated options (the
+            original client's options are unchanged; its space-validation
+            cache is shared, as described above)
         """
         # Create a new instance with the same transport
         new_client = self.__class__(_transport=self._transport)
@@ -96,7 +109,9 @@ class AsyncBaseClient:
         # Same server, so the same space-existence facts: share the cache object
         # (not a copy) so a verdict or an invalidation on either client is seen
         # by both. Namespace clients read it through their parent, so the clone's
-        # already-wired namespaces pick this up.
+        # already-wired namespaces pick this up. Sharing across differing
+        # credentials is intended: existence is not a per-identity fact, and the
+        # endpoint still authorizes every request (see the docstring).
         new_client._space_validation_cache = self._space_validation_cache
 
         # Apply new options if provided

@@ -171,9 +171,15 @@ class NamespaceClient:
         self._client = client  # delegate requests to the parent client
         self._default_space_id = default_space_id
         self._validate_spaces = validate_spaces
-        # Borrowed from the parent client, never owned: one cache per
-        # Kibana/AsyncKibana instance (5-minute TTL)
-        self._space_validation_cache = shared_space_cache(client)
+
+    @property
+    def _space_validation_cache(self) -> SpaceValidationCache:
+        """The parent client's space cache -- borrowed, never owned.
+
+        Resolved per use, so a namespace always follows its parent's current
+        cache (5-minute TTL, one per Kibana/AsyncKibana instance).
+        """
+        return shared_space_cache(self._client)
 ```
 
 **Responsibilities**:
@@ -452,19 +458,24 @@ per namespace:
 
 ```python
 class SpaceValidationCache:
-    def __init__(self, ttl: float = 300.0) -> None:  # 5 minutes
+    def __init__(self) -> None:
         self.entries: dict[str, bool] = {}
         self.timestamps: dict[str, float] = {}
-        self.ttl = ttl
+        self.ttl: float = DEFAULT_SPACE_CACHE_TTL  # 300.0 seconds
+        self._lock = threading.Lock()
+        self._generation = 0
 
     def lookup(self, space_id: str) -> bool | None:
         """The cached verdict, or None when absent or expired."""
-        if space_id not in self.entries:
-            return None
-        stamp = self.timestamps.get(space_id, float("-inf"))
-        if time.monotonic() - stamp >= self.ttl:
-            return None
-        return self.entries[space_id]
+        with self._lock:
+            if space_id not in self.entries:
+                return None
+            stamp = self.timestamps.get(space_id, float("-inf"))
+            if _now() - stamp >= self.ttl:  # _now is the time.monotonic seam
+                self.entries.pop(space_id, None)  # evict, don't accumulate
+                self.timestamps.pop(space_id, None)
+                return None
+            return self.entries[space_id]
 ```
 
 **Cache Characteristics**:
@@ -481,6 +492,12 @@ class SpaceValidationCache:
   validating immediately
 - Manual cache clearing available (`_clear_space_cache()` on any namespace
   client clears the shared cache)
+- Thread-safe: every operation holds a `threading.Lock` (as
+  `kibana/_rate_limiter.py` does). Writers snapshot a generation counter before
+  asking the server and pass it to `remember()`, so an invalidation that lands
+  while a lookup is in flight is never overwritten by the late verdict. No I/O
+  happens under the lock, so two callers missing at once still both ask — the
+  cost is a redundant request, never a wrong verdict
 
 ## Extension Points
 
