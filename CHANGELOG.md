@@ -8,6 +8,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **A malformed `space_id` now fails the same way in async as in sync: locally,
+  with no request and nothing cached.** Sync checks the id's *format* before
+  anything else, so `client.slos.get(slo_id="x", space_id="Bad Space!")` raised
+  `InvalidSpaceIdError` immediately. Async checked the space's *existence*
+  first: the same call issued a real `GET /api/spaces/space/Bad%20Space%21`,
+  raised `SpaceNotFoundError` — the wrong exception for an id that could never
+  name a space — and cached the malformed key as "missing" for the 300 s TTL
+  ([#74](https://github.com/pedro-angel/kibana-py/issues/74)).
+  `_maybe_validate_space` now validates the format first and unconditionally, so
+  every async namespace raises `InvalidSpaceIdError` with zero requests and an
+  untouched cache. Four namespaces (`connectors`, `data_views`, `ml`,
+  `saved_objects` — 42 methods) built the space-scoped path before validating,
+  the opposite order from the other 28; all 580 space-scoped async methods now
+  validate first. `Kibana.space()` / `AsyncKibana.space()` also honor the
+  `InvalidSpaceIdError` their docstrings always promised, raising before any
+  request and regardless of `validate=` — so a bad id can no longer seed the
+  space cache either. Valid space ids, and the exceptions raised for spaces that
+  merely do not exist, are unchanged.
+- **The sync/async parity guard can now see a mis-ordered or un-awaited space
+  validation.** Its body normalizer deleted the `_maybe_validate_space`
+  statement wherever it appeared, and unwrapped `await` before doing so, which
+  made two real bugs structurally invisible to CI: the validate-after-build
+  ordering above, and a dropped `await` — a bare
+  `self._maybe_validate_space(...)` that never validates anything, exactly the
+  regression PR #60 fixed — both of which passed the entire parity suite
+  ([#75](https://github.com/pedro-angel/kibana-py/issues/75)). The fold now
+  applies only to a genuinely awaited call standing immediately before the
+  `_build_space_path` call for the same space; a dropped `await`, a swapped
+  order, a detached check, or a check on a different space each fail as body
+  drift. Verified by mutation: removing an `await` and restoring the old order
+  each fail the suite, and the restored tree passes with no allowlist entry.
 - **`spaces.create()` / `spaces.delete()` now invalidate the space-validation
   cache.** Space existence is cached for 5 minutes, but nothing ever cleared an
   entry: after `client.dashboards.get_all(space_id="team-a")` raised
