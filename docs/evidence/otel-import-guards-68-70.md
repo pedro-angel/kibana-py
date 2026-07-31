@@ -37,6 +37,19 @@
   `except Exception` in `_create_otlp_exporter_with_error_handling` would otherwise mask as a
   generic "APM configuration error".
 
+## Spec-compliance ruling: the `GRPC_EXPORTER_AVAILABLE` guard stays
+
+A spec-compliance review questioned whether `_exporters.py`'s new
+`GRPC_EXPORTER_AVAILABLE` check in `_create_otlp_exporter` was in scope. Ruling: it stays,
+unchanged. Reasoning: on `main` (pre-fix), the "SDK present, gRPC exporter absent" state could
+never reach `_create_otlp_exporter` at all — `import kibana` itself crashed first, at the
+unconditional gRPC import inside `_imports.py` (the #68 bug). Once that import is fixed to
+degrade gracefully, this combination becomes reachable for the first time; the guard defines
+what happens in that newly-reachable state. It is new-state behavior definition, not a change
+to any existing, previously-reachable behavior — nothing that worked on `main` changes as a
+result, and the guard was brief-mandated (mirroring the pre-existing `HTTP_EXPORTER_AVAILABLE`
+check). No code was reverted following this review.
+
 ## Run (properties, not runner)
 
 | Property | Value |

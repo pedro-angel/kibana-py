@@ -22,10 +22,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   names to `None`, silently clobbering a trace exporter that had already
   imported successfully whenever the (private) OTEL logs modules failed to
   import ([#70](https://github.com/pedro-angel/kibana-py/issues/70)); it now
-  degrades only the logs-specific names. `_create_otlp_exporter` also gained an
-  explicit availability check on the gRPC path (mirroring the existing HTTP
-  check), so a missing gRPC exporter raises a clear `ImportError` instead of an
-  opaque `TypeError: 'NoneType' object is not callable`.
+  degrades only the logs-specific names.
+- **A missing gRPC OTLP exporter now fails loudly instead of silently.** With
+  the above fix, "SDK present, gRPC exporter absent" became a newly-reachable
+  state — previously `import kibana` itself crashed first, so this path never
+  ran. `_create_otlp_exporter` gained an explicit `GRPC_EXPORTER_AVAILABLE`
+  check on the gRPC path (mirroring the pre-existing HTTP check), so
+  requesting `protocol="grpc"` in that state now raises a clear `ImportError`
+  naming the missing package, instead of letting `OTLPSpanExporter` be `None`
+  and raising an opaque `TypeError: 'NoneType' object is not callable` that
+  the broad exception handler in `_create_otlp_exporter_with_error_handling`
+  would mask as a generic "APM configuration error". This is what delivers
+  #68's stated outcome — "OTEL simply runs without the gRPC exporter" — as an
+  honest, diagnosable failure for the one signal that needs it, rather than a
+  silent mismatch for callers who explicitly asked for gRPC.
 
 ## [0.4.2] - 2026-07-15
 
