@@ -22,9 +22,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `/v1/traces` for `http/protobuf` endpoints that don't already have a signal
   path, and the no-endpoint-configured default is now protocol-aware (`:4318`
   for `http/protobuf`, `:4317` for `grpc`) for both traces and log forwarding,
-  which shares the same default-endpoint computation. gRPC endpoints and
-  already-correct explicit endpoints (with or without a trailing slash, or
-  already ending in `/v1/traces`) are unaffected.
+  which shares the same default-endpoint computation. The "does it already
+  have the path" check is anchored to the end of the path (`_get_signal_endpoint`,
+  a shared core now used by both `_get_trace_endpoint` and `_get_log_endpoint`),
+  not a bare substring match, so an endpoint that merely contains `/v1/traces`
+  or `/v1/logs` mid-path (e.g. behind a gateway route) still gets the real
+  signal path appended instead of being wrongly treated as already-correct.
+  `configure_opentelemetry`'s `protocol` argument is now case-normalized, and
+  an unrecognized value logs a warning instead of silently picking a default.
+  gRPC endpoints and already-correct explicit endpoints (with or without a
+  trailing slash, or already ending in `/v1/traces`) are unaffected.
 - **A malformed `space_id` now fails the same way in async as in sync: locally,
   with no request and nothing cached.** Sync checks the id's *format* before
   anything else, so `client.slos.get(slo_id="x", space_id="Bad Space!")` raised

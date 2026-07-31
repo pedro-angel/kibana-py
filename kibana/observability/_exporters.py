@@ -127,32 +127,45 @@ def _create_otlp_log_exporter_with_error_handling(
         return None
 
 
-def _get_log_endpoint(base_endpoint: str, protocol: str) -> str:
-    """Get the appropriate log endpoint based on the base endpoint and protocol."""
-    if "/v1/logs" in base_endpoint:
+def _get_signal_endpoint(base_endpoint: str, protocol: str, signal_path: str) -> str:
+    """Get the appropriate OTLP signal endpoint for a base endpoint and protocol.
+
+    Shared core for :func:`_get_log_endpoint` and :func:`_get_trace_endpoint`:
+    for ``http/protobuf`` (and its ``http`` alias), appends ``signal_path``
+    (e.g. ``/v1/traces``) to a base endpoint that doesn't already end in it.
+
+    The "already has it" check is anchored to the *end* of the path (modulo a
+    single trailing slash), via ``str.endswith``, rather than a plain
+    substring test. A substring test would wrongly treat an endpoint that
+    merely *contains* the signal path somewhere in the middle of an unrelated
+    route (e.g. a gateway path like ``http://gw:8200/foo/v1/traces/bar``, or a
+    differently-named sibling path like ``.../v1/traces-ingest/foo``) as
+    already-correct and leave it un-suffixed -- silently reproducing the
+    wrong-path defect these helpers exist to fix. The comparison is
+    case-sensitive by design: URL paths are case-sensitive, so ``/V1/Traces``
+    is genuinely not ``/v1/traces`` and still needs the real path appended.
+
+    gRPC has no such HTTP resource path -- the endpoint is a bare
+    ``host:port`` -- so it passes through untouched regardless.
+    """
+    if base_endpoint.rstrip("/").endswith(signal_path):
         return base_endpoint
     if protocol in ("http/protobuf", "http"):
         if base_endpoint.endswith("/"):
-            return f"{base_endpoint}v1/logs"
-        else:
-            return f"{base_endpoint}/v1/logs"
+            return f"{base_endpoint}{signal_path.lstrip('/')}"
+        return f"{base_endpoint}{signal_path}"
     return base_endpoint
+
+
+def _get_log_endpoint(base_endpoint: str, protocol: str) -> str:
+    """Get the appropriate log endpoint based on the base endpoint and protocol."""
+    return _get_signal_endpoint(base_endpoint, protocol, "/v1/logs")
 
 
 def _get_trace_endpoint(base_endpoint: str, protocol: str) -> str:
     """Get the appropriate trace endpoint based on the base endpoint and protocol.
 
-    Mirrors :func:`_get_log_endpoint`: ``http/protobuf`` (and its ``http``
-    alias) require the OTLP signal-specific resource path, so an endpoint
-    that doesn't already end in ``/v1/traces`` gets it appended. gRPC has no
-    such path -- the endpoint is a bare ``host:port`` -- so it passes through
-    untouched.
+    Mirrors :func:`_get_log_endpoint` via the shared :func:`_get_signal_endpoint`
+    core.
     """
-    if "/v1/traces" in base_endpoint:
-        return base_endpoint
-    if protocol in ("http/protobuf", "http"):
-        if base_endpoint.endswith("/"):
-            return f"{base_endpoint}v1/traces"
-        else:
-            return f"{base_endpoint}/v1/traces"
-    return base_endpoint
+    return _get_signal_endpoint(base_endpoint, protocol, "/v1/traces")

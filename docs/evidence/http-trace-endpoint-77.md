@@ -334,3 +334,174 @@ required: "gRPC path must stay working").
 - **Point-in-time result.** OTEL SDK versions and the APM server build (9.4.3) are current
   as of 2026-07-31; a future APM server release could change what the bare root or
   `/v1/traces` return.
+
+## Fix round — code-quality review response
+
+A code-quality review of the initial fix (commit `2a34f90`) found 1 MAJOR + 3 minors, all
+addressed in the fix-round commit that follows this one on the same branch (see `git log`).
+
+### [MAJOR] Unanchored substring check for "endpoint already has the signal path"
+
+`_get_trace_endpoint`/`_get_log_endpoint` checked `"/v1/traces" in base_endpoint` (a plain
+substring test), copy-inherited from the original `_get_log_endpoint`. An endpoint with the
+segment mid-path (`http://gw:8200/foo/v1/traces/bar`) or as a sibling-path prefix
+(`.../v1/traces-ingest/foo`) was wrongly treated as "already correct" and left un-suffixed —
+silently reproducing the exact wrong-path defect this PR exists to fix, just for a narrower
+class of endpoints.
+
+**Fix:** extracted one shared core, `_get_signal_endpoint(base_endpoint, protocol,
+signal_path)`, in `kibana/observability/_exporters.py`, used by both `_get_log_endpoint` and
+`_get_trace_endpoint` (now thin one-line wrappers — the twin-helper convention is preserved,
+the logic lives once). The "already has it" check is now anchored to the end of the path,
+modulo one trailing slash: `base_endpoint.rstrip("/").endswith(signal_path)`.
+
+**Case ruling (pinned by test):** case-**sensitive** — URL paths are case-sensitive, so
+`/V1/Traces` is genuinely not the OTLP path `/v1/traces`, and appending `/v1/traces` to it is
+correct. No case-folding.
+
+RED (before the anchored-check fix; ran against the code as committed at `2a34f90`, with only
+the new fix-round tests added):
+
+```
+$ .venv/bin/pytest tests/unit/test_observability.py \
+    -k "mid_path_collision or suffix_with_extra_segment or true_trailing_slash or case_sensitive or http_alias_protocol or protocol_case_normalized or unsupported_protocol_warns or grpc_port_bias or uses_4318_port" \
+    --no-cov -v
+...
+FAILED ...test_get_trace_endpoint_mid_path_collision_appended
+FAILED ...test_get_trace_endpoint_suffix_with_extra_segment_appended
+FAILED ...test_get_log_endpoint_mid_path_collision_appended
+  AssertionError: assert 'http://gw:8200/foo/v1/logs/bar' == 'http://gw:8200/foo/v1/logs/bar/v1/logs'
+FAILED ...test_get_log_endpoint_suffix_with_extra_segment_appended
+FAILED ...test_configure_opentelemetry_protocol_case_normalized
+FAILED ...test_configure_opentelemetry_unsupported_protocol_warns_and_uses_grpc_default
+FAILED ...test_validate_apm_connectivity_unrecognized_protocol_uses_grpc_port_bias
+  AssertionError: expected call not found. Expected: connect_ex(('localhost', 4317))
+    Actual: connect_ex(('localhost', 4318))
+7 failed, 8 passed, 102 deselected
+```
+
+The 8 that already passed are coincidental-identity cases (the `http` alias already worked,
+true-trailing and case-sensitive cases happened to also be caught by the old unanchored
+substring test, and http/protobuf's own 4318 port bias was already correct) — confirming the
+RED set isolates exactly the anchoring defect and the two minors below, not everything
+indiscriminately.
+
+GREEN (after the fix):
+
+```
+$ .venv/bin/pytest tests/unit/test_observability.py -k "..." --no-cov -v
+...
+15 passed, 102 deselected
+```
+
+### Minor 1 — protocol normalization, missing-diagnostic warning, and aligned port-fallback bias
+
+`configure_opentelemetry` now normalizes `protocol` once, immediately after it's resolved
+(`protocol = protocol.lower()`), before it drives any endpoint-shape or default-port decision
+or is threaded into log forwarding — fixing the actual bug where `"HTTP/PROTOBUF"` silently
+mismatched every downstream `protocol in ("http/protobuf", "http")` check and never got its
+`/v1/traces` path appended. An unrecognized value (after normalization) now logs an explicit
+`logger.warning("Unrecognized OTLP protocol '<value>', assuming gRPC-style endpoint
+defaults ...")` instead of silently falling through.
+
+**Aligned fallback bias (documented in both places):** `_config.py`'s no-endpoint default and
+`_validation.py`'s `_validate_apm_connectivity` port-guess previously disagreed for an
+unknown/invalid protocol — `_config.py` assumed the gRPC port (4317), `_validation.py`
+assumed the HTTP port (4318). **Ruling: gRPC-biased** (chosen because
+`configure_opentelemetry`'s own top-level default, when `protocol` is entirely unspecified, is
+already `"grpc"` — aligning the two fallbacks to that existing convention is the smaller,
+more consistent change). `_validation.py` now reads:
+
+```python
+elif protocol in ("http/protobuf", "http"):
+    port = 4318
+else:
+    port = 4317  # was 4318 (any non-"grpc" value) -- now aligned with _config.py
+```
+
+Pinned by two tests: an explicit `http/protobuf` endpoint with no port still resolves 4318
+(`test_validate_apm_connectivity_http_protocol_uses_4318_port`, passed both before and after —
+locks in the correct branch); an unrecognized protocol (`"bogus"`) with no port now resolves
+4317, not 4318 (`test_validate_apm_connectivity_unrecognized_protocol_uses_grpc_port_bias`,
+RED → GREEN, shown above).
+
+### Minor 2 — missing `"http"` alias coverage
+
+None of the original 11 cases exercised the `"http"` alias (only `"http/protobuf"` and
+`"grpc"`). Added helper-level (`test_get_trace_endpoint_http_alias_protocol`,
+`test_get_log_endpoint_http_alias_protocol`) and configure-level
+(`test_configure_opentelemetry_http_alias_protocol_appends_v1_traces`) cases — all passed
+immediately (the alias was already wired into the `protocol in (...)` tuples; this closes a
+coverage gap, not a behavior gap).
+
+### Minor 3 — collision case through both wrappers
+
+The anchored-check regression matrix above includes a mid-path-collision and a
+suffix-with-extra-segment case for **both** `_get_trace_endpoint` and `_get_log_endpoint`
+(4 collision cases total, all going through the one shared `_get_signal_endpoint` core), so
+the substring-collision gap the spec reviewer originally flagged is covered symmetrically for
+both signals, not just traces.
+
+### Full verification after the fix round
+
+```
+$ .venv/bin/pytest tests/unit/ --cov=kibana --cov-fail-under=90 -q
+3288 passed
+Required test coverage of 90% reached. Total coverage: 94.34%
+
+$ .venv/bin/mypy kibana/
+Success: no issues found in 103 source files
+
+$ .venv/bin/pre-commit run --files kibana/observability/_config.py kibana/observability/_exporters.py \
+    kibana/observability/_validation.py kibana/observability/__init__.py tests/unit/test_observability.py
+black.................................................................................Passed
+isort.................................................................................Passed
+ruff check............................................................................Passed
+(all other hooks: Passed)
+```
+
+(`black` auto-reformatted the new test additions on its first run in this round — reindented
+long assertions/docstrings; re-run was clean. No logic changed by the reformat, confirmed by
+re-running the full unit suite and mypy after it.)
+
+### Live re-check against `:8200` (nothing regressed at the wire)
+
+```
+$ curl -s -o /dev/null -w "APM reachable, HTTP %{http_code}\n" --max-time 3 http://localhost:8200
+APM reachable, HTTP 200
+
+$ .venv/bin/python -c "
+from kibana.observability import configure_opentelemetry, create_span
+configure_opentelemetry(
+    enabled=True, protocol='http/protobuf', endpoint='http://localhost:8200',
+    validate_endpoint=False, logs_enabled=False,
+    service_name='kibana-py-wu5-fixround-recheck',
+)
+span = create_span('wu5.fixround-recheck-smoke'); span.end()
+"
+INFO:kibana.observability:OTLP exporter configured: http://localhost:8200/v1/traces (protocol: http/protobuf)
+configure_opentelemetry(...) completed WITHOUT EXCEPTION (fix-round re-check)
+```
+
+```
+$ curl -s -u "elastic:${ES_LOCAL_PASSWORD}" "http://localhost:9200/traces-apm*/_search" \
+    -H "Content-Type: application/json" -d '{
+  "query": { "match": { "service.name": "kibana-py-wu5-fixround-recheck" } },
+  "_source": ["service.name","transaction.name","@timestamp"]
+}'
+{ "hits": { "total": { "value": 1, "relation": "eq" }, "hits": [ { "_source": {
+  "service": { "name": "kibana-py-wu5-fixround-recheck" },
+  "transaction": { "name": "wu5.fixround-recheck-smoke" }
+} } ] } }
+```
+
+**PASS** — still exports to `/v1/traces`, still accepted (indexed) by the APM server. The
+fix round changed only endpoint-shape edge cases and diagnostics, not the wire behavior
+already proven in the original battle-test.
+
+### Scope note (fix round)
+
+`_get_trace_endpoint` and `_get_log_endpoint` are now one-line wrappers over
+`_get_signal_endpoint`; nothing about *where* they're called from changed (still only from
+`configure_opentelemetry` / `_setup_log_forwarding`, never from the exporter-creation
+functions themselves) — the first "Scope & caveats" bullet above still holds.

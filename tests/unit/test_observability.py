@@ -363,6 +363,55 @@ class TestAPMServerIntegration:
         result = _get_trace_endpoint(endpoint, "grpc")
         assert result == "http://localhost:4317"
 
+    def test_get_trace_endpoint_http_alias_protocol(self):
+        """Test _get_trace_endpoint with the 'http' protocol alias appends path."""
+        from kibana.observability import _get_trace_endpoint
+
+        endpoint = "http://localhost:4318"
+        result = _get_trace_endpoint(endpoint, "http")
+        assert result == "http://localhost:4318/v1/traces"
+
+    def test_get_trace_endpoint_mid_path_collision_appended(self):
+        """An endpoint that merely contains '/v1/traces' mid-path (not as its
+        actual suffix) is not already-correct -- it must still get the real
+        signal path appended, not be left untouched. Regression test for an
+        unanchored substring check (``"/v1/traces" in base_endpoint``) that
+        would wrongly treat this as already-correct."""
+        from kibana.observability import _get_trace_endpoint
+
+        endpoint = "http://gw:8200/foo/v1/traces/bar"
+        result = _get_trace_endpoint(endpoint, "http/protobuf")
+        assert result == "http://gw:8200/foo/v1/traces/bar/v1/traces"
+
+    def test_get_trace_endpoint_suffix_with_extra_segment_appended(self):
+        """A path that merely starts with the signal path but has more after
+        it ('/v1/traces-ingest/...') is a different route, not the real
+        OTLP signal path -- must still get it appended."""
+        from kibana.observability import _get_trace_endpoint
+
+        endpoint = "http://host:8200/v1/traces-ingest/foo"
+        result = _get_trace_endpoint(endpoint, "http/protobuf")
+        assert result == "http://host:8200/v1/traces-ingest/foo/v1/traces"
+
+    def test_get_trace_endpoint_true_trailing_slash_untouched(self):
+        """An endpoint that already ends in /v1/traces/ (trailing slash) is
+        recognized as already-correct and left untouched."""
+        from kibana.observability import _get_trace_endpoint
+
+        endpoint = "http://localhost:4318/v1/traces/"
+        result = _get_trace_endpoint(endpoint, "http/protobuf")
+        assert result == "http://localhost:4318/v1/traces/"
+
+    def test_get_trace_endpoint_case_sensitive_not_treated_as_existing(self):
+        """URL paths are case-sensitive: '/V1/Traces' is not the OTLP path
+        '/v1/traces' and must still get the real path appended (pins the
+        case-sensitive ruling -- no case-folding)."""
+        from kibana.observability import _get_trace_endpoint
+
+        endpoint = "http://localhost:4318/V1/Traces"
+        result = _get_trace_endpoint(endpoint, "http/protobuf")
+        assert result == "http://localhost:4318/V1/Traces/v1/traces"
+
     @patch("socket.socket")
     def test_validate_apm_connectivity_success(self, mock_socket):
         """Test successful APM server connectivity validation."""
@@ -411,6 +460,40 @@ class TestAPMServerIntegration:
                 max_retries=1,
             )
         assert result is True
+
+    @patch("socket.socket")
+    def test_validate_apm_connectivity_http_protocol_uses_4318_port(self, mock_socket):
+        """An http/protobuf endpoint with no explicit port must probe the
+        OTLP/HTTP port 4318, not the gRPC port."""
+        from kibana.observability import _validate_apm_connectivity
+
+        mock_sock_instance = mock_socket.return_value
+        mock_sock_instance.connect_ex.return_value = 0
+
+        _validate_apm_connectivity(
+            endpoint="http://localhost", headers={}, protocol="http/protobuf"
+        )
+
+        mock_sock_instance.connect_ex.assert_called_once_with(("localhost", 4318))
+
+    @patch("socket.socket")
+    def test_validate_apm_connectivity_unrecognized_protocol_uses_grpc_port_bias(
+        self, mock_socket
+    ):
+        """When the endpoint has no explicit port and the protocol isn't a
+        recognized HTTP variant, the port guess must default to the gRPC port
+        -- aligned with _config.py's grpc-biased default-endpoint fallback,
+        not hardcoded to the HTTP port regardless of protocol."""
+        from kibana.observability import _validate_apm_connectivity
+
+        mock_sock_instance = mock_socket.return_value
+        mock_sock_instance.connect_ex.return_value = 0
+
+        _validate_apm_connectivity(
+            endpoint="http://localhost", headers={}, protocol="bogus"
+        )
+
+        mock_sock_instance.connect_ex.assert_called_once_with(("localhost", 4317))
 
     def test_validate_apm_server_availability_public_function(self):
         """Test public APM server availability validation function."""
@@ -745,6 +828,82 @@ class TestAPMServerIntegration:
 
         call_kwargs = mock_setup_logs.call_args[1]
         assert call_kwargs["endpoint"] == "http://localhost:4317"
+
+    @patch.dict("os.environ", {}, clear=True)
+    @patch("kibana.observability._create_otlp_exporter_with_error_handling")
+    def test_configure_opentelemetry_http_alias_protocol_appends_v1_traces(
+        self, mock_create_exporter
+    ):
+        """The 'http' protocol alias must get the same /v1/traces treatment
+        as 'http/protobuf'."""
+        from kibana.observability import KibanaInstrumentor, configure_opentelemetry
+
+        mock_create_exporter.return_value = object()
+        instrumentor = KibanaInstrumentor.get_instance()
+        instrumentor.disable()
+
+        configure_opentelemetry(
+            enabled=True,
+            protocol="http",
+            endpoint="http://localhost:8200",
+            validate_endpoint=False,
+        )
+
+        mock_create_exporter.assert_called_once_with(
+            "http://localhost:8200/v1/traces", {}, "http"
+        )
+
+    @patch.dict("os.environ", {}, clear=True)
+    @patch("kibana.observability._create_otlp_exporter_with_error_handling")
+    def test_configure_opentelemetry_protocol_case_normalized(
+        self, mock_create_exporter
+    ):
+        """A mixed-case protocol string ('HTTP/PROTOBUF') must be normalized
+        before it drives endpoint-shape decisions -- otherwise the
+        ``protocol in ("http/protobuf", "http")`` checks silently mismatch
+        and /v1/traces never gets appended, even though the exporter itself
+        would still be created (the OTEL SDK doesn't care about our case)."""
+        from kibana.observability import KibanaInstrumentor, configure_opentelemetry
+
+        mock_create_exporter.return_value = object()
+        instrumentor = KibanaInstrumentor.get_instance()
+        instrumentor.disable()
+
+        configure_opentelemetry(
+            enabled=True,
+            protocol="HTTP/PROTOBUF",
+            endpoint="http://localhost:8200",
+            validate_endpoint=False,
+        )
+
+        mock_create_exporter.assert_called_once_with(
+            "http://localhost:8200/v1/traces", {}, "http/protobuf"
+        )
+
+    @patch.dict("os.environ", {}, clear=True)
+    @patch("kibana.observability._create_otlp_exporter_with_error_handling")
+    def test_configure_opentelemetry_unsupported_protocol_warns_and_uses_grpc_default(
+        self, mock_create_exporter, caplog
+    ):
+        """An unrecognized protocol value must not silently pick the gRPC
+        default port with no diagnostic -- it must warn, and (per the aligned
+        fallback bias) default the port the same way
+        _validate_apm_connectivity does for an unrecognized protocol."""
+        from kibana.observability import KibanaInstrumentor, configure_opentelemetry
+
+        mock_create_exporter.return_value = object()
+        instrumentor = KibanaInstrumentor.get_instance()
+        instrumentor.disable()
+
+        with caplog.at_level("WARNING", logger="kibana.observability"):
+            configure_opentelemetry(
+                enabled=True, protocol="BOGUS", validate_endpoint=False
+            )
+
+        assert "Unrecognized OTLP protocol 'bogus'" in caplog.text
+        mock_create_exporter.assert_called_once_with(
+            "http://localhost:4317", {}, "bogus"
+        )
 
 
 @pytest.mark.skipif(not OTEL_AVAILABLE, reason="OpenTelemetry not installed")
@@ -1455,6 +1614,49 @@ class TestLogExporterCreation:
         endpoint = "http://localhost:4317"
         result = _get_log_endpoint(endpoint, "grpc")
         assert result == "http://localhost:4317"
+
+    def test_get_log_endpoint_http_alias_protocol(self):
+        """Test _get_log_endpoint with the 'http' protocol alias appends path."""
+        from kibana.observability import _get_log_endpoint
+
+        endpoint = "http://localhost:4318"
+        result = _get_log_endpoint(endpoint, "http")
+        assert result == "http://localhost:4318/v1/logs"
+
+    def test_get_log_endpoint_mid_path_collision_appended(self):
+        """Mirrors the trace-endpoint anchored-check regression: '/v1/logs'
+        appearing mid-path must not be mistaken for the real signal path."""
+        from kibana.observability import _get_log_endpoint
+
+        endpoint = "http://gw:8200/foo/v1/logs/bar"
+        result = _get_log_endpoint(endpoint, "http/protobuf")
+        assert result == "http://gw:8200/foo/v1/logs/bar/v1/logs"
+
+    def test_get_log_endpoint_suffix_with_extra_segment_appended(self):
+        """A '/v1/logs-ingest/...' route is not the real OTLP signal path."""
+        from kibana.observability import _get_log_endpoint
+
+        endpoint = "http://host:8200/v1/logs-ingest/foo"
+        result = _get_log_endpoint(endpoint, "http/protobuf")
+        assert result == "http://host:8200/v1/logs-ingest/foo/v1/logs"
+
+    def test_get_log_endpoint_true_trailing_slash_untouched(self):
+        """An endpoint already ending in /v1/logs/ (trailing slash) is left
+        untouched."""
+        from kibana.observability import _get_log_endpoint
+
+        endpoint = "http://localhost:4318/v1/logs/"
+        result = _get_log_endpoint(endpoint, "http/protobuf")
+        assert result == "http://localhost:4318/v1/logs/"
+
+    def test_get_log_endpoint_case_sensitive_not_treated_as_existing(self):
+        """'/V1/Logs' is not the OTLP path '/v1/logs' -- case-sensitive, no
+        case-folding (pins the same ruling as the trace endpoint)."""
+        from kibana.observability import _get_log_endpoint
+
+        endpoint = "http://localhost:4318/V1/Logs"
+        result = _get_log_endpoint(endpoint, "http/protobuf")
+        assert result == "http://localhost:4318/V1/Logs/v1/logs"
 
     @patch("kibana.observability._create_otlp_log_exporter")
     def test_create_otlp_log_exporter_with_error_handling_success(self, mock_create):

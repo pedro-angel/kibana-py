@@ -22,6 +22,15 @@ from kibana.observability._tracing import (
     _get_python_version,
 )
 
+# Protocols this module recognizes for endpoint-shape (path-appending) and
+# default-port decisions. An unrecognized value still reaches
+# `_create_otlp_exporter`, which raises a clear `ValueError` when actually
+# building an exporter for `exporter="otlp"` -- but that only happens deep
+# inside the call chain, so an unrecognized value is diagnosed here first
+# instead of silently falling through to the gRPC-biased defaults below with
+# no explanation.
+_SUPPORTED_OTLP_PROTOCOLS = frozenset({"grpc", "http/protobuf", "http"})
+
 
 def _parse_otlp_headers() -> dict[str, str]:
     """Parse OTLP headers from environment variables with APM token support."""
@@ -107,6 +116,20 @@ def configure_opentelemetry(
         exporter = os.getenv("KIBANA_OTEL_EXPORTER", "otlp")
     if protocol is None:
         protocol = os.getenv("OTEL_EXPORTER_OTLP_PROTOCOL", "grpc")
+    # Normalize once, here, before protocol drives any endpoint-shape or
+    # default-port decision below (or is threaded into log forwarding). Every
+    # downstream comparison is a case-sensitive `protocol in (...)`/`==`
+    # check, so an unnormalized "HTTP/PROTOBUF" would silently mismatch them
+    # all and never get its /v1/traces path appended, even though the OTEL
+    # SDK itself doesn't care about case.
+    protocol = protocol.lower()
+    if protocol not in _SUPPORTED_OTLP_PROTOCOLS:
+        logger.warning(
+            f"Unrecognized OTLP protocol '{protocol}', assuming gRPC-style "
+            "endpoint defaults (this module's own documented bias -- see "
+            "_validate_apm_connectivity); exporter creation will still raise "
+            "a clear error for this protocol"
+        )
     if headers is None:
         headers = _parse_otlp_headers()
 
@@ -155,7 +178,12 @@ def configure_opentelemetry(
             # (issue #77). `endpoint` here is the shared base used for both
             # traces (below) and log forwarding (later in this function), so
             # fixing it here fixes the same wrong-default-port defect for
-            # both signals at once.
+            # both signals at once. Documented bias (shared with
+            # `_validate_apm_connectivity` in `_validation.py`): only a
+            # recognized HTTP variant gets the HTTP port; anything else
+            # (including an already-warned-about unrecognized protocol)
+            # assumes gRPC's port, matching this function's own "grpc"
+            # default when `protocol` is unspecified.
             default_port = 4318 if protocol in ("http/protobuf", "http") else 4317
             endpoint = os.getenv(
                 "OTEL_EXPORTER_OTLP_ENDPOINT", f"http://localhost:{default_port}"

@@ -24,10 +24,17 @@ def _validate_apm_connectivity(
         host = parsed.hostname or "localhost"
         if parsed.port:
             port = parsed.port
-        elif protocol == "grpc":
-            port = 4317
-        else:
+        elif protocol in ("http/protobuf", "http"):
             port = 4318
+        else:
+            # Anything that isn't a recognized HTTP variant (including an
+            # unrecognized/invalid protocol string) assumes the gRPC port.
+            # This mirrors the same bias in configure_opentelemetry's
+            # default-endpoint fallback (kibana/observability/_config.py) --
+            # the module's own default `protocol` (when unspecified) is
+            # "grpc", so an unrecognized value is treated the same way rather
+            # than silently guessing the HTTP port.
+            port = 4317
 
         for attempt in range(max_retries + 1):
             try:
