@@ -172,20 +172,32 @@ def configure_opentelemetry(
     # function would still claim otherwise. Reuse the provider we installed
     # (if it is still the global one) and swap its span processors instead;
     # only the first configuration creates and installs a provider.
+    #
+    # Whether this call is a *reconfiguration* is a different question from
+    # whether the provider can be reused: when another component owns the
+    # global provider, kibana-py builds a fresh private provider every time,
+    # and calling each of those a first-time "configured" would be the same
+    # overclaim in a different disguise. Read before installing anything,
+    # since installing is what changes the answer.
+    reconfiguring = _obs._has_configured_tracer_provider()
     tracer_provider = _obs._get_reconfigurable_tracer_provider()
-    reconfiguring = tracer_provider is not None
     if tracer_provider is None:
         tracer_provider = TracerProvider(resource=resource)
     elif getattr(tracer_provider, "resource", None) != resource:
         # A provider's Resource is fixed at construction, so a changed
         # service name/resource genuinely cannot be applied to spans without
         # a new process. Say so rather than let the caller assume it took.
+        # Scoped to spans on purpose: log forwarding builds a fresh
+        # LoggerProvider on every call, so forwarded logs *do* pick up the
+        # new attributes — an asymmetry worth naming rather than papering
+        # over with a blanket "resource changes don't apply".
         logger.warning(
             "Reconfiguring the existing OpenTelemetry tracer provider: "
             "exporters are being replaced, but resource attributes (service "
-            "name/version) keep the values from the first configuration — "
-            "OpenTelemetry fixes a provider's resource at creation. Restart "
-            "the process to change them."
+            "name/version) keep the values from the first configuration "
+            "for spans; forwarded logs pick up the new attributes. "
+            "OpenTelemetry fixes a provider's resource at creation — restart "
+            "the process to change the attributes on spans."
         )
 
     span_processors: list[Any] = []

@@ -169,9 +169,91 @@ FAILED tests/unit/test_observability.py::TestImportGuardMatrix::test_import_kiba
 3 failed, 128 deselected in 0.52s
 ```
 
-`test_configure_warns_when_foreign_provider_blocks_install` was renamed to
-`test_configure_warns_but_still_exports_under_foreign_provider` during
-implementation — see "Design correction" below.
+The transcript above witnesses `test_configure_warns_when_foreign_provider_blocks_install`
+— the test of the *abandoned* hard-refusal design (see "Design correction" below).
+It is not evidence for the test that shipped in its place, so the shipped test was
+re-run against the pre-fix tree (pre-fix `kibana/observability/` checked out from
+`c139683`, current tests kept):
+
+```
+        with caplog.at_level(logging.DEBUG, logger="kibana.observability"):
+            _configure("http://localhost:8200")
+        assert trace.get_tracer_provider() is foreign
+>       assert "already installed the global OpenTelemetry tracer" in caplog.text
+E       AssertionError: assert 'already installed the global OpenTelemetry tracer' in 'INFO     kibana.observability:_config.py:215 OTLP exporter configured: http://localhost:8200/v1/traces (protocol: htt...abled\nINFO     kibana.observability:_config.py:257 OpenTelemetry configured for service: kibana-py (logs: disabled)\n'
+tests/unit/test_observability.py:498: AssertionError
+------------------------------ Captured log call -------------------------------
+INFO     kibana.observability:_config.py:215 OTLP exporter configured: http://localhost:8200/v1/traces (protocol: http/protobuf)
+WARNING  opentelemetry.trace:__init__.py:556 Overriding of current TracerProvider is not allowed
+INFO     kibana.observability:_tracing.py:141 Kibana OpenTelemetry instrumentation enabled
+INFO     kibana.observability:_config.py:257 OpenTelemetry configured for service: kibana-py (logs: disabled)
+=========================== short test summary info ============================
+FAILED tests/unit/test_observability.py::TestConfigureOpenTelemetryIdempotency::test_configure_warns_but_still_exports_under_foreign_provider
+1 failed in 0.08s
+```
+
+The captured log is the defect in four lines: OTel refuses the override, and
+kibana-py logs `OpenTelemetry configured for service` with no mention that the
+global provider belongs to someone else.
+
+## Fix round (spec-compliance review)
+
+One MAJOR and six actionable minors, all addressed on the same branch.
+
+**MAJOR — the resource-attribute warning was unexecuted by the whole suite.** No
+test reached `_config.py`'s "resource attributes are pinned" branch, so nothing
+pinned it. `test_reconfigure_warns_that_resource_attributes_stay_pinned` now
+configures twice with different `service_name`s and asserts both halves — the
+warning fires, *and* the installed provider keeps the first resource. Witnessed RED
+against the pre-fix tree by the same checkout method:
+
+```
+        _configure("first-service")
+        provider = trace.get_tracer_provider()
+        assert provider.resource.attributes["service.name"] == "first-service"
+        with caplog.at_level(logging.WARNING, logger="kibana.observability"):
+            _configure("second-service")
+>       assert "resource attributes" in caplog.text
+E       AssertionError: assert 'resource attributes' in 'WARNING  opentelemetry.trace:__init__.py:556 Overriding of current TracerProvider is not allowed\n'
+tests/unit/test_observability.py:450: AssertionError
+------------------------------ Captured log call -------------------------------
+WARNING  opentelemetry.trace:__init__.py:556 Overriding of current TracerProvider is not allowed
+=========================== short test summary info ============================
+FAILED tests/unit/test_observability.py::TestConfigureOpenTelemetryIdempotency::test_reconfigure_warns_that_resource_attributes_stay_pinned
+1 failed in 0.08s
+```
+
+Pre-fix the only warning in sight is OTel's own `Overriding of current
+TracerProvider is not allowed` — logged by the SDK, invisible to a caller reading
+kibana-py's output, and never explaining what did or did not apply.
+
+**Minor 1 — the warning over-claimed.** It said resource attributes "keep the values
+from the first configuration" full stop, but `_setup_log_forwarding` builds a fresh
+`LoggerProvider` on every call, so *forwarded logs do pick up the new attributes*;
+only spans are pinned. Warning text, changelog and user guide now say so, and the
+test asserts the scoping (`"for spans"`) rather than just the presence of a warning.
+
+**Minor 2 — "configured" vs "reconfigured" was derived from the wrong thing.** It
+followed whether the provider was reusable, which is always false when another
+component owns the global provider — so that path logged "OpenTelemetry configured"
+on *every* call, contradicting the claim this fix makes elsewhere. It now follows
+whether kibana-py itself had configured before (`_has_configured_tracer_provider()`,
+read before installing anything, since installing is what changes the answer). The
+foreign-provider test pins both calls' wording.
+
+**Minor 4 — the corrupted-install cases asserted only that the import survived.**
+They now assert the full availability-flag map per case, and those maps are the same
+ones the `ImportError` matrix asserts for the same prefixes: degradation must not
+depend on which exception a broken install happens to raise. Predicted from the
+`ImportError` matrix before running; observed identical.
+
+**Minors 5/6** are changelog and report bookkeeping: the two folded-in `_imports.py`
+items now have their own `Fixed` bullet rather than riding along inside the #76
+bullet, and the report records the test-count deviation.
+
+Two review findings were resolved by ruling rather than change: the user-guide
+section stays (sign-off granted), and the widening of the *outer* import guards to
+`AttributeError` stays (intent confirmed; disclosed and tested).
 
 ## Battle test (live, mandatory) — pre-fix baseline vs post-fix
 
@@ -388,7 +470,8 @@ pre-fix as shown above).
   `OTelLogHandler` holds a direct reference to the provider it was built with — the
   global logger provider is only what *other* code would resolve. Also a follow-up,
   not a regression.
-- **Resource attributes cannot change on reconfigure** for traces (OpenTelemetry
+- **Resource attributes cannot change on reconfigure** for spans (OpenTelemetry
   fixes a provider's resource at construction). Now warned about explicitly rather
-  than silently ignored. Log forwarding, which builds a new provider per call, does
-  pick up the new resource — an asymmetry the warning does not spell out.
+  than silently ignored, and — after the fix round — the warning names the
+  asymmetry itself: log forwarding builds a new provider per call, so forwarded
+  logs *do* pick up the new attributes while spans keep the first configuration's.

@@ -407,6 +407,58 @@ class TestConfigureOpenTelemetryIdempotency:
 
     @patch.dict("os.environ", {}, clear=True)
     @patch("kibana.observability._create_otlp_exporter_with_error_handling")
+    def test_reconfigure_warns_that_resource_attributes_stay_pinned(
+        self, mock_span_exporter, caplog
+    ):
+        """A changed service name must warn instead of appearing to apply.
+
+        An OpenTelemetry provider's ``Resource`` is fixed when the provider is
+        constructed, and reconfiguration deliberately keeps the installed
+        provider (that is what makes the new exporter take effect at all). So
+        a second call with a different ``service_name`` changes the exporters
+        but *cannot* change the service name on spans — the one thing about
+        reconfiguration that genuinely does not apply, and therefore the one
+        thing that must be said out loud rather than left for the caller to
+        discover in the APM UI.
+        """
+        from opentelemetry import trace
+
+        from kibana.observability import KibanaInstrumentor, configure_opentelemetry
+
+        mock_span_exporter.side_effect = [
+            _RecordingSpanExporter("first"),
+            _RecordingSpanExporter("second"),
+        ]
+        KibanaInstrumentor.get_instance().disable()
+
+        def _configure(service_name):
+            configure_opentelemetry(
+                enabled=True,
+                service_name=service_name,
+                endpoint="http://localhost:8200",
+                protocol="http/protobuf",
+                validate_endpoint=False,
+            )
+
+        _configure("first-service")
+        provider = trace.get_tracer_provider()
+        assert provider.resource.attributes["service.name"] == "first-service"
+
+        with caplog.at_level(logging.WARNING, logger="kibana.observability"):
+            _configure("second-service")
+
+        assert "resource attributes" in caplog.text
+        assert "for spans" in caplog.text, (
+            "the warning must scope itself to spans: forwarded logs get a "
+            "fresh logger provider per call and do pick up the new attributes"
+        )
+        assert trace.get_tracer_provider() is provider
+        assert (
+            provider.resource.attributes["service.name"] == "first-service"
+        ), "spans must keep the first configuration's service name"
+
+    @patch.dict("os.environ", {}, clear=True)
+    @patch("kibana.observability._create_otlp_exporter_with_error_handling")
     def test_configure_warns_but_still_exports_under_foreign_provider(
         self, mock_span_exporter, caplog
     ):
@@ -444,6 +496,7 @@ class TestConfigureOpenTelemetryIdempotency:
 
         assert trace.get_tracer_provider() is foreign
         assert "already installed the global OpenTelemetry tracer" in caplog.text
+        assert "OpenTelemetry configured for service" in caplog.text
 
         instrumentor = KibanaInstrumentor.get_instance()
         tracer = instrumentor.get_tracer()
@@ -457,7 +510,9 @@ class TestConfigureOpenTelemetryIdempotency:
 
         # ...and reconfiguration must apply there too, without leaking the
         # superseded exporter.
-        _configure("http://localhost:8200?run=second")
+        caplog.clear()
+        with caplog.at_level(logging.DEBUG, logger="kibana.observability"):
+            _configure("http://localhost:8200?run=second")
         tracer = KibanaInstrumentor.get_instance().get_tracer()
         tracer.start_span("after-reconfigure").end()
         KibanaInstrumentor.get_instance()._tracer_provider.force_flush()
@@ -465,6 +520,14 @@ class TestConfigureOpenTelemetryIdempotency:
         assert second.exported == ["after-reconfigure"]
         assert first.exported == ["private-provider-span"]
         assert first.shutdown_calls == 1
+        # The wording must follow whether kibana-py had a previous
+        # configuration, not whether it happens to own the global provider:
+        # this second call is a reconfiguration by every meaning the caller
+        # cares about, even though a fresh private provider was built for it.
+        assert "OpenTelemetry reconfigured for service" in caplog.text
+        assert "OpenTelemetry configured for service" not in caplog.text.replace(
+            "OpenTelemetry reconfigured for service", ""
+        )
 
 
 @pytest.mark.skipif(not OTEL_AVAILABLE, reason="OpenTelemetry not installed")
@@ -2589,17 +2652,53 @@ class TestImportGuardMatrix:
         assert self._parse(result.stdout) == expected
 
     @pytest.mark.parametrize(
-        "blocked",
+        ("blocked", "expected"),
         [
             pytest.param(
                 ("opentelemetry.exporter.otlp.proto.grpc",),
+                {
+                    "OTEL_AVAILABLE": "True",
+                    "GRPC_EXPORTER_AVAILABLE": "False",
+                    "HTTP_EXPORTER_AVAILABLE": "True",
+                    "OTLPSpanExporter_bound": "False",
+                    "HTTPOTLPSpanExporter_bound": "True",
+                    "OTEL_LOGS_AVAILABLE": "True",
+                    "ConsoleLogExporter_present": "True",
+                    "ConsoleLogExporter_bound": "True",
+                },
                 id="corrupt-grpc-exporter",
             ),
-            pytest.param(("opentelemetry.sdk._logs",), id="corrupt-logs-sdk"),
-            pytest.param(("opentelemetry",), id="corrupt-otel"),
+            pytest.param(
+                ("opentelemetry.sdk._logs",),
+                {
+                    "OTEL_AVAILABLE": "True",
+                    "GRPC_EXPORTER_AVAILABLE": "False",
+                    "HTTP_EXPORTER_AVAILABLE": "True",
+                    "OTLPSpanExporter_bound": "False",
+                    "HTTPOTLPSpanExporter_bound": "True",
+                    "OTEL_LOGS_AVAILABLE": "False",
+                    "ConsoleLogExporter_present": "True",
+                    "ConsoleLogExporter_bound": "False",
+                },
+                id="corrupt-logs-sdk",
+            ),
+            pytest.param(
+                ("opentelemetry",),
+                {
+                    "OTEL_AVAILABLE": "False",
+                    "GRPC_EXPORTER_AVAILABLE": "False",
+                    "HTTP_EXPORTER_AVAILABLE": "False",
+                    "OTLPSpanExporter_bound": "False",
+                    "HTTPOTLPSpanExporter_bound": "False",
+                    "OTEL_LOGS_AVAILABLE": "False",
+                    "ConsoleLogExporter_present": "True",
+                    "ConsoleLogExporter_bound": "False",
+                },
+                id="corrupt-otel",
+            ),
         ],
     )
-    def test_import_kibana_under_corrupted_install(self, blocked):
+    def test_import_kibana_under_corrupted_install(self, blocked, expected):
         """A *corrupted* OTEL install must degrade, not kill ``import kibana``.
 
         The guards in ``_imports.py`` originally caught ``ImportError`` only,
@@ -2609,6 +2708,12 @@ class TestImportGuardMatrix:
         dependency that no longer exports some symbol — and that propagated
         straight out of ``import kibana`` for every user of this client,
         observability opted into or not (#76, folded-in review item).
+
+        The expected maps are the *same* ones the ImportError matrix asserts
+        for these prefixes: degradation must not depend on which exception a
+        broken install happens to raise. Asserting the whole map (not just
+        "it imported") is what keeps a corrupted grpc exporter from quietly
+        taking the working HTTP one down with it (#70's defect class).
         """
         result = _run_with_blocked_imports(blocked, self.PROBE, error="AttributeError")
 
@@ -2616,5 +2721,4 @@ class TestImportGuardMatrix:
             f"`import kibana` crashed on a corrupted install ({blocked!r}):\n"
             f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
         )
-        values = self._parse(result.stdout)
-        assert values["ConsoleLogExporter_present"] == "True"
+        assert self._parse(result.stdout) == expected

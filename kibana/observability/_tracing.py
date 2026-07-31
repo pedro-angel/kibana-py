@@ -263,6 +263,18 @@ _installed_tracer_provider: Any | None = None
 _installed_span_processor: _SwappableSpanProcessor | None = None
 
 
+def _has_configured_tracer_provider() -> bool:
+    """Whether kibana-py already configured a tracer provider in this process.
+
+    Deliberately *not* the same question as
+    :func:`_get_reconfigurable_tracer_provider`: a provider kibana-py had to
+    keep private (because another component owns the OTel global) cannot be
+    reconfigured in place, but it is still a previous configuration — the
+    caller's next call is a reconfiguration and must be described as one.
+    """
+    return _installed_tracer_provider is not None
+
+
 def _get_reconfigurable_tracer_provider() -> Any | None:
     """Return the provider kibana-py installed, if it is still the global one.
 

@@ -183,7 +183,9 @@ silently absorbed:
 
 - **Resource attributes are fixed when the provider is created.** A later call
   with a different `service_name`/`resource` logs a warning and keeps the
-  original values for spans; only a new process can change them.
+  original values **for spans** — only a new process can change those.
+  Forwarded **logs** do pick up the new attributes, because log forwarding
+  builds a fresh logger provider on every call.
 - **The global tracer provider can only be installed once per process.** If
   another component installed one first, kibana-py logs a warning and traces
   through a provider of its own — its spans are still exported, but
