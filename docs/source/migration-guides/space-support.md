@@ -563,9 +563,10 @@ NotFoundError: Connector not found
    # Validate all spaces upfront
    spaces = ["marketing", "sales", "support"]
    for space_id in spaces:
-       client.space(space_id)  # Validates and caches
+       client.space(space_id)  # Asks the server, then seeds the client's cache
 
-   # Now all operations use cached validation
+   # Now every namespace of this client reuses those verdicts for the cache
+   # TTL (5 minutes) instead of re-validating
    for space_id in spaces:
        client.actions.create(
            name=f"Connector for {space_id}",

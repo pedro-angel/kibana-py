@@ -8,6 +8,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **`spaces.create()` / `spaces.delete()` now invalidate the space-validation
+  cache.** Space existence is cached for 5 minutes, but nothing ever cleared an
+  entry: after `client.dashboards.get_all(space_id="team-a")` raised
+  `SpaceNotFoundError` (caching the miss), a successful
+  `client.spaces.create(id="team-a")` left the miss in place, so the same call
+  kept raising `SpaceNotFoundError` for up to 300 s; symmetrically, a space
+  deleted after a successful validation kept passing validation for the rest of
+  the TTL ([#72](https://github.com/pedro-angel/kibana-py/issues/72)). Both
+  `create` and `delete` now drop the affected space id from the cache after the
+  request succeeds (sync and async), so the next space-scoped call re-validates
+  against Kibana immediately. Space operations that cannot change whether a
+  space exists — `update`, `copy_saved_objects`,
+  `resolve_copy_saved_objects_errors`, `disable_legacy_url_aliases`,
+  `get_shareable_references`, `update_objects_spaces` — deliberately leave the
+  cache alone.
+- **One space-validation cache per client instead of one per namespace, on a
+  monotonic clock.** Each namespace client kept its own cache, so a single
+  space was re-validated with a fresh `GET /api/spaces/space/{id}` once per
+  namespace touched (up to ~40 duplicate lookups per client), and the TTL was
+  measured with `time.time()`, letting an NTP step or DST change stretch or
+  shrink a cached verdict ([#73](https://github.com/pedro-angel/kibana-py/issues/73)).
+  The cache is now a single `SpaceValidationCache` created by the top-level
+  `Kibana`/`AsyncKibana` client (`kibana/_space_cache.py`) that every namespace
+  client — including sub-clients such as `alerting.rule`, every namespace of a
+  `client.space(...)`-scoped client, and the clients `options()` returns —
+  shares, measured with `time.monotonic()` (matching
+  `kibana/_rate_limiter.py`). `client.space(...)` still checks the space against
+  the server when it is constructed (a scoped client must fail on a space that
+  has since disappeared) but now seeds the shared cache with the result instead
+  of discarding it. One lookup per space per TTL window for the whole client,
+  verified live: six namespaces → 1 lookup, and `client.space(X)` plus two
+  namespace calls → 1 lookup (was 2). Default TTL (300 s) and all public
+  behavior are unchanged; `_clear_space_cache()` still works and now clears the
+  shared cache.
 - **A scheme-less host string no longer silently routes traffic to
   `localhost`.** `_build_node_configs` (`kibana/_sync/client/__init__.py`,
   shared by `AsyncKibana` via import) parsed host strings with `urlparse`,

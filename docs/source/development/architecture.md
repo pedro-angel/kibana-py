@@ -171,13 +171,21 @@ class NamespaceClient:
         self._client = client  # delegate requests to the parent client
         self._default_space_id = default_space_id
         self._validate_spaces = validate_spaces
-        self._space_cache = {}  # space-existence cache (5-minute TTL)
+
+    @property
+    def _space_validation_cache(self) -> SpaceValidationCache:
+        """The parent client's space cache -- borrowed, never owned.
+
+        Resolved per use, so a namespace always follows its parent's current
+        cache (5-minute TTL, one per Kibana/AsyncKibana instance).
+        """
+        return shared_space_cache(self._client)
 ```
 
 **Responsibilities**:
 - Space path construction (`/s/{space_id}/api/...`)
 - Space ID format validation
-- Space existence validation with caching
+- Space existence validation against the client-wide cache
 - Cache management (5-minute TTL)
 - Error enhancement with space context
 
@@ -443,28 +451,53 @@ configure_opentelemetry(
 
 ### Space Validation Cache
 
-Space validation results are cached to minimize API calls:
+Space validation results are cached to minimize API calls. The cache
+(`kibana/_space_cache.py`) belongs to the top-level client, and every namespace
+client borrows it — so a space is looked up once for the whole client, not once
+per namespace:
 
 ```python
-class NamespaceClient:
-    def __init__(self, ...):
-        self._space_cache: dict[str, tuple[bool, float]] = {}
-        self._cache_ttl: float = 300.0  # 5 minutes
+class SpaceValidationCache:
+    def __init__(self) -> None:
+        self.entries: dict[str, bool] = {}
+        self.timestamps: dict[str, float] = {}
+        self.ttl: float = DEFAULT_SPACE_CACHE_TTL  # 300.0 seconds
+        self._lock = threading.Lock()
+        self._generation = 0
 
-    def _is_space_cached(self, space_id: str) -> bool:
-        """Check if space validation is cached."""
-        if space_id in self._space_cache:
-            is_valid, timestamp = self._space_cache[space_id]
-            if time.time() - timestamp < self._cache_ttl:
-                return True
-        return False
+    def lookup(self, space_id: str) -> bool | None:
+        """The cached verdict, or None when absent or expired."""
+        with self._lock:
+            if space_id not in self.entries:
+                return None
+            stamp = self.timestamps.get(space_id, float("-inf"))
+            if _now() - stamp >= self.ttl:  # _now is the time.monotonic seam
+                self.entries.pop(space_id, None)  # evict, don't accumulate
+                self.timestamps.pop(space_id, None)
+                return None
+            return self.entries[space_id]
 ```
 
 **Cache Characteristics**:
-- 5-minute TTL by default
-- Per-client cache (not global)
+- 5-minute TTL by default, measured on the monotonic clock (a wall-clock step
+  cannot stretch or shrink a verdict)
+- One cache per client instance, shared by every namespace client (not global),
+  and by the clients `options()` returns (same server, same facts)
+- Seeded by `client.space(...)`, whose construction-time check always asks the
+  server (a scoped client must fail on a space that has since disappeared) and
+  then stores the answer for its namespaces to reuse
 - Automatic invalidation on TTL expiry
-- Manual cache clearing available
+- Explicit invalidation: `spaces.create()` / `spaces.delete()` drop the affected
+  space id, so a created space is usable immediately and a deleted one stops
+  validating immediately
+- Manual cache clearing available (`_clear_space_cache()` on any namespace
+  client clears the shared cache)
+- Thread-safe: every operation holds a `threading.Lock` (as
+  `kibana/_rate_limiter.py` does). Writers snapshot a generation counter before
+  asking the server and pass it to `remember()`, so an invalidation that lands
+  while a lookup is in flight is never overwritten by the late verdict. No I/O
+  happens under the lock, so two callers missing at once still both ask — the
+  cost is a redundant request, never a wrong verdict
 
 ## Extension Points
 

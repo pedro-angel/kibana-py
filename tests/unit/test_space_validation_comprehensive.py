@@ -104,7 +104,8 @@ class TestSpaceValidationComprehensive:
         # Test with custom TTL
         client._cache_ttl = 60  # 1 minute
 
-        with patch("time.time") as mock_time:
+        # TTL is measured on the cache module's monotonic clock seam.
+        with patch("kibana._space_cache._now") as mock_time:
             # First validation at time 0
             mock_time.return_value = 0
             client._validate_space_exists("marketing")
@@ -190,7 +191,11 @@ class TestSpaceValidationComprehensive:
         # Set up cache with multiple spaces
         client._space_cache.update({"marketing": True, "sales": False, "dev": True})
         client._cache_timestamps.update(
-            {"marketing": time.time(), "sales": time.time(), "dev": time.time()}
+            {
+                "marketing": time.monotonic(),
+                "sales": time.monotonic(),
+                "dev": time.monotonic(),
+            }
         )
 
         # Clear non-existent space (should not error)
@@ -457,7 +462,7 @@ class TestSpaceCachingPerformance:
 
         # Fill cache with many entries
         space_count = 1000
-        current_time = time.time()
+        current_time = time.monotonic()
 
         for i in range(space_count):
             space_id = f"space-{i}"
@@ -482,7 +487,9 @@ class TestSpaceCachingPerformance:
         assert len(client._space_cache) == 1
         assert len(client._cache_timestamps) == 1
 
-    @patch("time.time")
+    # TTL is measured on the cache module's monotonic clock seam; patching
+    # time.monotonic itself would also move asyncio's event-loop clock.
+    @patch("kibana._space_cache._now")
     def test_cache_expiry_with_mixed_ages(self, mock_time):
         """Test cache expiry with entries of different ages."""
         mock_client = Mock()

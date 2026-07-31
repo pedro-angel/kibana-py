@@ -10,6 +10,7 @@ from elastic_transport import NodeConfig, Transport
 from elastic_transport.client_utils import parse_cloud_id
 
 from kibana._rate_limiter import RateLimiter
+from kibana._space_cache import shared_space_cache
 from kibana._sync.client._base import DEFAULT, BaseClient, DefaultType
 from kibana._sync.client.actions import ActionsClient
 from kibana._sync.client.agent_builder import AgentBuilderClient
@@ -636,15 +637,25 @@ class SpaceScopedKibana:
         """
         Validate space exists when creating space-scoped client.
 
+        Deliberately asks the server rather than trusting a cached verdict --
+        constructing a scoped client is the moment to fail on a space that has
+        since disappeared. The answer then seeds the shared cache, so the
+        namespaces of this client reuse it instead of re-asking.
+
         :raises SpaceNotFoundError: If the space doesn't exist
         """
+        cache = shared_space_cache(self._client)
+        generation = cache.generation  # snapshot before asking (see _space_cache)
         try:
             self._client.spaces.get(id=self._space_id)
         except NotFoundError:
             # The space genuinely does not exist (404). Any other error (auth,
             # network, serialization) propagates unchanged rather than being
-            # mislabeled as a missing space.
+            # mislabeled as a missing space -- and, like elsewhere, is not
+            # cached, so a transient failure cannot pin the space as "missing".
+            cache.remember(self._space_id, False, generation=generation)
             raise SpaceNotFoundError(self._space_id) from None
+        cache.remember(self._space_id, True, generation=generation)
 
     @property
     def spaces(self) -> SpacesClient:

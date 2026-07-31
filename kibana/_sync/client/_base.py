@@ -20,6 +20,7 @@ from elastic_transport import (
     TransportApiResponse,
 )
 
+from kibana._space_cache import SpaceValidationCache
 from kibana.exceptions import HTTP_EXCEPTIONS, ApiError, translate_transport_errors
 from kibana.observability import KibanaInstrumentor, span_context
 
@@ -293,6 +294,9 @@ class BaseClient:
         self._request_timeout: float | None = None
         self._custom_headers: Mapping[str, str] | None = None
         self._rate_limiter: Any | None = None
+        # One space-existence cache for the whole client: every namespace client
+        # borrows it, and SpacesClient invalidates it (see kibana._space_cache).
+        self._space_validation_cache = SpaceValidationCache()
 
     def options(
         self,
@@ -305,10 +309,20 @@ class BaseClient:
     ) -> Self:
         """Create a new client instance with modified options.
 
-        This method allows per-request configuration without modifying the
-        original client instance. It creates a shallow copy with updated
+        This method allows per-request configuration without changing the
+        original client's options. It creates a shallow copy with updated
         settings, enabling different authentication or configuration for
         specific requests.
+
+        The copy is not fully independent: it keeps the original's transport
+        and shares its space-validation cache, so a space verdict cached (or
+        invalidated) through either client is seen by both. That cache is
+        deliberately NOT scoped per identity -- it records whether a space
+        *exists*, not what a caller may do with it, and every request is still
+        authorized by Kibana on its own credentials. The only visible
+        consequence is that a clone whose credentials cannot see a space may
+        get the endpoint's own 403/404 for a space-scoped call instead of this
+        client's pre-flight ``SpaceNotFoundError``.
 
         Args:
             api_key: API key for authentication. Can be:
@@ -325,8 +339,9 @@ class BaseClient:
                 timeout for this client instance.
 
         Returns:
-            A new BaseClient instance with the specified options applied.
-            The original client remains unchanged.
+            A new BaseClient instance with the specified options applied. The
+            original client's options are unchanged (its space-validation cache
+            is shared, as described above).
 
         Example:
             >>> # Create client with default auth
@@ -355,6 +370,13 @@ class BaseClient:
         new_client._request_timeout = self._request_timeout
         new_client._custom_headers = self._custom_headers
         new_client._rate_limiter = self._rate_limiter
+        # Same server, so the same space-existence facts: share the cache object
+        # (not a copy) so a verdict or an invalidation on either client is seen
+        # by both. Namespace clients read it through their parent, so the clone's
+        # already-wired namespaces pick this up. Sharing across differing
+        # credentials is intended: existence is not a per-identity fact, and the
+        # endpoint still authorizes every request (see the docstring).
+        new_client._space_validation_cache = self._space_validation_cache
 
         # Apply new options if provided
         if not isinstance(api_key, DefaultType):

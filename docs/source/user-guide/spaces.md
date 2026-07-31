@@ -253,6 +253,21 @@ connector2 = client.actions.create(
 )
 ```
 
+The cache is shared by every namespace of a client, so the lookup above is paid
+once no matter how many namespaces (`actions`, `dashboards`, `saved_objects`, …)
+target the same space. `client.space("marketing")` also seeds it: that call
+always checks the space against the server, and its namespaces then reuse the
+result. Creating or deleting a space through the same client
+clears its cached verdict, so a space is usable immediately after
+`spaces.create()` and stops validating immediately after `spaces.delete()` —
+no need to wait out the TTL:
+
+```python
+client.spaces.create(id="marketing", name="Marketing")
+# Works right away, even if an earlier call raised SpaceNotFoundError
+client.dashboards.get_all(space_id="marketing")
+```
+
 ### Disabling Validation
 
 For performance-critical scenarios, you can disable validation:
