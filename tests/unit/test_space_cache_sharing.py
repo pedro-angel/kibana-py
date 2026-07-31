@@ -143,6 +143,50 @@ class TestSharedSpaceCacheSync:
         client.dashboards.get_all(space_id=SPACE_ID)
         assert double.space_lookups == 2
 
+    def test_scoped_client_construction_seeds_the_cache(self):
+        """#73: client.space(X) + namespace calls cost one lookup in total.
+
+        The constructor keeps its real GET -- a scoped client must fail on a
+        space that no longer exists -- but its result seeds the shared cache
+        instead of being thrown away.
+        """
+        double = _SpacesDouble(existing=[SPACE_ID])
+        client = _sync_client(double)
+
+        scoped = client.space(SPACE_ID)
+        scoped.dashboards.get_all()
+        scoped.actions.get_all()
+
+        assert double.space_lookups == 1
+
+    def test_scoped_client_construction_seeds_a_missing_space(self):
+        """A failed construction seeds the negative verdict too."""
+        double = _SpacesDouble()  # space does not exist
+        client = _sync_client(double)
+
+        with pytest.raises(SpaceNotFoundError):
+            client.space(SPACE_ID)
+        with pytest.raises(SpaceNotFoundError):
+            client.dashboards.get_all(space_id=SPACE_ID)
+
+        assert double.space_lookups == 1
+
+    def test_options_clone_shares_the_cache(self):
+        """An options() clone talks to the same server -- and the same cache."""
+        double = _SpacesDouble(existing=[SPACE_ID])
+        client = _sync_client(double)
+
+        client.dashboards.get_all(space_id=SPACE_ID)
+        clone = client.options(request_timeout=30.0)
+        clone.dashboards.get_all(space_id=SPACE_ID)  # served from the shared cache
+        assert double.space_lookups == 1
+
+        # ... and an invalidation on either side is seen by both.
+        clone.spaces.delete(id=SPACE_ID)
+        with pytest.raises(SpaceNotFoundError):
+            client.dashboards.get_all(space_id=SPACE_ID)
+        assert double.space_lookups == 2
+
 
 class TestSharedSpaceCacheAsync:
     """Async twin of :class:`TestSharedSpaceCacheSync`."""
@@ -202,4 +246,43 @@ class TestSharedSpaceCacheAsync:
 
         now["monotonic"] += 2.0  # past the TTL -> re-validate
         await client.dashboards.get_all(space_id=SPACE_ID)
+        assert double.space_lookups == 2
+
+    async def test_scoped_client_construction_seeds_the_cache(self):
+        """#73: client.space(X) + namespace calls cost one lookup in total."""
+        double = _SpacesDouble(existing=[SPACE_ID])
+        client = _async_client(double)
+
+        scoped = await client.space(SPACE_ID)
+        await scoped.dashboards.get_all()
+        await scoped.actions.get_all()
+
+        assert double.space_lookups == 1
+
+    async def test_scoped_client_construction_seeds_a_missing_space(self):
+        """A failed construction seeds the negative verdict too."""
+        double = _SpacesDouble()  # space does not exist
+        client = _async_client(double)
+
+        with pytest.raises(SpaceNotFoundError):
+            await client.space(SPACE_ID)
+        with pytest.raises(SpaceNotFoundError):
+            await client.dashboards.get_all(space_id=SPACE_ID)
+
+        assert double.space_lookups == 1
+
+    async def test_options_clone_shares_the_cache(self):
+        """An options() clone talks to the same server -- and the same cache."""
+        double = _SpacesDouble(existing=[SPACE_ID])
+        client = _async_client(double)
+
+        await client.dashboards.get_all(space_id=SPACE_ID)
+        clone = client.options(request_timeout=30.0)
+        await clone.dashboards.get_all(space_id=SPACE_ID)
+        assert double.space_lookups == 1
+
+        # ... and an invalidation on either side is seen by both.
+        await clone.spaces.delete(id=SPACE_ID)
+        with pytest.raises(SpaceNotFoundError):
+            await client.dashboards.get_all(space_id=SPACE_ID)
         assert double.space_lookups == 2

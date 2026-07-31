@@ -636,15 +636,24 @@ class SpaceScopedKibana:
         """
         Validate space exists when creating space-scoped client.
 
+        Deliberately asks the server rather than trusting a cached verdict --
+        constructing a scoped client is the moment to fail on a space that has
+        since disappeared. The answer then seeds the shared cache, so the
+        namespaces of this client reuse it instead of re-asking.
+
         :raises SpaceNotFoundError: If the space doesn't exist
         """
+        cache = self._client._space_validation_cache
         try:
             self._client.spaces.get(id=self._space_id)
         except NotFoundError:
             # The space genuinely does not exist (404). Any other error (auth,
             # network, serialization) propagates unchanged rather than being
-            # mislabeled as a missing space.
+            # mislabeled as a missing space -- and, like elsewhere, is not
+            # cached, so a transient failure cannot pin the space as "missing".
+            cache.remember(self._space_id, False)
             raise SpaceNotFoundError(self._space_id) from None
+        cache.remember(self._space_id, True)
 
     @property
     def spaces(self) -> SpacesClient:

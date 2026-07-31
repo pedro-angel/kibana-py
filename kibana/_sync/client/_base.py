@@ -359,6 +359,11 @@ class BaseClient:
         new_client._request_timeout = self._request_timeout
         new_client._custom_headers = self._custom_headers
         new_client._rate_limiter = self._rate_limiter
+        # Same server, so the same space-existence facts: share the cache object
+        # (not a copy) so a verdict or an invalidation on either client is seen
+        # by both. Namespace clients read it through their parent, so the clone's
+        # already-wired namespaces pick this up.
+        new_client._space_validation_cache = self._space_validation_cache
 
         # Apply new options if provided
         if not isinstance(api_key, DefaultType):

@@ -37,9 +37,16 @@ class AsyncNamespaceClient:
         self._client = client
         self._default_space_id = default_space_id
         self._validate_spaces = validate_spaces
-        # Borrowed, never owned: one cache per top-level client, so all
-        # namespaces share verdicts and AsyncSpacesClient can invalidate them.
-        self._space_validation_cache: SpaceValidationCache = shared_space_cache(client)
+
+    @property
+    def _space_validation_cache(self) -> SpaceValidationCache:
+        """The parent client's space cache -- borrowed, never owned.
+
+        Resolved per use rather than captured at construction, so a namespace
+        client always follows its parent's *current* cache (``options()`` hands
+        a clone the original's cache after the clone has wired its namespaces).
+        """
+        return shared_space_cache(self._client)
 
     @property
     def _space_cache(self) -> dict[str, bool]:

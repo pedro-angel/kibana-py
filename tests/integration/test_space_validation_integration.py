@@ -721,6 +721,42 @@ class TestSpaceLookupDeduplication:
 
         assert lookups["count"] == 1
 
+    def test_scoped_client_and_its_namespaces_trigger_one_space_lookup(
+        self, kibana_client, created_spaces, unique_space_id
+    ):
+        """`client.space(X)` validates once; its namespaces reuse that verdict."""
+        create_test_space(
+            kibana_client,
+            created_spaces,
+            space_id=unique_space_id,
+            name="Test Space for Scoped Client Dedup",
+        )
+        kibana_client.dashboards._clear_space_cache()
+
+        with count_space_lookups(kibana_client, unique_space_id) as lookups:
+            scoped = kibana_client.space(unique_space_id)
+            scoped.dashboards.get_all()
+            scoped.actions.get_all()
+
+        assert lookups["count"] == 1
+
+    async def test_scoped_client_and_its_namespaces_trigger_one_space_lookup_async(
+        self, async_kibana_client, created_spaces, unique_space_id
+    ):
+        """Async twin: one lookup for `await client.space(X)` + two namespaces."""
+        response = await async_kibana_client.spaces.create(
+            id=unique_space_id, name="Test Space for Scoped Client Dedup Async"
+        )
+        created_spaces.append(response.body["id"])
+        async_kibana_client.dashboards._clear_space_cache()
+
+        with count_space_lookups(async_kibana_client, unique_space_id) as lookups:
+            scoped = await async_kibana_client.space(unique_space_id)
+            await scoped.dashboards.get_all()
+            await scoped.actions.get_all()
+
+        assert lookups["count"] == 1
+
     async def test_many_namespaces_trigger_one_space_lookup_async(
         self, async_kibana_client, created_spaces, unique_space_id
     ):

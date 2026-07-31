@@ -6,7 +6,10 @@
 `kibana/_async/client/utils.py`); `BaseClient` / `AsyncBaseClient`
 (`kibana/_sync/client/_base.py`, `kibana/_async/client/_base.py`);
 `SpacesClient.create` / `.delete` (`kibana/_sync/client/spaces.py`,
-`kibana/_async/client/spaces.py`), on branch `fix/space-cache-72-73`.
+`kibana/_async/client/spaces.py`); `SpaceScopedKibana` /
+`AsyncSpaceScopedKibana` construction-time validation
+(`kibana/_sync/client/__init__.py`, `kibana/_async/client/__init__.py`), on
+branch `fix/space-cache-72-73`.
 **Base commit (pre-fix):** `fb845d4`.
 **Runner:** local developer workstation (macOS, Python 3.11.15) against the
 local `elastic-start-local` stack (Elasticsearch + Kibana 9.x + APM server).
@@ -30,16 +33,32 @@ lens):
 One `SpaceValidationCache` (`kibana/_space_cache.py`) is created by
 `BaseClient.__init__` / `AsyncBaseClient.__init__`, i.e. one per top-level
 `Kibana` / `AsyncKibana`. Every namespace client *borrows* it via
-`shared_space_cache(client)` instead of allocating its own, so all namespaces
-(and sub-clients such as `alerting.rule`, and the namespaces of a
-`client.space(...)`-scoped client, which are constructed against the same parent)
-read and write one set of verdicts. `SpacesClient.create` and `.delete` call
-`self._clear_space_cache(id)` after the request succeeds — create drops a stale
-negative entry, delete drops a stale positive one; clearing unconditionally is
-correct for both directions and simpler than branching. TTL comparisons use
-`time.monotonic()`. `NamespaceClient._space_cache`, `._cache_timestamps` and
-`._cache_ttl` remain as views onto the shared cache, so `_clear_space_cache` and
-existing cache-inspecting tests keep working against the new structure.
+`shared_space_cache(self._client)` — resolved per use, not captured at
+construction — instead of allocating its own, so all namespaces (and sub-clients
+such as `alerting.rule`, and the namespaces of a `client.space(...)`-scoped
+client, which are constructed against the same parent) read and write one set of
+verdicts. `SpacesClient.create` and `.delete` call `self._clear_space_cache(id)`
+after the request succeeds — create drops a stale negative entry, delete drops a
+stale positive one; clearing unconditionally is correct for both directions and
+simpler than branching. TTL comparisons use `time.monotonic()`.
+`NamespaceClient._space_cache`, `._cache_timestamps` and `._cache_ttl` remain as
+views onto the shared cache, so `_clear_space_cache` and existing
+cache-inspecting tests keep working against the new structure.
+
+Two further paths join the same cache:
+
+- **`client.space(X)` seeds it.** `SpaceScopedKibana._validate_space_on_creation`
+  (and its async twin) still performs a real `GET` — constructing a scoped
+  client is exactly the moment to fail on a space that has since disappeared, so
+  it must not be served from a cached verdict — but it now stores the answer
+  (positive on success, negative before re-raising `SpaceNotFoundError`), so the
+  scoped client's namespaces reuse it instead of asking again. Measured live:
+  `client.space(X)` + 2 namespace calls = **1** lookup, down from 2.
+- **`options()` clones share it.** `BaseClient.options` copies the
+  `_space_validation_cache` *reference* alongside `_rate_limiter` (same
+  transport, same server, therefore the same space-existence facts), so a
+  verdict cached on one is visible on the other and an invalidation from either
+  is seen by both.
 
 **Dispositioned, deliberately NOT invalidating:** `spaces.update` (PUT cannot
 change a space id, only its presentation/features — existence is unaffected),
@@ -57,7 +76,7 @@ or a verdict already bounded by the TTL. Documented in the module docstring of
 
 ## TDD — RED then GREEN
 
-New unit module `tests/unit/test_space_cache_sharing.py` (8 tests: 4 scenarios ×
+New unit module `tests/unit/test_space_cache_sharing.py` (14 tests: 7 scenarios ×
 sync/async), driving real `Kibana` / `AsyncKibana` clients over a transport
 double that tracks which spaces exist and counts
 `GET /api/spaces/space/team-a` requests.
@@ -103,6 +122,24 @@ $ .venv/bin/pytest tests/unit/test_space_cache_sharing.py tests/unit/test_sync_a
 147 passed in 0.67s
 ```
 
+**Second RED/GREEN round** (spec-compliance review: `client.space(...)` did not
+seed the cache, and `options()` clones built their own). Six more tests —
+scoped-client seeding on success, scoped-client seeding of a *missing* space,
+and `options()` clone sharing, each × sync/async — added to the same module and
+watched fail first:
+
+```
+$ .venv/bin/pytest tests/unit/test_space_cache_sharing.py -p no:randomly -o addopts="" -q --tb=line
+E   assert 2 == 1     (client.space(X) + 2 namespaces: construction lookup thrown away)
+E   assert 2 == 1     (failed client.space(X) then a namespace call: negative verdict thrown away)
+E   assert 2 == 1     (options() clone re-validated a space the original had cached)
+... x2 (sync + async)
+6 failed, 8 passed in 0.07s
+
+$ .venv/bin/pytest tests/unit/test_space_cache_sharing.py tests/unit/test_sync_async_parity.py -p no:randomly -o addopts="" -q
+153 passed in 0.65s
+```
+
 Four existing unit tests that froze `time.time` to exercise TTL expiry now
 freeze `time.monotonic` (`test_namespace_client_space_support.py`,
 `test_async_namespace_client_space_support.py`,
@@ -125,7 +162,9 @@ New live tests in `tests/integration/test_space_validation_integration.py`:
   request still reaches Kibana) and driving six distinct namespace clients —
   `dashboards`, `actions`, `saved_objects`, `data_views`, `cases`, and the
   `alerting.rule` sub-client — against one space, asserting exactly **one**
-  `GET /api/spaces/space/{id}`.
+  `GET /api/spaces/space/{id}`. A second pair of tests measures the
+  scoped-client sequence — `client.space(X)` followed by two of its namespace
+  calls — which also asserts exactly **one** lookup.
 
 Both classes track created spaces in the `created_spaces` fixture before
 creating them (so a mid-test failure still tears down) and drop the id from that
@@ -158,26 +197,49 @@ negatively-cached space did not make the next namespace call work, and six
 namespaces cost **six** identical `GET /api/spaces/space/{id}` requests where
 one suffices.
 
-**(b) Post-fix — the same live tests pass:**
+**(b) Pre-seeding — the scoped-client sequence costs two lookups.** With the
+seeding fix stashed (`git stash push -- kibana/`, i.e. the shared cache and the
+create/delete invalidation in place but `client.space(...)` still discarding its
+own result), the two new live tests measure the regression the spec-compliance
+review reported:
+
+```
+$ .venv/bin/pytest tests/integration/test_space_validation_integration.py::TestSpaceLookupDeduplication \
+                   -p no:randomly -o addopts="" -q --tb=line
+E   assert 2 == 1
+/Users/.../tests/integration/test_space_validation_integration.py:741: assert 2 == 1
+E   assert 2 == 1
+/Users/.../tests/integration/test_space_validation_integration.py:758: assert 2 == 1
+FAILED ...::TestSpaceLookupDeduplication::test_scoped_client_and_its_namespaces_trigger_one_space_lookup
+FAILED ...::TestSpaceLookupDeduplication::test_scoped_client_and_its_namespaces_trigger_one_space_lookup_async
+2 failed, 2 passed in 7.88s
+```
+
+**(c) Post-fix — all six live tests pass:**
 
 ```
 $ .venv/bin/pytest tests/integration/test_space_validation_integration.py::TestSpaceCacheInvalidationOnMutation \
                    tests/integration/test_space_validation_integration.py::TestSpaceLookupDeduplication \
                    -p no:randomly -o addopts="" -v
-tests/integration/test_space_validation_integration.py::TestSpaceCacheInvalidationOnMutation::test_create_then_delete_take_effect_immediately PASSED [ 25%]
-tests/integration/test_space_validation_integration.py::TestSpaceCacheInvalidationOnMutation::test_create_then_delete_take_effect_immediately_async PASSED [ 50%]
-tests/integration/test_space_validation_integration.py::TestSpaceLookupDeduplication::test_many_namespaces_trigger_one_space_lookup PASSED [ 75%]
+tests/integration/test_space_validation_integration.py::TestSpaceCacheInvalidationOnMutation::test_create_then_delete_take_effect_immediately PASSED [ 16%]
+tests/integration/test_space_validation_integration.py::TestSpaceCacheInvalidationOnMutation::test_create_then_delete_take_effect_immediately_async PASSED [ 33%]
+tests/integration/test_space_validation_integration.py::TestSpaceLookupDeduplication::test_many_namespaces_trigger_one_space_lookup PASSED [ 50%]
+tests/integration/test_space_validation_integration.py::TestSpaceLookupDeduplication::test_scoped_client_and_its_namespaces_trigger_one_space_lookup PASSED [ 66%]
+tests/integration/test_space_validation_integration.py::TestSpaceLookupDeduplication::test_scoped_client_and_its_namespaces_trigger_one_space_lookup_async PASSED [ 83%]
 tests/integration/test_space_validation_integration.py::TestSpaceLookupDeduplication::test_many_namespaces_trigger_one_space_lookup_async PASSED [100%]
-4 passed in 7.83s
+6 passed in 11.41s
 ```
 
-**(c) The whole space-related live surface, unchanged behavior:**
+Measured live, post-fix: six namespaces → **1** lookup; `client.space(X)` plus
+two namespace calls → **1** lookup (was 2).
+
+**(d) The whole space-related live surface, unchanged behavior:**
 
 ```
 $ .venv/bin/pytest tests/integration/test_space_validation_integration.py \
                    tests/integration/test_space_scoped_operations_integration.py \
                    tests/integration/test_spaces_integration.py -p no:randomly -o addopts="" -q
-43 passed in 139.73s (0:02:19)
+45 passed in 143.67s (0:02:23)
 
 $ .venv/bin/pytest tests/benchmark/test_space_performance.py -p no:randomly -o addopts="" -q
 10 passed in 126.48s (0:02:06)
@@ -187,7 +249,7 @@ The benchmark suite exercises `_clear_space_cache()`, `_cache_ttl` mutation and
 direct `_space_cache` / `_cache_timestamps` inspection on a namespace client —
 all still work, now against the shared cache.
 
-**(d) Teardown verified — no test space left on the stack:**
+**(e) Teardown verified — no test space left on the stack:**
 
 ```
 $ python - <<'PY'
@@ -205,8 +267,8 @@ $ .venv/bin/mypy kibana/
 Success: no issues found in 103 source files
 $ .venv/bin/bandit -r kibana/ -ll -q              # exit 0, no findings
 $ .venv/bin/pytest tests/unit/ --cov=kibana --cov-fail-under=90 -q
-3207 passed
-Required test coverage of 90% reached. Total coverage: 94.22%   (kibana/_space_cache.py: 100%)
+3213 passed
+Required test coverage of 90% reached. Total coverage: 94.27%   (kibana/_space_cache.py: 100%)
 $ .venv/bin/sphinx-build -W --keep-going -b html docs/source docs/build/html   # exit 0
 ```
 
@@ -215,14 +277,17 @@ the unit run above) passes: the twin edits to `spaces.create`/`delete` and the
 namespace-client cache plumbing are body-identical across the two trees, and no
 entry was added to `_BODY_DRIFT_ALLOWLIST`.
 
-## Scoped out (not regressions, no behavior change)
+## Deliberately not cached
 
-- `SpaceScopedKibana.__init__` / its async twin still validate the space with a
-  direct `spaces.get()` that neither reads nor writes the cache — the same
-  as before this change. Routing that one call through the shared cache would
-  save a lookup per `client.space(...)`, but it sits on the sync/async-divergent
-  construction path already in `_BODY_DRIFT_ALLOWLIST`; left for a separate
-  change.
-- `client.options(...)` returns a *new* top-level client, which therefore gets
-  its own cache — as it did before (caches were per namespace instance, so an
-  options clone never shared them either).
+- **`client.space(X)`'s construction-time check always hits the server.** It
+  seeds the cache but never reads it: a scoped client is a long-lived handle, so
+  it must fail on a space that has disappeared since some earlier verdict, even
+  a still-valid positive one. The cost is one lookup at construction, which the
+  scoped client's namespaces then reuse.
+- **Non-404 errors are never cached** (auth, network, serialization), on both
+  the namespace-validation path and the scoped-construction path: a transient
+  failure must not pin a space as "missing" for the TTL.
+- **Separate client objects keep separate caches.** Two `Kibana(...)`
+  constructions do not share a cache; only `options()` clones do, because they
+  share the transport and therefore the server. Cross-process or cross-client
+  invalidation is out of scope — the TTL bounds staleness.

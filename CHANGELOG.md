@@ -31,12 +31,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   shrink a cached verdict ([#73](https://github.com/pedro-angel/kibana-py/issues/73)).
   The cache is now a single `SpaceValidationCache` created by the top-level
   `Kibana`/`AsyncKibana` client (`kibana/_space_cache.py`) that every namespace
-  client — including sub-clients such as `alerting.rule` and every namespace of
-  a `client.space(...)`-scoped client — shares, measured with `time.monotonic()`
-  (matching `kibana/_rate_limiter.py`). One lookup per space per TTL window for
-  the whole client, verified live across six namespaces. Default TTL (300 s) and
-  all public behavior are unchanged; `_clear_space_cache()` still works and now
-  clears the shared cache.
+  client — including sub-clients such as `alerting.rule`, every namespace of a
+  `client.space(...)`-scoped client, and the clients `options()` returns —
+  shares, measured with `time.monotonic()` (matching
+  `kibana/_rate_limiter.py`). `client.space(...)` still checks the space against
+  the server when it is constructed (a scoped client must fail on a space that
+  has since disappeared) but now seeds the shared cache with the result instead
+  of discarding it. One lookup per space per TTL window for the whole client,
+  verified live: six namespaces → 1 lookup, and `client.space(X)` plus two
+  namespace calls → 1 lookup (was 2). Default TTL (300 s) and all public
+  behavior are unchanged; `_clear_space_cache()` still works and now clears the
+  shared cache.
 - **A scheme-less host string no longer silently routes traffic to
   `localhost`.** `_build_node_configs` (`kibana/_sync/client/__init__.py`,
   shared by `AsyncKibana` via import) parsed host strings with `urlparse`,

@@ -32,13 +32,15 @@ DEFAULT_SPACE_CACHE_TTL = 300.0  # seconds
 class SpaceValidationCache:
     """Cache of "does this space exist?" verdicts, keyed by space id.
 
-    :param ttl: Seconds a verdict stays valid (default: 5 minutes).
+    ``ttl`` is a plain attribute: callers that want a different window (tests,
+    mostly) assign to it, directly or through a namespace client's
+    ``_cache_ttl``.
     """
 
-    def __init__(self, ttl: float = DEFAULT_SPACE_CACHE_TTL) -> None:
+    def __init__(self) -> None:
         self.entries: dict[str, bool] = {}
         self.timestamps: dict[str, float] = {}
-        self.ttl = ttl
+        self.ttl: float = DEFAULT_SPACE_CACHE_TTL
 
     def lookup(self, space_id: str) -> bool | None:
         """Return the cached verdict, or ``None`` when absent or expired.
@@ -81,11 +83,15 @@ class SpaceValidationCache:
 def shared_space_cache(client: Any) -> SpaceValidationCache:
     """Return the space-validation cache belonging to ``client``.
 
-    Namespace clients never own a cache; they borrow the one on the top-level
-    client so that every namespace -- and ``SpacesClient``, which invalidates it
-    -- sees the same entries. A parent that is not a real client (a test double,
-    say) gets a cache attached on first use, so namespace clients built from the
-    same parent still share one.
+    Namespace clients never own a cache; they borrow the one every real client
+    builds in ``BaseClient.__init__``, so that all namespaces -- and
+    ``SpacesClient``, which invalidates it -- see the same entries.
+
+    The isinstance check and the attach below exist for namespace clients built
+    on a *test double* parent (``NamespaceClient(Mock())``, used throughout the
+    unit suite), where the attribute lookup yields an auto-created mock rather
+    than a cache. Attaching a real cache on first use keeps those doubles
+    sharing one cache too, so tests observe production caching semantics.
 
     :param client: The parent client a namespace client delegates to
     :return: The parent's shared cache
@@ -94,8 +100,5 @@ def shared_space_cache(client: Any) -> SpaceValidationCache:
     if isinstance(cache, SpaceValidationCache):
         return cache
     cache = SpaceValidationCache()
-    try:
-        client._space_validation_cache = cache
-    except (AttributeError, TypeError):  # pragma: no cover - exotic parent
-        pass
+    client._space_validation_cache = cache
     return cache

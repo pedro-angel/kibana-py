@@ -470,7 +470,11 @@ class SpaceValidationCache:
 **Cache Characteristics**:
 - 5-minute TTL by default, measured on the monotonic clock (a wall-clock step
   cannot stretch or shrink a verdict)
-- One cache per client instance, shared by every namespace client (not global)
+- One cache per client instance, shared by every namespace client (not global),
+  and by the clients `options()` returns (same server, same facts)
+- Seeded by `client.space(...)`, whose construction-time check always asks the
+  server (a scoped client must fail on a space that has since disappeared) and
+  then stores the answer for its namespaces to reuse
 - Automatic invalidation on TTL expiry
 - Explicit invalidation: `spaces.create()` / `spaces.delete()` drop the affected
   space id, so a created space is usable immediately and a deleted one stops
