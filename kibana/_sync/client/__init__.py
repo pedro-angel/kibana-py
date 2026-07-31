@@ -467,21 +467,27 @@ def _build_node_configs(
             # Parse URL string manually
             from urllib.parse import urlparse
 
-            if "://" not in host:
+            parsed_url = urlparse(host)
+
+            if not parsed_url.scheme or parsed_url.hostname is None:
                 # A scheme-less string (e.g. "myhost:5601") mis-parses under
-                # urlparse into scheme='myhost', host='localhost' -- silently
-                # routing traffic to localhost with a bogus scheme. Reject
-                # instead of guessing a default scheme: silently assuming
-                # http:// would surprise TLS deployments.
+                # urlparse into scheme='myhost', hostname=None -- silently
+                # routing traffic to localhost with a bogus scheme. A
+                # substring check for "://" is not enough: "://" and
+                # "host/path?q=a://b" both contain it yet still parse to
+                # scheme='', and "http://" parses to hostname=None. Checking
+                # the parsed result directly catches all of these while
+                # leaving any real "scheme://host" form -- including
+                # odd-but-parsable schemes -- untouched. Reject instead of
+                # guessing a default scheme: silently assuming http://
+                # would surprise TLS deployments.
                 raise ValueError(
-                    f"Host {host!r} is missing a scheme. Expected the form "
+                    f"Host {host} is missing a scheme. Expected the form "
                     "'http://host:port' or 'https://host:port'."
                 )
 
-            parsed_url = urlparse(host)
-
-            scheme = parsed_url.scheme or "http"
-            hostname = parsed_url.hostname or "localhost"
+            scheme = parsed_url.scheme
+            hostname = parsed_url.hostname
             port = parsed_url.port or (443 if scheme == "https" else 5601)
 
             node_config = NodeConfig(

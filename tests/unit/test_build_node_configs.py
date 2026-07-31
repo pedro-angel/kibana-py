@@ -42,11 +42,33 @@ class TestBuildNodeConfigsSchemeLessHosts:
 
         assert "bad-host:5601" in str(exc_info.value)
 
-    def test_scheme_less_string_does_not_default_to_localhost(self):
-        """Regression guard: previously this silently produced a localhost
-        NodeConfig instead of raising."""
-        with pytest.raises(ValueError):
-            _build_node_configs("myhost:5601", None)
+    @pytest.mark.parametrize(
+        "host",
+        [
+            # Contains "://" so a substring check would wrongly let it
+            # through, but urlparse gives scheme='' -- no real scheme.
+            "://",
+            # Has a real scheme token but an empty netloc, so
+            # urlparse().hostname is None -- no real host.
+            "http://",
+            # "://" appears later in the query string, not as a scheme
+            # separator -- a substring check would wrongly let it through,
+            # but urlparse gives scheme='' (the string doesn't start with a
+            # scheme).
+            "host/path?q=a://b",
+        ],
+    )
+    def test_forms_containing_but_not_using_scheme_separator_raise(self, host):
+        """These previously bypassed a naive '"://" not in host' substring
+        check and silently built a localhost NodeConfig; the guard must
+        instead reject on the structural absence of a scheme or hostname."""
+        with pytest.raises(ValueError) as exc_info:
+            _build_node_configs(host, None)
+
+        message = str(exc_info.value)
+        assert host in message
+        assert "http://host:port" in message
+        assert "https://host:port" in message
 
 
 class TestBuildNodeConfigsValidHostsUnchanged:

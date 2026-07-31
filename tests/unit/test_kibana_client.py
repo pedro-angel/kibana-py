@@ -95,8 +95,8 @@ class TestKibanaClientInitialization:
         ],
     )
     def test_init_with_scheme_less_host_raises_value_error(self, host):
-        """A host string lacking '://' must fail fast instead of silently
-        mis-parsing into scheme=<host>, host='localhost' (issue #71)."""
+        """Test that a scheme-less host string raises ValueError instead of
+        silently mis-parsing into scheme=<host>, host='localhost' (#71)."""
         from kibana import Kibana
 
         with pytest.raises(ValueError, match="http://host:port"):
