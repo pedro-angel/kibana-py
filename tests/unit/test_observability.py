@@ -2389,11 +2389,15 @@ class TestObservabilityWithoutOpenTelemetry:
 
 
 def _run_with_blocked_imports(
-    blocked_prefixes: tuple[str, ...], probe: str
+    blocked_prefixes: tuple[str, ...],
+    probe: str,
+    error: str = "ImportError",
 ) -> subprocess.CompletedProcess:
     """Run ``probe`` in a fresh subprocess where importing any module whose
     dotted name equals (or is nested under) one of ``blocked_prefixes`` raises
-    ``ImportError``, simulating that distribution being uninstalled.
+    ``error``, simulating that distribution being uninstalled (``ImportError``)
+    or corrupted/version-mismatched (``AttributeError`` — what a module body
+    raises when it reaches for a symbol its own dependency no longer exports).
 
     A real subprocess is required rather than monkeypatching ``sys.modules``
     in-process: ``kibana.observability._imports`` resolves its try/except
@@ -2412,7 +2416,7 @@ def _run_with_blocked_imports(
                     name == prefix or name.startswith(prefix + ".")
                     for prefix in self._blocked
                 ):
-                    raise ImportError(f"blocked for test: {{name}}")
+                    raise {error}(f"blocked for test: {{name}}")
                 return None
 
         sys.meta_path.insert(0, _Blocker())
@@ -2453,6 +2457,15 @@ class TestImportGuardMatrix:
             + repr(getattr(m, "HTTPOTLPSpanExporter", "MISSING") is not None)
         )
         print("OTEL_LOGS_AVAILABLE=" + flag("OTEL_LOGS_AVAILABLE"))
+        # ConsoleLogExporter belongs to the logs try/except and must be *bound*
+        # (to None) by the except-branch too -- an unbound name is the same
+        # crash-on-import class as #68/#70, just one import away
+        # (_logging.py imports it inside _setup_log_forwarding).
+        print("ConsoleLogExporter_present=" + repr(hasattr(m, "ConsoleLogExporter")))
+        print(
+            "ConsoleLogExporter_bound="
+            + repr(getattr(m, "ConsoleLogExporter", None) is not None)
+        )
         """)
 
     @staticmethod
@@ -2476,6 +2489,8 @@ class TestImportGuardMatrix:
                     "OTLPSpanExporter_bound": "True",
                     "HTTPOTLPSpanExporter_bound": "True",
                     "OTEL_LOGS_AVAILABLE": "True",
+                    "ConsoleLogExporter_present": "True",
+                    "ConsoleLogExporter_bound": "True",
                 },
                 id="baseline-everything-present",
             ),
@@ -2488,6 +2503,8 @@ class TestImportGuardMatrix:
                     "OTLPSpanExporter_bound": "False",
                     "HTTPOTLPSpanExporter_bound": "True",
                     "OTEL_LOGS_AVAILABLE": "True",
+                    "ConsoleLogExporter_present": "True",
+                    "ConsoleLogExporter_bound": "True",
                 },
                 id="issue68-grpc-exporter-absent-sdk-and-http-present",
             ),
@@ -2500,6 +2517,8 @@ class TestImportGuardMatrix:
                     "OTLPSpanExporter_bound": "True",
                     "HTTPOTLPSpanExporter_bound": "False",
                     "OTEL_LOGS_AVAILABLE": "True",
+                    "ConsoleLogExporter_present": "True",
+                    "ConsoleLogExporter_bound": "True",
                 },
                 id="http-exporter-absent-sdk-and-grpc-present",
             ),
@@ -2522,6 +2541,8 @@ class TestImportGuardMatrix:
                     "OTLPSpanExporter_bound": "False",
                     "HTTPOTLPSpanExporter_bound": "True",
                     "OTEL_LOGS_AVAILABLE": "False",
+                    "ConsoleLogExporter_present": "True",
+                    "ConsoleLogExporter_bound": "False",
                 },
                 id="issue70-logs-absent-must-not-clobber-trace-exporters",
             ),
@@ -2534,6 +2555,8 @@ class TestImportGuardMatrix:
                     "OTLPSpanExporter_bound": "False",
                     "HTTPOTLPSpanExporter_bound": "False",
                     "OTEL_LOGS_AVAILABLE": "False",
+                    "ConsoleLogExporter_present": "True",
+                    "ConsoleLogExporter_bound": "False",
                 },
                 id="sdk-entirely-absent-api-only",
             ),
@@ -2546,6 +2569,8 @@ class TestImportGuardMatrix:
                     "OTLPSpanExporter_bound": "False",
                     "HTTPOTLPSpanExporter_bound": "False",
                     "OTEL_LOGS_AVAILABLE": "False",
+                    "ConsoleLogExporter_present": "True",
+                    "ConsoleLogExporter_bound": "False",
                 },
                 id="otel-entirely-absent",
             ),
@@ -2562,3 +2587,34 @@ class TestImportGuardMatrix:
             f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
         )
         assert self._parse(result.stdout) == expected
+
+    @pytest.mark.parametrize(
+        "blocked",
+        [
+            pytest.param(
+                ("opentelemetry.exporter.otlp.proto.grpc",),
+                id="corrupt-grpc-exporter",
+            ),
+            pytest.param(("opentelemetry.sdk._logs",), id="corrupt-logs-sdk"),
+            pytest.param(("opentelemetry",), id="corrupt-otel"),
+        ],
+    )
+    def test_import_kibana_under_corrupted_install(self, blocked):
+        """A *corrupted* OTEL install must degrade, not kill ``import kibana``.
+
+        The guards in ``_imports.py`` originally caught ``ImportError`` only,
+        which covers a cleanly *missing* distribution. A corrupted or
+        version-mismatched one fails differently: its module body executes and
+        raises whatever it raises — classically ``AttributeError`` against a
+        dependency that no longer exports some symbol — and that propagated
+        straight out of ``import kibana`` for every user of this client,
+        observability opted into or not (#76, folded-in review item).
+        """
+        result = _run_with_blocked_imports(blocked, self.PROBE, error="AttributeError")
+
+        assert result.returncode == 0, (
+            f"`import kibana` crashed on a corrupted install ({blocked!r}):\n"
+            f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+        )
+        values = self._parse(result.stdout)
+        assert values["ConsoleLogExporter_present"] == "True"

@@ -24,6 +24,15 @@ _HTTP_OTLP_PROTOCOLS = frozenset({"http/protobuf", "http"})
 _SUPPORTED_OTLP_PROTOCOLS = frozenset({"grpc"}) | _HTTP_OTLP_PROTOCOLS
 
 # ---------- Trace SDK availability ----------
+# Every guard in this module catches ``(ImportError, AttributeError)``, not
+# ``ImportError`` alone. A *missing* distribution raises ImportError, but a
+# *corrupted or version-mismatched* one raises whatever its module body raises
+# while executing -- most commonly AttributeError (e.g. an OTLP exporter
+# reaching for a symbol its pinned dependency no longer exports). Since these
+# try blocks contain nothing but import statements, the only thing a broadened
+# except can swallow is a broken third-party install, and the whole point of
+# the guards is that such an install degrades observability instead of taking
+# down ``import kibana`` for every user of this client (#76).
 try:
     from opentelemetry import trace  # noqa: F401
     from opentelemetry.sdk.resources import (  # noqa: F401
@@ -49,7 +58,7 @@ try:
         )
 
         GRPC_EXPORTER_AVAILABLE = True
-    except ImportError:
+    except (ImportError, AttributeError):
         OTLPSpanExporter = None  # type: ignore[misc, assignment]
         GRPC_EXPORTER_AVAILABLE = False
 
@@ -59,12 +68,12 @@ try:
         )
 
         HTTP_EXPORTER_AVAILABLE = True
-    except ImportError:
+    except (ImportError, AttributeError):
         HTTPOTLPSpanExporter = None  # type: ignore[misc, assignment]
         HTTP_EXPORTER_AVAILABLE = False
 
     OTEL_AVAILABLE = True
-except ImportError:
+except (ImportError, AttributeError):
     OTEL_AVAILABLE = False
     GRPC_EXPORTER_AVAILABLE = False
     HTTP_EXPORTER_AVAILABLE = False
@@ -102,7 +111,7 @@ try:
         )
 
         GRPC_LOG_EXPORTER_AVAILABLE = True
-    except ImportError:
+    except (ImportError, AttributeError):
         OTLPLogExporter = None  # type: ignore[misc, assignment]
         GRPC_LOG_EXPORTER_AVAILABLE = False
 
@@ -112,18 +121,24 @@ try:
         )
 
         HTTP_LOG_EXPORTER_AVAILABLE = True
-    except ImportError:
+    except (ImportError, AttributeError):
         HTTPOTLPLogExporter = None  # type: ignore[misc, assignment]
         HTTP_LOG_EXPORTER_AVAILABLE = False
 
     OTEL_LOGS_AVAILABLE = True
-except ImportError:
+except (ImportError, AttributeError):
     OTEL_LOGS_AVAILABLE = False
     GRPC_LOG_EXPORTER_AVAILABLE = False
     HTTP_LOG_EXPORTER_AVAILABLE = False
     SeverityNumber = None  # type: ignore[misc, assignment]
     set_logger_provider = None  # type: ignore[misc, assignment]
     BatchLogRecordProcessor = None  # type: ignore[misc, assignment]
+    # Bound here for the same reason as every other name in this branch:
+    # `_logging.py`'s `_setup_log_forwarding` imports ConsoleLogExporter from
+    # this module, so leaving it unbound turns a missing logs SDK into an
+    # ImportError at *call* time -- the same unbound-name defect as #68/#70,
+    # just deferred by one import (#76).
+    ConsoleLogExporter = None  # type: ignore[misc, assignment]
     LoggerProvider = None  # type: ignore[misc, assignment]
     LoggingHandler = None  # type: ignore[misc, assignment]
     OTLPLogExporter = None  # type: ignore[misc, assignment]
