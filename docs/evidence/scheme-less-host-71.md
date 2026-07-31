@@ -22,17 +22,37 @@ to `http://` would surprise TLS deployments expecting `https://`.
 ## Fix summary
 
 `kibana/_sync/client/__init__.py`, inside the per-host string branch of
-`_build_node_configs`: before calling `urlparse`, check for `"://"` in the
-string host. If absent, raise `ValueError` naming the offending input (via
-`{host!r}`) and the expected form (`'http://host:port' or 'https://host:port'`)
-before `urlparse` (and therefore before any `NodeConfig`/transport
-construction) ever runs. Both `Kibana` and `AsyncKibana` get the fix from one
-edit, since the async client imports `_build_node_configs` directly from
-`kibana._sync.client` rather than maintaining its own copy (confirmed by
+`_build_node_configs`: call `urlparse(host)` first, then raise `ValueError`
+when the parsed result has no real scheme or hostname —
+`not parsed_url.scheme or parsed_url.hostname is None` — naming the
+offending input (via plain `{host}` interpolation, matching the sibling
+raises already in this function) and the expected form
+(`'http://host:port' or 'https://host:port'`), before any
+`NodeConfig`/transport construction ever runs. Both `Kibana` and `AsyncKibana`
+get the fix from one edit, since the async client imports
+`_build_node_configs` directly from `kibana._sync.client` rather than
+maintaining its own copy (confirmed by
 `grep -n "_build_node_configs" kibana/_async/client/__init__.py` →
 `from kibana._sync.client import _build_node_configs, _build_node_options`).
 Dict hosts, `cloud_id`, and non-string/non-dict rejection are untouched — the
-new check only fires on `isinstance(host, str)` entries lacking `://`.
+check only fires on `isinstance(host, str)` entries whose parsed form is
+missing a scheme or a hostname.
+
+**Note on iteration:** an earlier version of this fix used a `"://" not in
+host` substring guard. A code-quality review found that guard bypassable —
+`"://"`, `"http://"`, and `"host/path?q=a://b"` all contain the `"://"`
+substring (or contain it in the wrong place) yet still parse to no real
+scheme/hostname, so they slipped past a substring check while still silently
+building a localhost `NodeConfig`. The structural `urlparse`-first check
+above replaces that substring guard and closes all three; it does not
+restrict which schemes are accepted (any real `scheme://host` — including
+odd-but-parsable non-http(s) schemes — is unaffected), only whether a scheme
+and hostname parsed at all. The RED/GREEN detail for those three inputs is
+tracked in `tests/unit/test_build_node_configs.py`
+(`test_forms_containing_but_not_using_scheme_separator_raise`), not repeated
+here since it landed after this evidence file was first captured; the
+live-battle-test outputs below were re-verified against the final structural
+guard (see the note under section (b)).
 
 ## TDD — RED then GREEN
 
@@ -177,13 +197,24 @@ except ValueError as e:
     print("Exception message:", e)
 PYEOF
 RESULT: Kibana("localhost:5601") raised ValueError as expected, before any network I/O
-Exception message: Host 'localhost:5601' is missing a scheme. Expected the form 'http://host:port' or 'https://host:port'.
+Exception message: Host localhost:5601 is missing a scheme. Expected the form 'http://host:port' or 'https://host:port'.
 ```
 
 → **PASS.** The `ValueError` fires during argument parsing inside
 `_build_node_configs`, before `NodeConfig`/`Transport` construction — the
 guarded `socket.create_connection` never fired, confirming no network I/O was
 attempted.
+
+**Re-verification note:** the exception message above was re-run live
+against the running Kibana stack (`curl -o /dev/null -w '%{http_code}'
+http://localhost:5601/api/status` → `200`, confirmed immediately before
+re-running) after the guard changed from the substring check to the final
+structural check and the message interpolation changed from `{host!r}` to
+plain `{host}`. The only difference from the originally captured output is
+quoting — `Host 'localhost:5601' is missing a scheme...` (repr, single-quoted)
+became `Host localhost:5601 is missing a scheme...` (plain) — the raise site,
+timing (before any network I/O), and wording are otherwise identical. The
+output pasted above is the current, re-verified one.
 
 ### Bonus — `AsyncKibana` (same shared function), both directions
 
@@ -207,8 +238,12 @@ async def main():
 asyncio.run(main())
 PYEOF
 AsyncKibana status.get_status() overall level: available
-AsyncKibana("localhost:5601") raised ValueError as expected: Host 'localhost:5601' is missing a scheme. Expected the form 'http://host:port' or 'https://host:port'.
+AsyncKibana("localhost:5601") raised ValueError as expected: Host localhost:5601 is missing a scheme. Expected the form 'http://host:port' or 'https://host:port'.
 ```
+
+(Re-run live alongside the section (b) re-verification above, against the
+same reachable stack; quoting differs from the original capture the same
+way — no other change.)
 
 → Confirms both public constructors — not just the sync one named in the
 issue's battle-test gate — inherit the fix and the pre-existing valid-URL
@@ -216,7 +251,11 @@ behavior, exactly as expected from the shared-function architecture.
 
 ## Scope & caveats
 
-- This fix only changes behavior for **string** hosts lacking `://`. Dict
+- This fix only changes behavior for **string** hosts whose parsed form is
+  missing a scheme or a hostname (`not urlparse(host).scheme or
+  urlparse(host).hostname is None`) — not merely strings "lacking `://`";
+  that weaker substring characterization was superseded once a code-quality
+  review showed it was bypassable (see the note under "Fix summary"). Dict
   hosts (`{"host": ..., "port": ..., "scheme": ...}`), `cloud_id`, and
   already-invalid non-string/non-dict entries are unchanged — verified by
   `TestBuildNodeConfigsNonStringHostsUnchanged` in
