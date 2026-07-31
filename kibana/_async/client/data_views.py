@@ -75,8 +75,8 @@ class AsyncDataViewsClient(AsyncNamespaceClient):
             >>> for view in response["data_view"]:
             ...     print(view["id"], view["title"])
         """
-        path = self._build_space_path("/api/data_views", space_id)
         await self._maybe_validate_space(space_id, validate_spaces)
+        path = self._build_space_path("/api/data_views", space_id)
         return await self.perform_request("GET", path)
 
     async def create(
@@ -126,8 +126,8 @@ class AsyncDataViewsClient(AsyncNamespaceClient):
         if override is not None:
             body["override"] = override
 
-        path = self._build_space_path("/api/data_views/data_view", space_id)
         await self._maybe_validate_space(space_id, validate_spaces)
+        path = self._build_space_path("/api/data_views/data_view", space_id)
         return await self.perform_request("POST", path, body=body)
 
     async def get(
@@ -158,10 +158,10 @@ class AsyncDataViewsClient(AsyncNamespaceClient):
         if not view_id:
             raise ValueError("Parameter 'view_id' is required")
 
+        await self._maybe_validate_space(space_id, validate_spaces)
         path = self._build_space_path(
             f"/api/data_views/data_view/{_quote(view_id)}", space_id
         )
-        await self._maybe_validate_space(space_id, validate_spaces)
         return await self.perform_request("GET", path)
 
     async def update(
@@ -213,10 +213,10 @@ class AsyncDataViewsClient(AsyncNamespaceClient):
         if refresh_fields is not None:
             body["refresh_fields"] = refresh_fields
 
+        await self._maybe_validate_space(space_id, validate_spaces)
         path = self._build_space_path(
             f"/api/data_views/data_view/{_quote(view_id)}", space_id
         )
-        await self._maybe_validate_space(space_id, validate_spaces)
         return await self.perform_request("POST", path, body=body)
 
     async def delete(
@@ -248,10 +248,10 @@ class AsyncDataViewsClient(AsyncNamespaceClient):
         if not view_id:
             raise ValueError("Parameter 'view_id' is required")
 
+        await self._maybe_validate_space(space_id, validate_spaces)
         path = self._build_space_path(
             f"/api/data_views/data_view/{_quote(view_id)}", space_id
         )
-        await self._maybe_validate_space(space_id, validate_spaces)
         return await self.perform_request("DELETE", path)
 
     async def update_fields_metadata(
@@ -295,11 +295,11 @@ class AsyncDataViewsClient(AsyncNamespaceClient):
 
         body: dict[str, Any] = {"fields": fields}
 
+        await self._maybe_validate_space(space_id, validate_spaces)
         path = self._build_space_path(
             f"/api/data_views/data_view/{_quote(view_id)}/fields",
             space_id,
         )
-        await self._maybe_validate_space(space_id, validate_spaces)
         return await self.perform_request("POST", path, body=body)
 
     async def create_runtime_field(
@@ -355,11 +355,11 @@ class AsyncDataViewsClient(AsyncNamespaceClient):
 
         body: dict[str, Any] = {"name": name, "runtimeField": runtime_field}
 
+        await self._maybe_validate_space(space_id, validate_spaces)
         path = self._build_space_path(
             f"/api/data_views/data_view/{_quote(view_id)}/runtime_field",
             space_id,
         )
-        await self._maybe_validate_space(space_id, validate_spaces)
         return await self.perform_request("POST", path, body=body)
 
     async def create_or_update_runtime_field(
@@ -414,11 +414,11 @@ class AsyncDataViewsClient(AsyncNamespaceClient):
 
         body: dict[str, Any] = {"name": name, "runtimeField": runtime_field}
 
+        await self._maybe_validate_space(space_id, validate_spaces)
         path = self._build_space_path(
             f"/api/data_views/data_view/{_quote(view_id)}/runtime_field",
             space_id,
         )
-        await self._maybe_validate_space(space_id, validate_spaces)
         return await self.perform_request("PUT", path, body=body)
 
     async def get_runtime_field(
@@ -456,12 +456,12 @@ class AsyncDataViewsClient(AsyncNamespaceClient):
         if not name:
             raise ValueError("Parameter 'name' is required")
 
+        await self._maybe_validate_space(space_id, validate_spaces)
         path = self._build_space_path(
             f"/api/data_views/data_view/{_quote(view_id)}"
             f"/runtime_field/{_quote(name)}",
             space_id,
         )
-        await self._maybe_validate_space(space_id, validate_spaces)
         return await self.perform_request("GET", path)
 
     async def update_runtime_field(
@@ -511,12 +511,12 @@ class AsyncDataViewsClient(AsyncNamespaceClient):
 
         body: dict[str, Any] = {"runtimeField": runtime_field}
 
+        await self._maybe_validate_space(space_id, validate_spaces)
         path = self._build_space_path(
             f"/api/data_views/data_view/{_quote(view_id)}"
             f"/runtime_field/{_quote(name)}",
             space_id,
         )
-        await self._maybe_validate_space(space_id, validate_spaces)
         return await self.perform_request("POST", path, body=body)
 
     async def delete_runtime_field(
@@ -552,12 +552,12 @@ class AsyncDataViewsClient(AsyncNamespaceClient):
         if not name:
             raise ValueError("Parameter 'name' is required")
 
+        await self._maybe_validate_space(space_id, validate_spaces)
         path = self._build_space_path(
             f"/api/data_views/data_view/{_quote(view_id)}"
             f"/runtime_field/{_quote(name)}",
             space_id,
         )
-        await self._maybe_validate_space(space_id, validate_spaces)
         return await self.perform_request("DELETE", path)
 
     async def get_default(
@@ -584,8 +584,8 @@ class AsyncDataViewsClient(AsyncNamespaceClient):
             >>> response = await client.data_views.get_default()
             >>> print(response["data_view_id"])
         """
-        path = self._build_space_path("/api/data_views/default", space_id)
         await self._maybe_validate_space(space_id, validate_spaces)
+        path = self._build_space_path("/api/data_views/default", space_id)
         return await self.perform_request("GET", path)
 
     async def set_default(
@@ -622,8 +622,8 @@ class AsyncDataViewsClient(AsyncNamespaceClient):
         if force is not None:
             body["force"] = force
 
-        path = self._build_space_path("/api/data_views/default", space_id)
         await self._maybe_validate_space(space_id, validate_spaces)
+        path = self._build_space_path("/api/data_views/default", space_id)
         return await self.perform_request("POST", path, body=body)
 
     async def swap_references(
@@ -689,8 +689,8 @@ class AsyncDataViewsClient(AsyncNamespaceClient):
         if delete is not None:
             body["delete"] = delete
 
-        path = self._build_space_path("/api/data_views/swap_references", space_id)
         await self._maybe_validate_space(space_id, validate_spaces)
+        path = self._build_space_path("/api/data_views/swap_references", space_id)
         return await self.perform_request("POST", path, body=body)
 
     async def preview_swap_references(
@@ -752,8 +752,8 @@ class AsyncDataViewsClient(AsyncNamespaceClient):
         if delete is not None:
             body["delete"] = delete
 
+        await self._maybe_validate_space(space_id, validate_spaces)
         path = self._build_space_path(
             "/api/data_views/swap_references/_preview", space_id
         )
-        await self._maybe_validate_space(space_id, validate_spaces)
         return await self.perform_request("POST", path, body=body)

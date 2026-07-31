@@ -319,6 +319,10 @@ This guide covers common issues you may encounter when using kibana-py and their
    marketing_client = client.space("marketing", validate=False)
    ```
 
+   `validate=False` skips only the existence lookup; the space ID format is
+   still checked at construction (no request), so a malformed ID raises
+   `InvalidSpaceIdError` either way.
+
 ### Space Access Denied
 
 **Symptom**: 403 Forbidden errors when accessing space
@@ -377,7 +381,7 @@ This guide covers common issues you may encounter when using kibana-py and their
 
 2. Disable validation if space is known to exist:
    ```python
-   # Skip validation entirely
+   # Skip the space-existence lookup (the format check still runs, locally)
    marketing_client = client.space("marketing", validate=False)
    ```
 

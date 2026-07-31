@@ -117,6 +117,39 @@ def count_space_lookups(client, space_id):
         transport.perform_request = original
 
 
+@contextmanager
+def record_requests(client):
+    """Record every request a client sends, leaving the live transport in place.
+
+    The sibling of :func:`count_space_lookups` for the opposite claim: that a
+    call cost *no* HTTP traffic at all, not merely no space lookup. Yields the
+    list of ``(method, target)`` pairs seen so far.
+
+    :param client: Kibana or AsyncKibana client to observe
+    """
+    sent: list[tuple[str, str]] = []
+    transport = client._transport
+    original = transport.perform_request
+
+    if isinstance(client, AsyncKibana):
+
+        async def recording(**kwargs):
+            sent.append((kwargs.get("method"), kwargs.get("target")))
+            return await original(**kwargs)
+
+    else:
+
+        def recording(**kwargs):
+            sent.append((kwargs.get("method"), kwargs.get("target")))
+            return original(**kwargs)
+
+    transport.perform_request = recording
+    try:
+        yield sent
+    finally:
+        transport.perform_request = original
+
+
 def create_test_space(client, created_spaces, space_id, name, **kwargs):
     """
     Create a test space and track it for cleanup.
@@ -204,20 +237,32 @@ class TestSpaceValidationWithRealKibana:
             "space@domain.com",  # No special chars except - and _
             "space/with/slashes",  # No slashes
             "space.with.dots",  # No dots
+            "trailing-newline\n",  # "$" would forgive one trailing newline
         ]
 
         actions_client = kibana_client.actions
+        actions_client._clear_space_cache()
 
         for invalid_space_id in invalid_space_ids:
-            with pytest.raises(InvalidSpaceIdError) as exc_info:
-                actions_client.create(
-                    name="Test Connector",
-                    connector_type_id=".server-log",
-                    config={},
-                    space_id=invalid_space_id,
-                )
+            with record_requests(kibana_client) as sent:
+                with pytest.raises(InvalidSpaceIdError) as exc_info:
+                    actions_client.create(
+                        name="Test Connector",
+                        connector_type_id=".server-log",
+                        config={},
+                        space_id=invalid_space_id,
+                    )
 
-            assert exc_info.value.space_id == invalid_space_id
+                assert exc_info.value.space_id == invalid_space_id
+                # #74: the format check is local -- it costs no request, and a
+                # malformed id is never cached (not even as "missing").
+                assert sent == [], f"{invalid_space_id!r} reached the server: {sent}"
+                assert kibana_client._space_validation_cache.entries == {}
+
+                # The recorder is live: a real call does show up in it, so the
+                # assertion above is a measurement, not a detached hook.
+                kibana_client.spaces.get_all()
+                assert sent, "recorder saw nothing at all -- it is not attached"
 
     def test_empty_space_id_uses_default_space(self, kibana_client, created_connectors):
         """Test that empty space ID uses default space (no validation error)."""
@@ -778,3 +823,115 @@ class TestSpaceLookupDeduplication:
             await async_kibana_client.alerting.rule.find(space_id=unique_space_id)
 
         assert lookups["count"] == 1
+
+
+class TestMalformedSpaceIdCostsNothing:
+    """Live proof for #74: a malformed space id never reaches the server.
+
+    Async used to validate *existence* before *format*, so these calls issued a
+    real ``GET /api/spaces/space/Bad%20Space%21``, raised ``SpaceNotFoundError``
+    and negative-cached the malformed key; sync failed locally. Both trees now
+    fail locally and identically.
+
+    Every test makes one real call inside the recorder afterwards, so "zero
+    requests" is a measurement and not an unattached recorder.
+    """
+
+    MALFORMED = "Bad Space!"
+
+    def test_sync_namespaces_reject_a_malformed_space_id_locally(self, kibana_client):
+        """Three sync namespaces: InvalidSpaceIdError, no request, no cache entry."""
+        kibana_client.dashboards._clear_space_cache()
+        calls = {
+            "slos.get": lambda: kibana_client.slos.get(
+                slo_id="x", space_id=self.MALFORMED
+            ),
+            "saved_objects.get": lambda: kibana_client.saved_objects.get(
+                type="dashboard", id="x", space_id=self.MALFORMED
+            ),
+            "connectors.get_all": lambda: kibana_client.connectors.get_all(
+                space_id=self.MALFORMED
+            ),
+        }
+
+        with record_requests(kibana_client) as sent:
+            for label, call in calls.items():
+                with pytest.raises(InvalidSpaceIdError) as exc_info:
+                    call()
+                assert exc_info.value.space_id == self.MALFORMED, label
+                assert sent == [], f"{label} reached the server: {sent}"
+                assert kibana_client._space_validation_cache.entries == {}, label
+
+            # The recorder is live: a real call does show up in it.
+            kibana_client.spaces.get_all()
+            assert sent, "recorder saw nothing at all -- it is not attached"
+
+    async def test_async_namespaces_reject_a_malformed_space_id_locally(
+        self, async_kibana_client
+    ):
+        """Async twin -- the tree that used to spend a request on a bad id."""
+        async_kibana_client.dashboards._clear_space_cache()
+
+        with record_requests(async_kibana_client) as sent:
+            for label, call in (
+                (
+                    "slos.get",
+                    lambda: async_kibana_client.slos.get(
+                        slo_id="x", space_id=self.MALFORMED
+                    ),
+                ),
+                (
+                    "saved_objects.get",
+                    lambda: async_kibana_client.saved_objects.get(
+                        type="dashboard", id="x", space_id=self.MALFORMED
+                    ),
+                ),
+                (
+                    "connectors.get_all",
+                    lambda: async_kibana_client.connectors.get_all(
+                        space_id=self.MALFORMED
+                    ),
+                ),
+            ):
+                with pytest.raises(InvalidSpaceIdError) as exc_info:
+                    await call()
+                assert exc_info.value.space_id == self.MALFORMED, label
+                assert sent == [], f"{label} reached the server: {sent}"
+                assert async_kibana_client._space_validation_cache.entries == {}, label
+
+            await async_kibana_client.spaces.get_all()
+            assert sent, "recorder saw nothing at all -- it is not attached"
+
+    @pytest.mark.parametrize("validate", [True, False])
+    def test_sync_space_rejects_a_malformed_id_locally(self, kibana_client, validate):
+        """``Kibana.space()`` honors its documented InvalidSpaceIdError."""
+        kibana_client.dashboards._clear_space_cache()
+
+        with record_requests(kibana_client) as sent:
+            with pytest.raises(InvalidSpaceIdError) as exc_info:
+                kibana_client.space(self.MALFORMED, validate=validate)
+
+            assert exc_info.value.space_id == self.MALFORMED
+            assert sent == [], f"space() reached the server: {sent}"
+            assert kibana_client._space_validation_cache.entries == {}
+
+            kibana_client.spaces.get_all()
+            assert sent, "recorder saw nothing at all -- it is not attached"
+
+    @pytest.mark.parametrize("validate", [True, False])
+    async def test_async_space_rejects_a_malformed_id_locally(
+        self, async_kibana_client, validate
+    ):
+        """``AsyncKibana.space()`` too -- and without seeding the shared cache."""
+        async_kibana_client.dashboards._clear_space_cache()
+
+        with record_requests(async_kibana_client) as sent:
+            with pytest.raises(InvalidSpaceIdError) as exc_info:
+                await async_kibana_client.space(self.MALFORMED, validate=validate)
+
+            assert exc_info.value.space_id == self.MALFORMED
+            assert sent == [], f"space() reached the server: {sent}"
+            assert async_kibana_client._space_validation_cache.entries == {}
+
+            await async_kibana_client.spaces.get_all()
+            assert sent, "recorder saw nothing at all -- it is not attached"

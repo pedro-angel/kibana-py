@@ -12,6 +12,33 @@ from kibana._space_cache import SpaceValidationCache, shared_space_cache
 from kibana._sync.client._base import BaseClient
 from kibana.exceptions import InvalidSpaceIdError, NotFoundError, SpaceNotFoundError
 
+# Space IDs must be lowercase alphanumerics, hyphens and underscores.
+# Applied with fullmatch(), never match() + "$": "$" also matches *before* a
+# trailing newline, so "marketing\n" would pass the check, be pasted into the
+# path, and cost a real GET /api/spaces/space/marketing%0A that comes back as
+# SpaceNotFoundError -- exactly the failure #74 exists to prevent.
+_SPACE_ID_RE = re.compile(r"[a-z0-9_-]+")
+
+
+def _check_space_id_format(space_id: str) -> None:
+    """Reject a space ID that could not name a space, without asking the server.
+
+    Internal (like every other ``_``-prefixed helper here): it is the single
+    source of the rule, not new public API. The namespace clients of both trees
+    reach it through ``_validate_space_id_format``; ``SpaceScopedKibana`` /
+    ``AsyncSpaceScopedKibana`` call it directly, since they are not namespace
+    clients. Purely local -- no request, no cache read or write -- which is what
+    lets every caller run it *first*.
+
+    :param space_id: Space ID to validate
+    :raises InvalidSpaceIdError: If space ID format is invalid
+    """
+    if not isinstance(space_id, str) or not space_id.strip():
+        raise InvalidSpaceIdError(space_id)
+
+    if not _SPACE_ID_RE.fullmatch(space_id):
+        raise InvalidSpaceIdError(space_id)
+
 
 class NamespaceClient:
     """
@@ -118,12 +145,7 @@ class NamespaceClient:
         :param space_id: Space ID to validate
         :raises InvalidSpaceIdError: If space ID format is invalid
         """
-        if not isinstance(space_id, str) or not space_id.strip():
-            raise InvalidSpaceIdError(space_id)
-
-        # Space IDs must be lowercase, alphanumeric, hyphens, underscores
-        if not re.match(r"^[a-z0-9_-]+$", space_id):
-            raise InvalidSpaceIdError(space_id)
+        _check_space_id_format(space_id)
 
     def _validate_space_exists(self, space_id: str) -> None:
         """

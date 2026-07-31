@@ -9,7 +9,7 @@ from elastic_transport import ObjectApiResponse
 
 from kibana._async.client._base import AsyncBaseClient
 from kibana._space_cache import SpaceValidationCache, shared_space_cache
-from kibana.exceptions import InvalidSpaceIdError, NotFoundError, SpaceNotFoundError
+from kibana.exceptions import NotFoundError, SpaceNotFoundError
 
 
 class AsyncNamespaceClient:
@@ -105,34 +105,45 @@ class AsyncNamespaceClient:
         :param space_id: Space ID to validate
         :raises InvalidSpaceIdError: If space ID format is invalid
         """
-        if not isinstance(space_id, str) or not space_id.strip():
-            raise InvalidSpaceIdError(space_id)
-
-        # Space IDs must be lowercase, alphanumeric, hyphens, underscores
-        if not re.match(r"^[a-z0-9_-]+$", space_id):
-            raise InvalidSpaceIdError(space_id)
+        _check_space_id_format(space_id)
 
     async def _maybe_validate_space(
         self,
         space_id: str | None = None,
         validate_space: bool | None = None,
     ) -> None:
-        """Validate space existence if validation is enabled.
+        """Validate the space a call is scoped to: format first, then existence.
 
-        Consolidates the repeated validation pattern used by async client methods.
+        Consolidates the repeated validation pattern used by async client methods,
+        and is where the async tree gets the sync tree's *format-first* semantics.
+        The format check runs first and unconditionally -- exactly as sync's
+        ``_build_space_path`` does it -- because a malformed id is a caller bug,
+        not a server verdict: it must raise ``InvalidSpaceIdError`` before any
+        request goes out and before the shared space cache is read or written, so
+        an id that could not name a space is never negatively cached and never
+        surfaces as ``SpaceNotFoundError`` (#74).
+
+        Callers therefore run this BEFORE ``_build_space_path`` (the PR #60
+        statement order), which the sync/async parity test enforces.
 
         :param space_id: Explicit space ID (falls back to default_space_id)
         :param validate_space: Override for validation flag (falls back to instance setting)
+        :raises InvalidSpaceIdError: If the space ID format is invalid
+        :raises SpaceNotFoundError: If the space doesn't exist and validation is enabled
         """
+        effective_space_id = (
+            space_id if space_id is not None else self._default_space_id
+        )
+        if not effective_space_id:
+            return  # Not space-scoped - nothing to validate
+
+        self._validate_space_id_format(effective_space_id)
+
         should_validate = (
             validate_space if validate_space is not None else self._validate_spaces
         )
-        if should_validate and (space_id or self._default_space_id):
-            effective_space_id = (
-                space_id if space_id is not None else self._default_space_id
-            )
-            if effective_space_id:
-                await self._validate_space_exists(effective_space_id)
+        if should_validate:
+            await self._validate_space_exists(effective_space_id)
 
     async def _validate_space_exists(self, space_id: str) -> None:
         """
@@ -258,7 +269,7 @@ class AsyncNamespaceClient:
 
 
 # Import utility functions from sync version
-from kibana._sync.client.utils import _quote  # noqa: F401
+from kibana._sync.client.utils import _check_space_id_format, _quote  # noqa: F401
 
 __all__ = [
     "AsyncNamespaceClient",

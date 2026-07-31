@@ -78,8 +78,8 @@ class AsyncMlClient(AsyncNamespaceClient):
         if simulate is not None:
             params["simulate"] = simulate
 
-        path = self._build_space_path("/api/ml/saved_objects/sync", space_id)
         await self._maybe_validate_space(space_id, validate_spaces)
+        path = self._build_space_path("/api/ml/saved_objects/sync", space_id)
         return await self.perform_request(
             "GET",
             path,
@@ -142,10 +142,10 @@ class AsyncMlClient(AsyncNamespaceClient):
             "spacesToRemove": spaces_to_remove,
         }
 
+        await self._maybe_validate_space(space_id, validate_spaces)
         path = self._build_space_path(
             "/api/ml/saved_objects/update_jobs_spaces", space_id
         )
-        await self._maybe_validate_space(space_id, validate_spaces)
         return await self.perform_request(
             "POST",
             path,
@@ -202,10 +202,10 @@ class AsyncMlClient(AsyncNamespaceClient):
             "spacesToRemove": spaces_to_remove,
         }
 
+        await self._maybe_validate_space(space_id, validate_spaces)
         path = self._build_space_path(
             "/api/ml/saved_objects/update_trained_models_spaces", space_id
         )
-        await self._maybe_validate_space(space_id, validate_spaces)
         return await self.perform_request(
             "POST",
             path,
