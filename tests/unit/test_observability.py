@@ -1013,6 +1013,11 @@ class TestSwappableSpanProcessor:
         )
         trace.get_tracer_provider().shutdown()
 
+        # The assertions below are about *this* call's log lines, and the
+        # setup call above emitted its own "configured for service" line —
+        # captured whenever the run's log level lets it through (a plain
+        # `pytest --log-level=INFO` does).
+        caplog.clear()
         with caplog.at_level(logging.DEBUG, logger="kibana.observability"):
             configure_opentelemetry(
                 enabled=True, exporter="console", validate_endpoint=False
@@ -3358,7 +3363,11 @@ class TestImportGuardMatrix:
             ("opentelemetry.exporter.otlp.proto.grpc",),
             self.PROBE,
             error="TypeError",
-            interpreter_args=("-W", "error"),
+            # Fatal for exactly the category this fix must survive, and
+            # nothing else: a blanket `-W error` would also turn any future
+            # transitive DeprecationWarning into a failure of this test,
+            # blaming the import guards for someone else's deprecation.
+            interpreter_args=("-W", "error::RuntimeWarning"),
         )
 
         assert result.returncode == 0, (
