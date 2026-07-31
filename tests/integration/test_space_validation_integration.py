@@ -237,6 +237,7 @@ class TestSpaceValidationWithRealKibana:
             "space@domain.com",  # No special chars except - and _
             "space/with/slashes",  # No slashes
             "space.with.dots",  # No dots
+            "trailing-newline\n",  # "$" would forgive one trailing newline
         ]
 
         actions_client = kibana_client.actions
@@ -252,11 +253,16 @@ class TestSpaceValidationWithRealKibana:
                         space_id=invalid_space_id,
                     )
 
-            assert exc_info.value.space_id == invalid_space_id
-            # #74: the format check is local -- it costs no request, and a
-            # malformed id is never cached (not even as "missing").
-            assert sent == [], f"{invalid_space_id!r} reached the server: {sent}"
-            assert kibana_client._space_validation_cache.entries == {}
+                assert exc_info.value.space_id == invalid_space_id
+                # #74: the format check is local -- it costs no request, and a
+                # malformed id is never cached (not even as "missing").
+                assert sent == [], f"{invalid_space_id!r} reached the server: {sent}"
+                assert kibana_client._space_validation_cache.entries == {}
+
+                # The recorder is live: a real call does show up in it, so the
+                # assertion above is a measurement, not a detached hook.
+                kibana_client.spaces.get_all()
+                assert sent, "recorder saw nothing at all -- it is not attached"
 
     def test_empty_space_id_uses_default_space(self, kibana_client, created_connectors):
         """Test that empty space ID uses default space (no validation error)."""

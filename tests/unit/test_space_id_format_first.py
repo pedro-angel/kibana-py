@@ -158,3 +158,54 @@ async def test_async_space_rejects_a_malformed_id(validate):
         await client.space(BAD_SPACE, validate=validate)
 
     _assert_untouched(transport, client)
+
+
+# A trailing newline is the sharp edge of ``$``: it matches at the end of the
+# string *or just before a final newline*, so "marketing\n" passed the format
+# check, was pasted into the path, cost a real
+# GET /api/spaces/space/marketing%0A and came back as SpaceNotFoundError -- the
+# exact #74 failure mode, one regex metacharacter deep. ("team\n\n" was already
+# rejected: only ONE trailing newline is forgiven.)
+NEWLINE_IDS = ["marketing\n", "team\n\n"]
+
+
+@pytest.mark.parametrize("space_id", NEWLINE_IDS, ids=["one-newline", "two-newlines"])
+def test_sync_namespace_rejects_a_trailing_newline(space_id):
+    client, transport = _sync_client()
+
+    with pytest.raises(InvalidSpaceIdError):
+        _CALLS["slos"](client, space_id)
+
+    _assert_untouched(transport, client)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("space_id", NEWLINE_IDS, ids=["one-newline", "two-newlines"])
+async def test_async_namespace_rejects_a_trailing_newline(space_id):
+    client, transport = _async_client()
+
+    with pytest.raises(InvalidSpaceIdError):
+        await _CALLS["slos"](client, space_id)
+
+    _assert_untouched(transport, client)
+
+
+@pytest.mark.parametrize("space_id", NEWLINE_IDS, ids=["one-newline", "two-newlines"])
+def test_sync_space_rejects_a_trailing_newline(space_id):
+    client, transport = _sync_client()
+
+    with pytest.raises(InvalidSpaceIdError):
+        client.space(space_id)
+
+    _assert_untouched(transport, client)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("space_id", NEWLINE_IDS, ids=["one-newline", "two-newlines"])
+async def test_async_space_rejects_a_trailing_newline(space_id):
+    client, transport = _async_client()
+
+    with pytest.raises(InvalidSpaceIdError):
+        await client.space(space_id)
+
+    _assert_untouched(transport, client)

@@ -13,7 +13,11 @@ from kibana._sync.client._base import BaseClient
 from kibana.exceptions import InvalidSpaceIdError, NotFoundError, SpaceNotFoundError
 
 # Space IDs must be lowercase alphanumerics, hyphens and underscores.
-_SPACE_ID_RE = re.compile(r"^[a-z0-9_-]+$")
+# Applied with fullmatch(), never match() + "$": "$" also matches *before* a
+# trailing newline, so "marketing\n" would pass the check, be pasted into the
+# path, and cost a real GET /api/spaces/space/marketing%0A that comes back as
+# SpaceNotFoundError -- exactly the failure #74 exists to prevent.
+_SPACE_ID_RE = re.compile(r"[a-z0-9_-]+")
 
 
 def _check_space_id_format(space_id: str) -> None:
@@ -32,7 +36,7 @@ def _check_space_id_format(space_id: str) -> None:
     if not isinstance(space_id, str) or not space_id.strip():
         raise InvalidSpaceIdError(space_id)
 
-    if not _SPACE_ID_RE.match(space_id):
+    if not _SPACE_ID_RE.fullmatch(space_id):
         raise InvalidSpaceIdError(space_id)
 
 

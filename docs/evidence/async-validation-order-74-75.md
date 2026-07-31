@@ -337,8 +337,54 @@ Required test coverage of 90% reached. Total coverage: 94.31%
 ============================ 3254 passed in 15.03s =============================
 ```
 
-Unit total moves 3221 → 3254 (+33: 28 in the new `test_space_id_format_first.py`,
-5 normalizer self-tests). The parity suite is part of that run.
+Unit total moves 3221 → 3262 (+41: 36 in the new `test_space_id_format_first.py`,
+5 normalizer self-tests). The parity suite is part of that run. (The `make test`
+transcript above predates the last 8 of those tests — the trailing-newline round
+below — which is why it reads 3254.)
+
+## Follow-up: `$` forgave a trailing newline
+
+Code-quality review found that the format regex was applied with
+`re.match(r"^[a-z0-9_-]+$", ...)`, and `$` matches at the end of the string *or
+just before a final newline*. So `"marketing\n"` **passed** the format check, was
+pasted into the path, and cost exactly what #74 exists to prevent: a real
+`GET /api/spaces/space/marketing%0A` answered as `SpaceNotFoundError`. Only one
+trailing newline was forgiven — `"team\n\n"` was already rejected, which is why
+the hole survived a suite full of malformed ids.
+
+RED, on the shipped tree, over both trees and `space()`:
+
+```
+$ .venv/bin/python -m pytest tests/unit/test_space_id_format_first.py -q --no-cov -k newline
+E       Failed: DID NOT RAISE InvalidSpaceIdError
+=========================== short test summary info ============================
+FAILED tests/unit/test_space_id_format_first.py::test_sync_namespace_rejects_a_trailing_newline[one-newline]
+FAILED tests/unit/test_space_id_format_first.py::test_sync_space_rejects_a_trailing_newline[one-newline]
+FAILED tests/unit/test_space_id_format_first.py::test_async_space_rejects_a_trailing_newline[one-newline]
+FAILED tests/unit/test_space_id_format_first.py::test_async_namespace_rejects_a_trailing_newline[one-newline]
+4 failed, 4 passed, 28 deselected in 0.08s
+```
+
+The four passing cases are the `two-newlines` half, which the old regex already
+rejected. GREEN after switching to `_SPACE_ID_RE.fullmatch(...)` (anchors
+dropped, since `fullmatch` *is* the anchor):
+
+```
+$ .venv/bin/python -m pytest tests/unit/test_space_id_format_first.py -q --no-cov
+....................................                                     [100%]
+36 passed in 0.08s
+```
+
+The live suite carries the case too: `"trailing-newline\n"` joined the malformed
+ids in `test_validate_invalid_space_id_format_raises_error`, which also gained
+the recorder-liveness step the newer class already had (a real call inside the
+recorder, asserted to be recorded, so `sent == []` cannot pass vacuously).
+
+```
+$ .venv/bin/pytest tests/integration/test_space_validation_integration.py \
+                   -o addopts="" -p no:randomly -q -ra
+27 passed in 47.52s
+```
 
 ## What this evidence does not cover
 
