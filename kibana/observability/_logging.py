@@ -325,13 +325,23 @@ def _cleanup_log_handlers(handlers: list[logging.Handler]) -> None:
     """Clean up log handlers and remove them from loggers."""
     for handler in handlers:
         try:
-            for logger_name in logging.Logger.manager.loggerDict:
+            # Snapshot the logger names: `loggerDict` is process-global and
+            # any thread calling `logging.getLogger("new.name")` mutates it,
+            # which would abort this loop mid-way with "dictionary changed
+            # size during iteration" — leaving the handler attached to every
+            # logger not yet visited, i.e. the stacking this cleanup exists
+            # to prevent.
+            for logger_name in list(logging.Logger.manager.loggerDict):
                 logger_obj = logging.getLogger(logger_name)
                 if handler in logger_obj.handlers:
                     logger_obj.removeHandler(handler)
             handler.close()
         except Exception as e:
-            logger.debug(f"Error cleaning up log handler: {e}")
+            # Warning, not debug: a handler that could not be detached stays
+            # attached and keeps exporting, so the next configuration will
+            # duplicate its records. That is the user-visible defect from
+            # #76, and it must not be reported at a level nobody enables.
+            logger.warning(f"Error cleaning up log handler: {e}")
 
 
 def get_log_forwarding_status() -> dict[str, Any]:

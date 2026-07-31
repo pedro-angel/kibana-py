@@ -7,6 +7,7 @@ from typing import Any
 
 from kibana.observability._imports import (
     _HTTP_OTLP_PROTOCOLS,
+    _SUPPORTED_EXPORTERS,
     _SUPPORTED_OTLP_PROTOCOLS,
     SERVICE_NAME,
     SERVICE_VERSION,
@@ -106,6 +107,18 @@ def configure_opentelemetry(
         service_name = os.getenv("OTEL_SERVICE_NAME", "kibana-py")
     if exporter is None:
         exporter = os.getenv("KIBANA_OTEL_EXPORTER", "otlp")
+    # Normalized for the same reason as `protocol` below: every downstream
+    # decision is a case-sensitive `exporter == "otlp"` / `== "console"`
+    # check, so an unnormalized "OTLP" matched no branch at all and produced
+    # a configuration with no span exporter — which used to be applied
+    # silently, shutting down the exporters that were working (#76 round 2).
+    exporter = exporter.lower()
+    if exporter not in _SUPPORTED_EXPORTERS:
+        logger.warning(
+            f"Unrecognized exporter '{exporter}': expected "
+            f"{' or '.join(sorted(repr(e) for e in _SUPPORTED_EXPORTERS))}. "
+            "No span exporter will be created from it."
+        )
     if protocol is None:
         protocol = os.getenv("OTEL_EXPORTER_OTLP_PROTOCOL", "grpc")
     # Normalize once, here, before protocol drives any endpoint-shape or
@@ -180,10 +193,10 @@ def configure_opentelemetry(
     # overclaim in a different disguise. Read before installing anything,
     # since installing is what changes the answer.
     reconfiguring = _obs._has_configured_tracer_provider()
-    tracer_provider = _obs._get_reconfigurable_tracer_provider()
-    if tracer_provider is None:
-        tracer_provider = TracerProvider(resource=resource)
-    elif getattr(tracer_provider, "resource", None) != resource:
+    reusable_provider = _obs._get_reconfigurable_tracer_provider()
+    if reusable_provider is not None and (
+        getattr(reusable_provider, "resource", None) != resource
+    ):
         # A provider's Resource is fixed at construction, so a changed
         # service name/resource genuinely cannot be applied to spans without
         # a new process. Say so rather than let the caller assume it took.
@@ -261,9 +274,44 @@ def configure_opentelemetry(
         except Exception as e:
             logger.error(f"Failed to configure console exporter: {e}")
 
+    # A configuration with no span exporter must never be *applied* on top of
+    # one that has them: installing it would shut the working exporters down
+    # and export nothing, while the line at the end of this function reported
+    # success — #76's own failure mode, re-entered from the other side. The
+    # empty case is reachable from an unrecognized `exporter` value and from
+    # a console exporter that failed to construct (#76 round 2).
+    if not span_processors:
+        if reconfiguring:
+            logger.warning(
+                "This configuration creates no span exporter, so it is not "
+                "being applied: kibana-py's previous exporter configuration "
+                "is left untouched rather than silently stopped. Pass "
+                "exporter='otlp' or exporter='console' (or console_export="
+                "True) to change span export."
+            )
+            return
+        logger.warning(
+            "No span exporter was created, so no spans will be exported. "
+            "Pass exporter='otlp' or exporter='console' (or console_export="
+            "True) to export spans."
+        )
+
+    # Built here, not earlier: a TracerProvider registers an atexit flush on
+    # construction, so building one before the early returns above left an
+    # abandoned provider hooked into interpreter shutdown on every path that
+    # gave up (bad endpoint, exporter creation failure, …).
+    tracer_provider = (
+        reusable_provider
+        if reusable_provider is not None
+        else TracerProvider(resource=resource)
+    )
+
     # Nothing above this line touched global state, so every early return so
     # far left any previous configuration working and untouched.
-    if not _obs._install_span_processors(tracer_provider, span_processors):
+    tracer_provider, is_global = _obs._install_span_processors(
+        tracer_provider, span_processors
+    )
+    if not is_global:
         logger.warning(
             "Another component already installed the global OpenTelemetry "
             "tracer provider, and OpenTelemetry does not allow replacing it. "
@@ -275,6 +323,9 @@ def configure_opentelemetry(
         )
 
     instrumentor = _obs.KibanaInstrumentor.get_instance()
+    # The provider that came *back* is the one in use — a concurrent caller
+    # may have installed kibana-py's provider while this call was building
+    # its own, in which case the winner is what spans must be created from.
     instrumentor.enable(tracer_provider=tracer_provider, service_name=service_name)
 
     # Log forwarding. `_created_log_handlers` lives in `_logging`'s module
@@ -283,6 +334,14 @@ def configure_opentelemetry(
     # empty list, taken at import time and never updated by the write below)
     # is why this cleanup branch never fired and every repeat call stacked
     # another handler on the "kibana" logger (#76).
+    #
+    # Known residual: the LoggerProvider behind the handlers being detached is
+    # NOT shut down here, so its batch processor thread lives (idle, with no
+    # handler feeding it) until process exit. That is deliberate, not an
+    # oversight: `set_logger_provider()` also refuses every call after the
+    # first, so the provider built by the *first* configuration is the process
+    # global that unrelated code may hold loggers from — shutting it down on
+    # reconfigure would break those callers to reclaim one idle thread.
     import kibana.observability._logging as _logging_mod
 
     if _logging_mod._created_log_handlers:

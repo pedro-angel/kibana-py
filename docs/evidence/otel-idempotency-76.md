@@ -456,6 +456,112 @@ swallow is a broken third-party install — precisely the case the guards exist 
 Covered by `test_import_kibana_under_corrupted_install` (3 parametrized cases, RED
 pre-fix as shown above).
 
+## Round 2 (code-quality review) — two regressions into #76's own failure class
+
+The code-quality review found two MAJORs, both introduced by the round-1 fix
+itself, and both a re-entry into the defect this issue is about: *a call that
+reports success and silently stops exporting*. Both were probe-verified by the
+reviewer and are now pinned by tests that were witnessed failing against the
+round-1 commit (`baf2461`) — pre-round-2 `kibana/observability/` restored,
+round-2 tests kept:
+
+```
+        assert tracer is not None
+>       assert working.exported == ["still-exporting"], (
+E       AssertionError: the working exporter must survive a configuration that creates no exporter of its own
+E       assert [] == ['still-exporting']
+
+        assert tracer is not None
+>       assert second.exported == ["after-repair"], (
+E       AssertionError: the reconfigured exporter must actually receive spans, not be swapped into a processor registered on nothing
+E       assert [] == ['after-repair']
+
+            assert not failures, f"round {round_index}: {failures!r}"
+            assert provider is not None and processor is not None
+>           assert trace.get_tracer_provider() is provider, (
+E           AssertionError: round 1: tracked provider is not the global one
+E           assert <opentelemetry.sdk.trace.TracerProvider object at 0x10c257ad0> is <opentelemetry.sdk.trace.TracerProvider object at 0x10c172f90>
+FAILED tests/unit/test_observability.py::TestConfigureOpenTelemetryIdempotency::test_reconfigure_without_a_span_exporter_keeps_the_working_config
+FAILED tests/unit/test_observability.py::TestConfigureOpenTelemetryIdempotency::test_reconfigure_repairs_a_mismatched_tracked_pair
+FAILED tests/unit/test_observability.py::TestConfigureOpenTelemetryIdempotency::test_concurrent_first_configure_publishes_a_consistent_pair
+3 failed in 0.12s
+```
+
+**MAJOR 1 — an empty exporter list was applied.** A reconfiguration that
+produced no span processors (an unrecognized `exporter` value such as a
+miscased `"OTLP"`, or a console exporter that failed to construct) called
+`swap(())`: it shut the working exporter down, exported nothing, and logged
+"reconfigured". Pre-#76 code kept exporting in that situation. Fixed: an empty
+processor list is never installed over an existing configuration — it warns and
+leaves the running exporters alone — and on a first configuration it warns that
+no spans will be exported. `exporter` is also normalized and validated now
+(minor 1), which removes the most likely way to reach the empty case by
+accident.
+
+**MAJOR 2 — the tracked provider/processor pair could be published
+inconsistently.** They were two module globals assigned in sequence with no
+lock across the read-check-install sequence, so two threads doing a first
+configure could interleave into (thread A's provider, thread B's processor).
+Every later reconfiguration then swapped exporters into a processor registered
+on nothing while spans kept flowing out of the old exporter — success logged,
+nothing changed. Fixed: one name holds the pair, published in a single
+assignment under a module-level reentrant lock that spans the whole
+read-check-install-publish sequence; a caller whose provider lost the race gets
+the winner's provider back (and its own is shut down rather than left with a
+live atexit hook); and a pair that is inconsistent anyway is *repaired* — the
+orphan is released and a fresh processor attached to the provider that is
+genuinely global — with a warning, instead of being swapped into. The threaded
+test reproduced the race naturally on the round-1 commit (round 1 of 25), so
+this one is not a scheduling-luck regression guard: it is a witnessed failure.
+
+Ten minors were fixed in the same round: `exporter` normalization/validation;
+`force_flush` sharing one deadline across delegates with no short-circuit;
+`swap()` documenting its two accepted residuals (a span that captured the old
+delegate tuple can be dropped by a just-shut-down delegate; releasing the
+superseded delegate is synchronous and can stall up to the SDK's 30s join
+against a dead endpoint — off-thread release is a recorded non-goal);
+`shutdown()` clearing its delegates under the lock and un-publishing the pair;
+the `TracerProvider` no longer being built before the early-return paths that
+abandon it (it registers an atexit flush on construction); `_cleanup_log_handlers`
+iterating a snapshot of `loggerDict` and reporting failures at WARNING (a
+handler it fails to detach keeps exporting, which is the duplicate-export
+defect); an in-code note for the deliberately-not-shut-down superseded
+`LoggerProvider` (the first one installed is the process-global one that
+unrelated code may hold loggers from — reclaiming one idle thread is not worth
+breaking them); the user-guide claim softened from "exported exactly once" to
+"no record is exported twice", naming the detach→attach window; the import
+guards widened from `(ImportError, AttributeError)` to `Exception` (the
+real-world corrupted-protobuf failure is `TypeError`, and guessing exception
+types is how a guard stops guarding) with a WARNING that says the package *is*
+installed rather than advising an install; and the unit fixture now saves and
+restores the "kibana" logger level, which a real log-forwarding run otherwise
+pins at WARNING for the whole session.
+
+### Live re-run after round 2 (the reconfigure path changed)
+
+```
+[a] after configure #1: OTelLogHandler count on 'kibana' = 1
+[a]   handler ids=[4544241104] enabled_flags=[True]
+WARNING:opentelemetry._logs._internal:Overriding of current LoggerProvider is not allowed
+[a] after configure #2: OTelLogHandler count on 'kibana' = 1
+[a]   handler ids=[4544249168] enabled_flags=[True]
+WARNING:kibana:battle-test log record WU6-LOGMARKER-round2
+[a] Elasticsearch logs-* documents containing WU6-LOGMARKER-round2: 1
+[a]   index=.ds-logs-apm.app.kibana_py_wu6_round2_logs-default-2026.07.31-000001 source={"@timestamp": "2026-07-31T12:19:21.695Z", "service": {"name": "kibana-py-wu6-round2-logs"}, "message": "battle-test log record WU6-LOGMARKER-round2"}
+
+[b] after configure #1 (dead http://localhost:8299): live exporters=[('BatchSpanProcessor', 'OTLPSpanExporter', 'http://localhost:8299/v1/traces')]
+INFO:kibana.observability:OTLP exporter configured: http://localhost:8200/v1/traces?wu6=round2 (protocol: http/protobuf)
+INFO:kibana.observability:OpenTelemetry reconfigured for service: kibana-py-wu6-round2-traces (logs: disabled)
+[b] after configure #2 (live http://localhost:8200?wu6=round2): live exporters=[('BatchSpanProcessor', 'OTLPSpanExporter', 'http://localhost:8200/v1/traces?wu6=round2')]
+[b] Elasticsearch traces-apm* documents for kibana-py-wu6-round2-traces: 1
+[b]   index=.ds-traces-apm-default-2026.07.31-000001 source={"@timestamp": "2026-07-31T12:19:29.932Z", "service": {"name": "kibana-py-wu6-round2-traces"}, "processor": {"event": "transaction"}, "transaction": {"name": "wu6.reconfigure.round2"}}
+```
+
+Unchanged from the round-1 result: one handler and one indexed log document
+after two configure calls; the live exporter swapped to the new endpoint with
+its query parameter preserved; the span indexed in `traces-apm*`; and not one
+connection attempt to the superseded `:8299` endpoint.
+
 ## Known residuals (not fixed here, deliberately)
 
 - **The superseded `LoggerProvider` is not shut down on reconfigure.** Log *handlers*
@@ -463,7 +569,25 @@ pre-fix as shown above).
   but `_setup_log_forwarding` builds a fresh `LoggerProvider` per call and the
   previous one keeps an idle `BatchLogRecordProcessor` thread until process exit. No
   records reach it once its handler is detached, so this is a resource residual, not
-  a correctness one. Out of the issue's scope; worth a follow-up.
+  a correctness one. Round 2 recorded the reason it stays that way, in code at the
+  cleanup site: `set_logger_provider()` also refuses every call after the first, so
+  the provider built by the *first* configuration is the process-global one that
+  unrelated code may hold loggers from — shutting it down on reconfigure would break
+  those callers to reclaim one idle thread.
+- **A log record emitted during the reconfiguration window is not forwarded.** The
+  old handler is detached before the new one is attached (well under a millisecond
+  apart), and a record emitted in between reaches neither. This is the deliberate
+  direction of the trade: never duplicate, occasionally drop. Documented in the user
+  guide rather than claimed away as "exactly once".
+- **A span can be dropped in a processor swap**, for the same reason: `on_end` reads
+  the delegate tuple once, so a span holding the old tuple can reach a delegate that
+  `swap()` has just shut down (the SDK drops it with an INFO line). Closing that
+  window means a lock on every span's `on_end` — a hot-path mutex to protect an
+  operation that happens a handful of times per process.
+- **Releasing a superseded delegate is synchronous.** A `BatchSpanProcessor` whose
+  endpoint is unreachable can spend up to the SDK's 30s join inside the caller's
+  `configure_opentelemetry()` call. Off-thread release would hide the stall along
+  with any failure, and is a recorded non-goal rather than an oversight.
 - **`set_logger_provider()` is refused on every call after the first**
   (`Overriding of current LoggerProvider is not allowed`, visible in the (a)
   transcripts on both trees). Log forwarding is unaffected because each

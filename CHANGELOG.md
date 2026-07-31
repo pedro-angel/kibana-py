@@ -52,6 +52,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `enable()` applied to a loser was silently discarded (16 of 16 threads got
   distinct instances with the constructor window widened). It now uses
   double-checked locking.
+  Two further guarantees close the same failure mode from the other side: a
+  configuration that creates **no** span exporter (an unrecognized `exporter`
+  value — now case-normalized, with a warning — or a console exporter that
+  failed to construct) is no longer *applied* on top of a working one, since
+  doing so shut the working exporters down and reported success; and the
+  provider/processor pair kibana-py tracks is published as a single value
+  under a lock, so concurrent `configure_opentelemetry()` calls cannot
+  interleave into a mismatched pair whose later reconfigurations swap
+  exporters into a processor registered on nothing. Concurrent first-time
+  configuration converges on one installation, and a provider that is shut
+  down stops being advertised as reconfigurable.
 - **A missing or corrupted OpenTelemetry logs SDK no longer breaks log
   forwarding or `import kibana`.** `ConsoleLogExporter` was never bound in the
   logs `except`-branch of `kibana/observability/_imports.py`, so an install
@@ -59,15 +70,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `_setup_log_forwarding`, the same unbound-name defect as
   [#68](https://github.com/pedro-angel/kibana-py/issues/68)/[#70](https://github.com/pedro-angel/kibana-py/issues/70)
   deferred by one import; it is now bound to `None` like every other name in
-  that branch. Separately, all six guards in that module now catch
-  `AttributeError` as well as `ImportError`: a *missing* distribution raises
+  that branch. Separately, all six guards in that module now catch any
+  exception, not just `ImportError`: a *missing* distribution raises
   `ImportError`, but a *corrupted or version-mismatched* one executes its
-  module body and typically raises `AttributeError` against a dependency that
-  no longer exports some symbol — which previously propagated straight out of
-  `import kibana` for every user of this client, whether or not they opted into
-  observability. Those `try` blocks contain nothing but `import` statements, so
-  the broader `except` can only absorb a broken third-party install. Both are
-  pinned by the subprocess-isolated import-guard matrix
+  module body and raises whatever that raises — `AttributeError` against a
+  dependency that no longer exports a symbol, or `TypeError` out of generated
+  protobuf code when protobuf and an exporter disagree — which previously
+  propagated straight out of `import kibana` for every user of this client,
+  whether or not they opted into observability. Those `try` blocks contain
+  nothing but `import` statements, so the broad `except` can only absorb a
+  broken third-party install. The two cases are no longer conflated in the
+  logs either: a missing package stays a debug note that says how to install
+  it, while a package that is present but fails to import now logs a
+  **warning** saying exactly that, instead of advising an install that would
+  not help. All of it is pinned by the subprocess-isolated import-guard matrix
   ([#76](https://github.com/pedro-angel/kibana-py/issues/76) review follow-ups).
 - **`configure_opentelemetry(protocol="http/protobuf")` now actually reaches the
   APM server instead of 404/405ing on every span.** Two compounding defects:

@@ -175,11 +175,20 @@ configure_opentelemetry(
 Repeat calls are safe and apply: the exporters behind the already-installed
 tracer provider are swapped for the new ones (the superseded exporters are shut
 down), and the log-forwarding handler on each configured logger is closed and
-replaced rather than stacked, so every log record is still exported exactly
-once.
+replaced rather than stacked, so **no record is exported twice**. Records
+emitted *during* the reconfiguration — after the old handler is detached and
+before the new one is attached, a window of well under a millisecond — are not
+forwarded at all; reconfiguring while a request is in flight can therefore drop
+a record, which is the deliberate trade for never duplicating one.
 
-Two constraints come from OpenTelemetry itself and are reported rather than
+Three constraints come from OpenTelemetry itself and are reported rather than
 silently absorbed:
+
+- **A configuration that creates no span exporter is not applied on top of one
+  that works.** `exporter="otlp"` and `exporter="console"` are the values that
+  produce an exporter (case-insensitively); anything else logs a warning, and
+  on a repeat call kibana-py keeps the exporters that are already running
+  instead of silently stopping them.
 
 - **Resource attributes are fixed when the provider is created.** A later call
   with a different `service_name`/`resource` logs a warning and keeps the

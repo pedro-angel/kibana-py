@@ -23,16 +23,56 @@ logger = logging.getLogger("kibana.observability")
 _HTTP_OTLP_PROTOCOLS = frozenset({"http/protobuf", "http"})
 _SUPPORTED_OTLP_PROTOCOLS = frozenset({"grpc"}) | _HTTP_OTLP_PROTOCOLS
 
+# The `exporter` values `configure_opentelemetry` knows how to build a span
+# exporter from. Anything else produces no exporter at all, which is a
+# configuration worth warning about rather than applying silently (#76).
+_SUPPORTED_EXPORTERS = frozenset({"otlp", "console"})
+
+
+def _report_guarded_import_failure(
+    component: str, error: BaseException, install_hint: str
+) -> None:
+    """Report why an optional import failed, without misdiagnosing it.
+
+    A missing distribution and a broken one need opposite advice, and the
+    exception type is what tells them apart. ``ImportError`` means "not
+    installed" — expected, opt-in, debug-level, and "install it" is the fix.
+    Anything else means the package *is* installed and blew up while
+    importing (a protobuf/grpc version conflict raising ``TypeError`` is the
+    classic), which is a broken environment the user cannot fix by installing
+    the package again — that deserves a warning, and one that says so.
+    """
+    if isinstance(error, ImportError):
+        logger.debug(
+            f"{component} not available ({error}). Install with: {install_hint}"
+        )
+        return
+    logger.warning(
+        f"{component} is installed but failed to import "
+        f"({type(error).__name__}: {error}). The features it provides are "
+        "disabled. This is a corrupted or version-mismatched install — "
+        "repair or align the versions of the OpenTelemetry packages and "
+        "their dependencies; re-running the install command alone will not "
+        "fix it."
+    )
+
+
 # ---------- Trace SDK availability ----------
-# Every guard in this module catches ``(ImportError, AttributeError)``, not
-# ``ImportError`` alone. A *missing* distribution raises ImportError, but a
-# *corrupted or version-mismatched* one raises whatever its module body raises
-# while executing -- most commonly AttributeError (e.g. an OTLP exporter
-# reaching for a symbol its pinned dependency no longer exports). Since these
-# try blocks contain nothing but import statements, the only thing a broadened
-# except can swallow is a broken third-party install, and the whole point of
-# the guards is that such an install degrades observability instead of taking
-# down ``import kibana`` for every user of this client (#76).
+# Every guard in this module catches ``Exception``, not ``ImportError`` alone.
+# A *missing* distribution raises ImportError, but a *corrupted or
+# version-mismatched* one raises whatever its module body raises while
+# executing: AttributeError against a dependency that no longer exports a
+# symbol, or -- the failure people actually hit in the wild -- TypeError out
+# of generated protobuf code when protobuf and the exporter disagree about
+# descriptor formats. Guessing the exception type is how a guard silently
+# stops guarding, so the type is not guessed. These try blocks contain
+# nothing but import statements, so the only thing the broad except can
+# swallow is a broken third-party install, and the whole point of the guards
+# is that such an install degrades observability instead of taking down
+# ``import kibana`` for every user of this client (#76). Which failure
+# happened is not swallowed: `_report_guarded_import_failure` tells the two
+# apart and warns (rather than whispers "install it") when the package is
+# present but broken.
 try:
     from opentelemetry import trace  # noqa: F401
     from opentelemetry.sdk.resources import (  # noqa: F401
@@ -58,7 +98,12 @@ try:
         )
 
         GRPC_EXPORTER_AVAILABLE = True
-    except (ImportError, AttributeError):
+    except Exception as e:
+        _report_guarded_import_failure(
+            "gRPC OTLP trace exporter",
+            e,
+            "pip install opentelemetry-exporter-otlp-proto-grpc",
+        )
         OTLPSpanExporter = None  # type: ignore[misc, assignment]
         GRPC_EXPORTER_AVAILABLE = False
 
@@ -68,12 +113,17 @@ try:
         )
 
         HTTP_EXPORTER_AVAILABLE = True
-    except (ImportError, AttributeError):
+    except Exception as e:
+        _report_guarded_import_failure(
+            "HTTP OTLP trace exporter",
+            e,
+            "pip install opentelemetry-exporter-otlp-proto-http",
+        )
         HTTPOTLPSpanExporter = None  # type: ignore[misc, assignment]
         HTTP_EXPORTER_AVAILABLE = False
 
     OTEL_AVAILABLE = True
-except (ImportError, AttributeError):
+except Exception as e:
     OTEL_AVAILABLE = False
     GRPC_EXPORTER_AVAILABLE = False
     HTTP_EXPORTER_AVAILABLE = False
@@ -91,9 +141,10 @@ except (ImportError, AttributeError):
     BatchSpanProcessor = None  # type: ignore[misc, assignment]
     ConsoleSpanExporter = None  # type: ignore[misc, assignment]
     trace = None  # type: ignore[misc, assignment]
-    logger.debug(
-        "OpenTelemetry not available. "
-        "Install with: pip install kibana-py[observability]"
+    _report_guarded_import_failure(
+        "OpenTelemetry tracing SDK",
+        e,
+        "pip install kibana-py[observability]",
     )
 
 # ---------- Log SDK availability ----------
@@ -111,7 +162,12 @@ try:
         )
 
         GRPC_LOG_EXPORTER_AVAILABLE = True
-    except (ImportError, AttributeError):
+    except Exception as e:
+        _report_guarded_import_failure(
+            "gRPC OTLP log exporter",
+            e,
+            "pip install opentelemetry-exporter-otlp-proto-grpc",
+        )
         OTLPLogExporter = None  # type: ignore[misc, assignment]
         GRPC_LOG_EXPORTER_AVAILABLE = False
 
@@ -121,12 +177,17 @@ try:
         )
 
         HTTP_LOG_EXPORTER_AVAILABLE = True
-    except (ImportError, AttributeError):
+    except Exception as e:
+        _report_guarded_import_failure(
+            "HTTP OTLP log exporter",
+            e,
+            "pip install opentelemetry-exporter-otlp-proto-http",
+        )
         HTTPOTLPLogExporter = None  # type: ignore[misc, assignment]
         HTTP_LOG_EXPORTER_AVAILABLE = False
 
     OTEL_LOGS_AVAILABLE = True
-except (ImportError, AttributeError):
+except Exception as e:
     OTEL_LOGS_AVAILABLE = False
     GRPC_LOG_EXPORTER_AVAILABLE = False
     HTTP_LOG_EXPORTER_AVAILABLE = False
@@ -147,8 +208,9 @@ except (ImportError, AttributeError):
     # belong to the trace try/except above and may already be correctly
     # bound (real exporter or None) by the time this block runs. Clobbering
     # them unconditionally silently disabled working trace exporters (#70).
-    logger.debug(
-        "OpenTelemetry logs not available. Install with: pip install "
-        "opentelemetry-exporter-otlp-proto-grpc "
-        "opentelemetry-exporter-otlp-proto-http"
+    _report_guarded_import_failure(
+        "OpenTelemetry logs SDK",
+        e,
+        "pip install opentelemetry-exporter-otlp-proto-grpc "
+        "opentelemetry-exporter-otlp-proto-http",
     )
