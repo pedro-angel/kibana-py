@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 
-from kibana.observability._imports import logger
+from kibana.observability._imports import _HTTP_OTLP_PROTOCOLS, logger
 
 
 def _validate_apm_connectivity(
@@ -24,10 +24,20 @@ def _validate_apm_connectivity(
         host = parsed.hostname or "localhost"
         if parsed.port:
             port = parsed.port
-        elif protocol == "grpc":
-            port = 4317
-        else:
+        elif protocol in _HTTP_OTLP_PROTOCOLS:
             port = 4318
+        else:
+            # Anything that isn't a recognized HTTP variant (including an
+            # unrecognized/invalid protocol string) assumes the gRPC port.
+            # This mirrors the same bias in configure_opentelemetry's
+            # default-endpoint fallback (kibana/observability/_config.py) --
+            # the module's own default `protocol` (when unspecified) is
+            # "grpc", so an unrecognized value is treated the same way rather
+            # than silently guessing the HTTP port. `_HTTP_OTLP_PROTOCOLS` is
+            # the single shared source of truth for "HTTP-shaped" protocols
+            # (kibana/observability/_imports.py), reused here and in
+            # _config.py/_exporters.py rather than re-hardcoded.
+            port = 4317
 
         for attempt in range(max_retries + 1):
             try:

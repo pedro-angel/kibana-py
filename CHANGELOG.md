@@ -8,6 +8,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **`configure_opentelemetry(protocol="http/protobuf")` now actually reaches the
+  APM server instead of 404/405ing on every span.** Two compounding defects:
+  (1) the OTLP/HTTP exporter got the raw configured (or default) endpoint
+  verbatim — no `/v1/traces` resource path — so spans POSTed to the bare root
+  and the APM server rejected them (`405 Method Not Allowed`), while log
+  forwarding's `_get_log_endpoint` already appended `/v1/logs` correctly, so
+  traces silently dropped while logs worked; (2) when no endpoint was
+  configured, the default was always the gRPC port `:4317`, even for
+  `http/protobuf`, which needs `:4318`
+  ([#77](https://github.com/pedro-angel/kibana-py/issues/77)). A new
+  `_get_trace_endpoint` helper (mirroring `_get_log_endpoint`) now appends
+  `/v1/traces` for `http/protobuf` endpoints that don't already have a signal
+  path, and the no-endpoint-configured default is now protocol-aware (`:4318`
+  for `http/protobuf`, `:4317` for `grpc`) for both traces and log forwarding,
+  which shares the same default-endpoint computation. The "does it already
+  have the path" check is anchored to the end of the path (`_get_signal_endpoint`,
+  a shared core now used by both `_get_trace_endpoint` and `_get_log_endpoint`),
+  not a bare substring match, so an endpoint that merely contains `/v1/traces`
+  or `/v1/logs` mid-path (e.g. behind a gateway route) still gets the real
+  signal path appended instead of being wrongly treated as already-correct.
+  `configure_opentelemetry`'s `protocol` argument is now case-normalized, and
+  an unrecognized value logs a warning instead of silently picking a default.
+  The check and append both operate on the URL's *path* component only (via
+  `urllib.parse.urlsplit`/`urlunsplit`), so an endpoint with a query string or
+  fragment (e.g. `http://h:8200?token=x`) still gets the signal path inserted
+  into the path — not appended after the query — and query/fragment are
+  preserved unchanged. gRPC endpoints and already-correct explicit endpoints
+  (with or without a trailing slash, already ending in `/v1/traces`, or
+  carrying a query string/fragment) are unaffected.
 - **A malformed `space_id` now fails the same way in async as in sync: locally,
   with no request and nothing cached.** Sync checks the id's *format* before
   anything else, so `client.slos.get(slo_id="x", space_id="Bad Space!")` raised

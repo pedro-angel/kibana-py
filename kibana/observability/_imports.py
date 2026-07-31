@@ -7,6 +7,22 @@ import logging
 # Set up logger
 logger = logging.getLogger("kibana.observability")
 
+# ---------- OTLP protocol constants ----------
+# Single source of truth for which `protocol` strings this package treats as
+# "HTTP-shaped" (requires an OTLP resource path like /v1/traces, defaults to
+# port 4318) vs. the full set of protocol strings recognized at all. Defined
+# here -- the one module the others already depend on, directly or
+# transitively, with no risk of a circular import -- and reused (not
+# re-hardcoded) by:
+#   * _config.py     -- default-endpoint port bias, unrecognized-protocol
+#                        warning check
+#   * _exporters.py  -- _get_signal_endpoint's path-append decision, and the
+#                        grpc/http branches in _create_otlp_exporter /
+#                        _create_otlp_log_exporter
+#   * _validation.py -- _validate_apm_connectivity's port guess
+_HTTP_OTLP_PROTOCOLS = frozenset({"http/protobuf", "http"})
+_SUPPORTED_OTLP_PROTOCOLS = frozenset({"grpc"}) | _HTTP_OTLP_PROTOCOLS
+
 # ---------- Trace SDK availability ----------
 try:
     from opentelemetry import trace  # noqa: F401
