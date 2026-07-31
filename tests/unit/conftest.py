@@ -43,3 +43,17 @@ def _reset_otel_state():
         instrumentor.disable()
     except ImportError:
         pass
+
+    try:
+        # Drop kibana-py's reference to the provider it installed, so the next
+        # test starts from "nothing installed" rather than holding a
+        # shut-down provider alive. (configure_opentelemetry survives this
+        # either way — it re-checks that its provider is still the OTel
+        # global before reusing it — but the reference would keep a dead
+        # provider and its exporters reachable for the rest of the session.)
+        import kibana.observability._tracing as _tracing_mod
+
+        _tracing_mod._installed_tracer_provider = None
+        _tracing_mod._installed_span_processor = None
+    except ImportError:
+        pass

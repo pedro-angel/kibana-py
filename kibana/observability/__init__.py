@@ -3,6 +3,14 @@
 This package was decomposed from a single ``observability.py`` module.
 All public names are re-exported here so that existing imports
 (``from kibana.observability import …``) continue to work unchanged.
+
+Note that **mutable module state is deliberately not re-exported** — only
+functions, classes and constants are. A re-exported list or flag is a
+*snapshot* taken at import time: the defining module rebinding its own global
+never updates the copy here, so readers of the copy and writers of the
+original silently drift apart. That is exactly how the log-handler leak in
+issue #76 happened (``_created_log_handlers``), so such state is now reached
+through its defining module (``kibana.observability._logging``) only.
 """
 
 from __future__ import annotations
@@ -41,7 +49,6 @@ from kibana.observability._imports import (  # noqa: F401
 from kibana.observability._logging import (  # noqa: F401
     OTelLogHandler,
     _cleanup_log_handlers,
-    _created_log_handlers,
     _setup_log_forwarding,
     get_log_forwarding_status,
     validate_log_forwarding_configuration,
@@ -55,6 +62,8 @@ from kibana.observability._tracing import (  # noqa: F401
     _get_opentelemetry_logs_version,
     _get_opentelemetry_version,
     _get_python_version,
+    _get_reconfigurable_tracer_provider,
+    _install_span_processors,
     create_span,
     safe_span_operation,
     set_span_error,

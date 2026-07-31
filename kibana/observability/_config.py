@@ -16,7 +16,6 @@ from kibana.observability._imports import (
     ResourceAttributes,
     TracerProvider,
     logger,
-    trace,
 )
 from kibana.observability._tracing import (
     _get_kibana_py_version,
@@ -166,7 +165,30 @@ def configure_opentelemetry(
             default_attrs.update(resource_attributes)
         resource = Resource(attributes=default_attrs)
 
-    tracer_provider = TracerProvider(resource=resource)
+    # Reconfiguration (issue #76, problem 2). OTel installs the global tracer
+    # provider exactly once per process, so building a second provider here
+    # would silently orphan everything hung off it — the exporter created
+    # below would never see a span, yet the success line at the end of this
+    # function would still claim otherwise. Reuse the provider we installed
+    # (if it is still the global one) and swap its span processors instead;
+    # only the first configuration creates and installs a provider.
+    tracer_provider = _obs._get_reconfigurable_tracer_provider()
+    reconfiguring = tracer_provider is not None
+    if tracer_provider is None:
+        tracer_provider = TracerProvider(resource=resource)
+    elif getattr(tracer_provider, "resource", None) != resource:
+        # A provider's Resource is fixed at construction, so a changed
+        # service name/resource genuinely cannot be applied to spans without
+        # a new process. Say so rather than let the caller assume it took.
+        logger.warning(
+            "Reconfiguring the existing OpenTelemetry tracer provider: "
+            "exporters are being replaced, but resource attributes (service "
+            "name/version) keep the values from the first configuration — "
+            "OpenTelemetry fixes a provider's resource at creation. Restart "
+            "the process to change them."
+        )
+
+    span_processors: list[Any] = []
 
     if exporter == "otlp":
         if endpoint is None:
@@ -211,7 +233,7 @@ def configure_opentelemetry(
                     "Failed to create OTLP exporter, continuing without telemetry"
                 )
                 return
-            tracer_provider.add_span_processor(BatchSpanProcessor(otlp_exporter))
+            span_processors.append(BatchSpanProcessor(otlp_exporter))
             logger.info(
                 f"OTLP exporter configured: {trace_endpoint} (protocol: {protocol})"
             )
@@ -222,26 +244,40 @@ def configure_opentelemetry(
     if exporter == "console" or console_export:
         try:
             console_exporter = ConsoleSpanExporter()
-            tracer_provider.add_span_processor(BatchSpanProcessor(console_exporter))
+            span_processors.append(BatchSpanProcessor(console_exporter))
             logger.info("Console exporter configured")
         except Exception as e:
             logger.error(f"Failed to configure console exporter: {e}")
 
-    trace.set_tracer_provider(tracer_provider)
+    # Nothing above this line touched global state, so every early return so
+    # far left any previous configuration working and untouched.
+    if not _obs._install_span_processors(tracer_provider, span_processors):
+        logger.warning(
+            "Another component already installed the global OpenTelemetry "
+            "tracer provider, and OpenTelemetry does not allow replacing it. "
+            "kibana-py's own spans are still created and exported with this "
+            "configuration, through a tracer provider of its own, but "
+            "trace.get_tracer_provider() keeps returning the other "
+            "component's provider — configure kibana-py first if you want it "
+            "to own process-wide tracing."
+        )
 
     instrumentor = _obs.KibanaInstrumentor.get_instance()
     instrumentor.enable(tracer_provider=tracer_provider, service_name=service_name)
 
-    # Log forwarding — look up handlers through the package namespace
-    # so that test patches applied to kibana.observability._created_log_handlers
-    # are respected.
-    if _obs._created_log_handlers:
-        _obs._cleanup_log_handlers(_obs._created_log_handlers)
-        _obs._created_log_handlers = []
+    # Log forwarding. `_created_log_handlers` lives in `_logging`'s module
+    # namespace; read *and* write it through that one binding. Reading the
+    # `kibana.observability` package attribute instead (a snapshot of the
+    # empty list, taken at import time and never updated by the write below)
+    # is why this cleanup branch never fired and every repeat call stacked
+    # another handler on the "kibana" logger (#76).
+    import kibana.observability._logging as _logging_mod
+
+    if _logging_mod._created_log_handlers:
+        _obs._cleanup_log_handlers(_logging_mod._created_log_handlers)
+        _logging_mod._created_log_handlers = []
 
     if logs_enabled:
-        import kibana.observability._logging as _logging_mod
-
         _logging_mod._created_log_handlers = _obs._setup_log_forwarding(
             logs_enabled=logs_enabled,
             logs_level=logs_level,
@@ -254,7 +290,10 @@ def configure_opentelemetry(
             console_export=console_export,
         )
 
+    # Reached only when the configuration actually took effect: every path
+    # that changed nothing returned above with a warning instead.
     logger.info(
-        f"OpenTelemetry configured for service: {service_name} "
+        f"OpenTelemetry {'reconfigured' if reconfiguring else 'configured'} "
+        f"for service: {service_name} "
         f"(logs: {'enabled' if logs_enabled else 'disabled'})"
     )

@@ -1,7 +1,8 @@
-"""KibanaInstrumentor singleton and span helpers."""
+"""KibanaInstrumentor singleton, tracer-provider lifecycle, and span helpers."""
 
 from __future__ import annotations
 
+import threading
 from typing import Any
 
 from kibana.observability._imports import (
@@ -93,17 +94,29 @@ class KibanaInstrumentor:
     """
 
     _instance: KibanaInstrumentor | None = None
+    # Guards the check-then-set in get_instance(). Without it, threads that
+    # raced past the ``is None`` check each built their own instance and every
+    # loser's state -- including an ``enable()`` applied to it -- was silently
+    # discarded when the winner's object was the one everyone else later read
+    # back from ``cls._instance`` (#76).
+    _instance_lock: threading.Lock = threading.Lock()
 
     def __init__(self) -> None:
         """Initialize the instrumentor."""
         self._enabled: bool = False
         self._tracer: Any | None = None
+        self._tracer_provider: Any | None = None
 
     @classmethod
     def get_instance(cls) -> KibanaInstrumentor:
-        """Get or create the singleton instance."""
+        """Get or create the singleton instance (thread-safe)."""
+        # Double-checked locking: the fast path stays lock-free for the
+        # overwhelmingly common already-created case, and only the creation
+        # window is serialized.
         if cls._instance is None:
-            cls._instance = cls()
+            with cls._instance_lock:
+                if cls._instance is None:
+                    cls._instance = cls()
         return cls._instance
 
     def enable(
@@ -122,7 +135,14 @@ class KibanaInstrumentor:
             )
             return
 
-        if self._enabled:
+        # Already-enabled is only a no-op when the caller is asking for the
+        # same provider we are already tracing through. A caller handing us a
+        # *different* provider is asking for a rebind, and silently keeping
+        # the old tracer is exactly the "configured successfully, changed
+        # nothing" failure mode of #76.
+        if self._enabled and (
+            tracer_provider is None or tracer_provider is self._tracer_provider
+        ):
             logger.debug("Kibana instrumentation already enabled")
             return
 
@@ -137,6 +157,7 @@ class KibanaInstrumentor:
         except TypeError:
             self._tracer = tracer_provider.get_tracer("kibana-py")
 
+        self._tracer_provider = tracer_provider
         self._enabled = True
         logger.info("Kibana OpenTelemetry instrumentation enabled")
 
@@ -144,6 +165,7 @@ class KibanaInstrumentor:
         """Disable OpenTelemetry instrumentation."""
         self._enabled = False
         self._tracer = None
+        self._tracer_provider = None
         logger.info("Kibana OpenTelemetry instrumentation disabled")
 
     def is_enabled(self) -> bool:
@@ -159,6 +181,145 @@ class KibanaInstrumentor:
     def _get_version(self) -> str:
         """Get the kibana-py version."""
         return _get_kibana_py_version()
+
+
+# ---------------------------------------------------------------------------
+# Tracer-provider lifecycle
+# ---------------------------------------------------------------------------
+
+
+class _SwappableSpanProcessor:
+    """A span processor whose delegates can be replaced in place.
+
+    OpenTelemetry allows exactly one global ``TracerProvider`` per process —
+    ``trace.set_tracer_provider()`` refuses every call after the first — and a
+    ``TracerProvider`` can only ever have processors *added*, never removed.
+    Together those two facts made ``configure_opentelemetry()`` a silent no-op
+    on the second call: it built a whole new provider and exporter that
+    nothing ever reached (#76).
+
+    Registering one instance of this class on the provider gives kibana-py a
+    stable slot on a provider it can no longer replace: reconfiguring swaps
+    the delegate processors behind it (shutting the superseded ones down)
+    instead of orphaning a provider. The provider therefore keeps exactly one
+    kibana-py processor no matter how many times configuration is re-applied —
+    no accumulation of dead processors and no per-span "Shutdown called,
+    ignoring Span" noise from them.
+
+    Deliberately not a subclass of the SDK's ``SpanProcessor``: that class is
+    imported through this package's optional-dependency guards and is ``None``
+    when the SDK is absent, which would make the class statement itself raise.
+    The SDK calls processors structurally, so the duck-typed methods below are
+    the whole contract.
+    """
+
+    def __init__(self, delegates: tuple[Any, ...] | list[Any] = ()) -> None:
+        self._lock = threading.Lock()
+        # A tuple, like the SDK's own multi-processor: readers iterate a
+        # snapshot, so a swap can never be observed half-applied.
+        self._delegates: tuple[Any, ...] = tuple(delegates)
+
+    def swap(self, delegates: tuple[Any, ...] | list[Any]) -> None:
+        """Install ``delegates`` and shut down the ones they replace."""
+        with self._lock:
+            superseded, self._delegates = self._delegates, tuple(delegates)
+        for delegate in superseded:
+            try:
+                delegate.shutdown()
+            except Exception as e:
+                logger.debug(f"Failed to shut down superseded span processor: {e}")
+
+    def on_start(self, span: Any, parent_context: Any = None) -> None:
+        for delegate in self._delegates:
+            delegate.on_start(span, parent_context=parent_context)
+
+    def _on_ending(self, span: Any) -> None:
+        # Private SDK hook (``Span.end()`` calls it on the registered
+        # processor). Forwarded defensively so this wrapper stays correct on
+        # SDK versions both with and without it.
+        for delegate in self._delegates:
+            hook = getattr(delegate, "_on_ending", None)
+            if hook is not None:
+                hook(span)
+
+    def on_end(self, span: Any) -> None:
+        for delegate in self._delegates:
+            delegate.on_end(span)
+
+    def shutdown(self) -> None:
+        for delegate in self._delegates:
+            delegate.shutdown()
+
+    def force_flush(self, timeout_millis: int = 30000) -> bool:
+        return all(delegate.force_flush(timeout_millis) for delegate in self._delegates)
+
+
+# The provider kibana-py is currently tracing through, and the swappable
+# processor it registered on it. Module-level because the OTel global they
+# mirror is module-level too. Read and written through *this* binding only —
+# the split read-here/write-there binding is the bug this module's siblings
+# were just fixed for (#76); nothing re-exports these two names.
+_installed_tracer_provider: Any | None = None
+_installed_span_processor: _SwappableSpanProcessor | None = None
+
+
+def _get_reconfigurable_tracer_provider() -> Any | None:
+    """Return the provider kibana-py installed, if it is still the global one.
+
+    ``None`` means there is nothing to reconfigure in place — either kibana-py
+    never installed a provider, or something else replaced/reset the global
+    since (tests do exactly that, and so does a component that installed its
+    own provider first), in which case building a fresh one is the right move.
+    """
+    if _installed_tracer_provider is None or _installed_span_processor is None:
+        return None
+    if trace is None or trace.get_tracer_provider() is not _installed_tracer_provider:
+        return None
+    return _installed_tracer_provider
+
+
+def _install_span_processors(tracer_provider: Any, span_processors: list[Any]) -> bool:
+    """Make ``span_processors`` the live kibana-py span processors.
+
+    Two paths, one contract — afterwards, kibana-py's spans reach exactly
+    these processors and nothing this function installed earlier:
+
+    * ``tracer_provider`` is the provider we already installed globally: the
+      delegates behind our stable processor are swapped and the superseded
+      ones shut down (this is what makes reconfiguration apply at all, given
+      that OTel refuses to replace a global provider — #76);
+    * otherwise: the previous configuration's exporters are released, our
+      stable processor is attached to ``tracer_provider``, and it is offered
+      to OTel as the global provider.
+
+    Returns whether ``tracer_provider`` is now the *global* provider. ``False``
+    means another component already owns the global one, so kibana-py traces
+    through ``tracer_provider`` privately: its own spans are still created and
+    exported (they carry the ambient context, so parent/child links across the
+    two providers survive), but ``trace.get_tracer_provider()`` keeps
+    returning the other component's provider. The caller must say so instead
+    of implying kibana-py owns process-wide tracing.
+    """
+    global _installed_tracer_provider, _installed_span_processor
+
+    reusable = _get_reconfigurable_tracer_provider()
+    installed = _installed_span_processor
+    if reusable is not None and tracer_provider is reusable and installed is not None:
+        installed.swap(span_processors)
+        return True
+
+    # Whatever we tracked is about to stop being what kibana-py traces
+    # through, so release its exporters here rather than leaving a batch
+    # processor thread (and its socket) running for the rest of the process.
+    if installed is not None:
+        installed.swap(())
+
+    processor = _SwappableSpanProcessor(span_processors)
+    tracer_provider.add_span_processor(processor)
+    trace.set_tracer_provider(tracer_provider)
+    _installed_tracer_provider = tracer_provider
+    _installed_span_processor = processor
+    return bool(trace.get_tracer_provider() is tracer_provider)
 
 
 def create_span(
