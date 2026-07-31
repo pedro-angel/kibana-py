@@ -12,6 +12,28 @@ from kibana._space_cache import SpaceValidationCache, shared_space_cache
 from kibana._sync.client._base import BaseClient
 from kibana.exceptions import InvalidSpaceIdError, NotFoundError, SpaceNotFoundError
 
+# Space IDs must be lowercase alphanumerics, hyphens and underscores.
+_SPACE_ID_RE = re.compile(r"^[a-z0-9_-]+$")
+
+
+def validate_space_id_format(space_id: str) -> None:
+    """Reject a space ID that could not name a space, without asking the server.
+
+    The single source of the rule: the namespace clients of both trees call it
+    through ``_validate_space_id_format``, and ``SpaceScopedKibana`` /
+    ``AsyncSpaceScopedKibana`` call it directly (they are not namespace clients).
+    Purely local -- no request, no cache read or write -- which is what lets every
+    caller run it *first*.
+
+    :param space_id: Space ID to validate
+    :raises InvalidSpaceIdError: If space ID format is invalid
+    """
+    if not isinstance(space_id, str) or not space_id.strip():
+        raise InvalidSpaceIdError(space_id)
+
+    if not _SPACE_ID_RE.match(space_id):
+        raise InvalidSpaceIdError(space_id)
+
 
 class NamespaceClient:
     """
@@ -118,12 +140,7 @@ class NamespaceClient:
         :param space_id: Space ID to validate
         :raises InvalidSpaceIdError: If space ID format is invalid
         """
-        if not isinstance(space_id, str) or not space_id.strip():
-            raise InvalidSpaceIdError(space_id)
-
-        # Space IDs must be lowercase, alphanumeric, hyphens, underscores
-        if not re.match(r"^[a-z0-9_-]+$", space_id):
-            raise InvalidSpaceIdError(space_id)
+        validate_space_id_format(space_id)
 
     def _validate_space_exists(self, space_id: str) -> None:
         """

@@ -185,10 +185,9 @@ class AsyncSavedObjectsClient(AsyncNamespaceClient):
         else:
             base_path = f"/api/saved_objects/{_quote(type)}"
 
-        path = self._build_space_path(base_path, space_id)
-
         # Validate space if enabled
         await self._maybe_validate_space(space_id, validate_space)
+        path = self._build_space_path(base_path, space_id)
 
         # Build request body
         body: dict[str, Any] = {
@@ -258,13 +257,12 @@ class AsyncSavedObjectsClient(AsyncNamespaceClient):
         if not id:
             raise ValueError("Parameter 'id' is required")
 
+        # Validate space if enabled
+        await self._maybe_validate_space(space_id, validate_space)
         # Build request path using base class utility
         path = self._build_space_path(
             f"/api/saved_objects/{_quote(type)}/{_quote(id)}", space_id
         )
-
-        # Validate space if enabled
-        await self._maybe_validate_space(space_id, validate_space)
 
         # Make the request
         return await self.perform_request(
@@ -318,13 +316,12 @@ class AsyncSavedObjectsClient(AsyncNamespaceClient):
         if not id:
             raise ValueError("Parameter 'id' is required")
 
+        # Validate space if enabled
+        await self._maybe_validate_space(space_id, validate_space)
         # Build request path using base class utility
         path = self._build_space_path(
             f"/api/saved_objects/resolve/{_quote(type)}/{_quote(id)}", space_id
         )
-
-        # Validate space if enabled
-        await self._maybe_validate_space(space_id, validate_space)
 
         # Make the request
         return await self.perform_request(
@@ -429,10 +426,9 @@ class AsyncSavedObjectsClient(AsyncNamespaceClient):
         if sort_field is not None:
             params["sort_field"] = sort_field
 
-        path = self._build_space_path("/api/saved_objects/_find", space_id)
-
         # Validate space if enabled
         await self._maybe_validate_space(space_id, validate_space)
+        path = self._build_space_path("/api/saved_objects/_find", space_id)
 
         return await self.perform_request("GET", path, params=params)
 
@@ -494,13 +490,12 @@ class AsyncSavedObjectsClient(AsyncNamespaceClient):
         if attributes is None:
             raise ValueError("Parameter 'attributes' is required")
 
+        # Validate space if enabled
+        await self._maybe_validate_space(space_id, validate_space)
         # Build request path using base class utility
         path = self._build_space_path(
             f"/api/saved_objects/{_quote(type)}/{_quote(id)}", space_id
         )
-
-        # Validate space if enabled
-        await self._maybe_validate_space(space_id, validate_space)
 
         # Build request body
         body: dict[str, Any] = {
@@ -562,13 +557,12 @@ class AsyncSavedObjectsClient(AsyncNamespaceClient):
         if not id:
             raise ValueError("Parameter 'id' is required")
 
+        # Validate space if enabled
+        await self._maybe_validate_space(space_id, validate_space)
         # Build request path using base class utility
         path = self._build_space_path(
             f"/api/saved_objects/{_quote(type)}/{_quote(id)}", space_id
         )
-
-        # Validate space if enabled
-        await self._maybe_validate_space(space_id, validate_space)
 
         # Build query parameters
         params: dict[str, Any] = {}
@@ -626,10 +620,9 @@ class AsyncSavedObjectsClient(AsyncNamespaceClient):
         if not objects:
             raise ValueError("Parameter 'objects' is required")
 
-        path = self._build_space_path("/api/saved_objects/_bulk_create", space_id)
-
         # Validate space if enabled
         await self._maybe_validate_space(space_id, validate_space)
+        path = self._build_space_path("/api/saved_objects/_bulk_create", space_id)
 
         params: dict[str, Any] = {}
         if overwrite is not None:
@@ -677,10 +670,9 @@ class AsyncSavedObjectsClient(AsyncNamespaceClient):
         if not objects:
             raise ValueError("Parameter 'objects' is required")
 
-        path = self._build_space_path("/api/saved_objects/_bulk_get", space_id)
-
         # Validate space if enabled
         await self._maybe_validate_space(space_id, validate_space)
+        path = self._build_space_path("/api/saved_objects/_bulk_get", space_id)
 
         return await self.perform_request(
             method="POST",
@@ -725,10 +717,9 @@ class AsyncSavedObjectsClient(AsyncNamespaceClient):
         if not objects:
             raise ValueError("Parameter 'objects' is required")
 
-        path = self._build_space_path("/api/saved_objects/_bulk_resolve", space_id)
-
         # Validate space if enabled
         await self._maybe_validate_space(space_id, validate_space)
+        path = self._build_space_path("/api/saved_objects/_bulk_resolve", space_id)
 
         return await self.perform_request(
             method="POST",
@@ -780,10 +771,9 @@ class AsyncSavedObjectsClient(AsyncNamespaceClient):
         if not objects:
             raise ValueError("Parameter 'objects' is required")
 
-        path = self._build_space_path("/api/saved_objects/_bulk_update", space_id)
-
         # Validate space if enabled
         await self._maybe_validate_space(space_id, validate_space)
+        path = self._build_space_path("/api/saved_objects/_bulk_update", space_id)
 
         return await self.perform_request(
             method="POST",
@@ -828,10 +818,9 @@ class AsyncSavedObjectsClient(AsyncNamespaceClient):
         if not objects:
             raise ValueError("Parameter 'objects' is required")
 
-        path = self._build_space_path("/api/saved_objects/_bulk_delete", space_id)
-
         # Validate space if enabled
         await self._maybe_validate_space(space_id, validate_space)
+        path = self._build_space_path("/api/saved_objects/_bulk_delete", space_id)
 
         params: dict[str, Any] = {}
         if force is not None:
@@ -901,10 +890,9 @@ class AsyncSavedObjectsClient(AsyncNamespaceClient):
         if objects is None and type is None:
             raise ValueError("Either 'objects' or 'type' must be provided")
 
-        path = self._build_space_path("/api/saved_objects/_export", space_id)
-
         # Validate space if enabled
         await self._maybe_validate_space(space_id, validate_space)
+        path = self._build_space_path("/api/saved_objects/_export", space_id)
 
         body: dict[str, Any] = {}
         if objects is not None:
@@ -983,10 +971,9 @@ class AsyncSavedObjectsClient(AsyncNamespaceClient):
         if file is None or (isinstance(file, (str, bytes, list)) and not file):
             raise ValueError("Parameter 'file' is required")
 
-        path = self._build_space_path("/api/saved_objects/_import", space_id)
-
         # Validate space if enabled
         await self._maybe_validate_space(space_id, validate_space)
+        path = self._build_space_path("/api/saved_objects/_import", space_id)
 
         params: dict[str, Any] = {}
         if create_new_copies is not None:
@@ -1064,12 +1051,11 @@ class AsyncSavedObjectsClient(AsyncNamespaceClient):
         if retries is None:
             raise ValueError("Parameter 'retries' is required")
 
+        # Validate space if enabled
+        await self._maybe_validate_space(space_id, validate_space)
         path = self._build_space_path(
             "/api/saved_objects/_resolve_import_errors", space_id
         )
-
-        # Validate space if enabled
-        await self._maybe_validate_space(space_id, validate_space)
 
         params: dict[str, Any] = {}
         if create_new_copies is not None:
@@ -1124,12 +1110,11 @@ class AsyncSavedObjectsClient(AsyncNamespaceClient):
             ... )
             >>> print(result["successful"], result["failed"])
         """
+        # Validate space if enabled
+        await self._maybe_validate_space(space_id, validate_space)
         path = self._build_space_path(
             "/api/encrypted_saved_objects/_rotate_key", space_id
         )
-
-        # Validate space if enabled
-        await self._maybe_validate_space(space_id, validate_space)
 
         params: dict[str, Any] = {}
         if batch_size is not None:

@@ -168,9 +168,9 @@ class AsyncConnectorsClient(AsyncNamespaceClient):
         if id is not None:
             base_path = f"{base_path}/{_quote(id)}"
 
-        # Build space-scoped path and validate space if enabled
-        path = self._build_space_path(base_path, space_id)
         await self._maybe_validate_space(space_id, validate_space)
+        # Build space-scoped path
+        path = self._build_space_path(base_path, space_id)
 
         # Build request body
         body: dict[str, Any] = {
@@ -223,9 +223,9 @@ class AsyncConnectorsClient(AsyncNamespaceClient):
         if not id:
             raise ValueError("Parameter 'id' is required")
 
-        # Build space-scoped path and validate space if enabled
-        path = self._build_space_path(f"/api/actions/connector/{_quote(id)}", space_id)
         await self._maybe_validate_space(space_id, validate_space)
+        # Build space-scoped path
+        path = self._build_space_path(f"/api/actions/connector/{_quote(id)}", space_id)
 
         return await self.perform_request(
             method="GET",
@@ -260,9 +260,9 @@ class AsyncConnectorsClient(AsyncNamespaceClient):
             >>> for connector in connectors.body:
             ...     print(f"{connector['name']}: {connector['connector_type_id']}")
         """
-        # Build space-scoped path and validate space if enabled
-        path = self._build_space_path("/api/actions/connectors", space_id)
         await self._maybe_validate_space(space_id, validate_space)
+        # Build space-scoped path
+        path = self._build_space_path("/api/actions/connectors", space_id)
 
         return await self.perform_request(
             method="GET",
@@ -307,9 +307,9 @@ class AsyncConnectorsClient(AsyncNamespaceClient):
             ...     feature_id="alerting"
             ... )
         """
-        # Build space-scoped path and validate space if enabled
-        path = self._build_space_path("/api/actions/connector_types", space_id)
         await self._maybe_validate_space(space_id, validate_space)
+        # Build space-scoped path
+        path = self._build_space_path("/api/actions/connector_types", space_id)
 
         params: dict[str, Any] = {}
         if feature_id is not None:
@@ -379,9 +379,9 @@ class AsyncConnectorsClient(AsyncNamespaceClient):
         if not name:
             raise ValueError("Parameter 'name' is required")
 
-        # Build space-scoped path and validate space if enabled
-        path = self._build_space_path(f"/api/actions/connector/{_quote(id)}", space_id)
         await self._maybe_validate_space(space_id, validate_space)
+        # Build space-scoped path
+        path = self._build_space_path(f"/api/actions/connector/{_quote(id)}", space_id)
 
         # PUT is a full replacement: name is always sent; omitted
         # config/secrets are defaulted to {} by the server.
@@ -431,9 +431,9 @@ class AsyncConnectorsClient(AsyncNamespaceClient):
         if not id:
             raise ValueError("Parameter 'id' is required")
 
-        # Build space-scoped path and validate space if enabled
-        path = self._build_space_path(f"/api/actions/connector/{_quote(id)}", space_id)
         await self._maybe_validate_space(space_id, validate_space)
+        # Build space-scoped path
+        path = self._build_space_path(f"/api/actions/connector/{_quote(id)}", space_id)
 
         return await self.perform_request(
             method="DELETE",
@@ -494,11 +494,11 @@ class AsyncConnectorsClient(AsyncNamespaceClient):
         if params is None:
             raise ValueError("Parameter 'params' is required")
 
-        # Build space-scoped path and validate space if enabled
+        await self._maybe_validate_space(space_id, validate_space)
+        # Build space-scoped path
         path = self._build_space_path(
             f"/api/actions/connector/{_quote(id)}/_execute", space_id
         )
-        await self._maybe_validate_space(space_id, validate_space)
 
         return await self.perform_request(
             method="POST",
@@ -554,11 +554,11 @@ class AsyncConnectorsClient(AsyncNamespaceClient):
             ... )
             >>> print(response.meta.status)
         """
-        # Build space-scoped path and validate space if enabled
+        await self._maybe_validate_space(space_id, validate_space)
+        # Build space-scoped path
         path = self._build_space_path(
             "/api/actions/connector/_oauth_callback", space_id
         )
-        await self._maybe_validate_space(space_id, validate_space)
 
         params: dict[str, Any] = {}
         if code is not None:
@@ -611,11 +611,11 @@ class AsyncConnectorsClient(AsyncNamespaceClient):
         # elastic-transport cannot deserialize by default.
         self._ensure_script_serializer()
 
-        # Build space-scoped path and validate space if enabled
+        await self._maybe_validate_space(space_id, validate_space)
+        # Build space-scoped path
         path = self._build_space_path(
             "/api/actions/connector/_oauth_callback_script", space_id
         )
-        await self._maybe_validate_space(space_id, validate_space)
 
         return await self.perform_request(
             method="GET",

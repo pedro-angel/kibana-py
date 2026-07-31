@@ -49,6 +49,7 @@ from kibana._async.client.task_manager import AsyncTaskManagerClient
 from kibana._async.client.timeline import AsyncTimelineClient
 from kibana._async.client.upgrade_assistant import AsyncUpgradeAssistantClient
 from kibana._async.client.uptime import AsyncUptimeClient
+from kibana._async.client.utils import validate_space_id_format
 from kibana._async.client.visualizations import AsyncVisualizationsClient
 from kibana._async.client.workflows import AsyncWorkflowsClient
 from kibana._rate_limiter import AsyncRateLimiter
@@ -473,10 +474,17 @@ class AsyncSpaceScopedKibana:
         :param client: The main AsyncKibana client to delegate to
         :param space_id: The space ID to scope operations to
         :param validate: Whether space validation is enabled for namespaces
+        :raises InvalidSpaceIdError: If the space_id format is invalid
         """
         self._client = client
         self._space_id = space_id
         self._validate = validate
+
+        # Format first, and regardless of ``validate``: a malformed id is a caller
+        # bug, so it fails locally here -- before ``space()`` awaits
+        # _validate_space_on_creation, so no request goes out and the shared space
+        # cache is never seeded with an id that could not name a space (#74).
+        validate_space_id_format(space_id)
 
         # Wire space-scoped namespace clients
         def scoped(cls: type) -> Any:
