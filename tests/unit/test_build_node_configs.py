@@ -95,6 +95,57 @@ class TestBuildNodeConfigsValidHostsUnchanged:
         assert configs[0].scheme == "http"
         assert configs[1].scheme == "https"
 
+    @pytest.mark.parametrize(
+        "host, expected",
+        [
+            # Userinfo (user:pass@) is accepted by urlparse but silently
+            # dropped: the code never reads parsed_url.username/.password,
+            # so it never reaches NodeConfig. Confirmed identical on main
+            # (pre-#71-fix) before asserting this here.
+            (
+                "https://user:pass@host:9243/prefix/",
+                {
+                    "scheme": "https",
+                    "host": "host",
+                    "port": 9243,
+                    "path_prefix": "/prefix",
+                },
+            ),
+            # IPv6 literal: urlparse().hostname unwraps the brackets.
+            (
+                "https://[::1]:9200",
+                {
+                    "scheme": "https",
+                    "host": "::1",
+                    "port": 9200,
+                    "path_prefix": "",
+                },
+            ),
+            # Trailing-slash path prefix: NodeConfig normalizes away the
+            # trailing slash (path_prefix == "/kibana", not "/kibana/").
+            (
+                "http://host:5601/kibana/",
+                {
+                    "scheme": "http",
+                    "host": "host",
+                    "port": 5601,
+                    "path_prefix": "/kibana",
+                },
+            ),
+        ],
+    )
+    def test_edge_case_forms_match_main_behavior(self, host, expected):
+        """Regression guard: these edge forms must keep parsing exactly as
+        they did on main before issue #71's fix -- the fix only rejects
+        scheme-less strings and must not change parsing of anything that
+        already had a scheme."""
+        (config,) = _build_node_configs(host, None)
+
+        assert config.scheme == expected["scheme"]
+        assert config.host == expected["host"]
+        assert config.port == expected["port"]
+        assert config.path_prefix == expected["path_prefix"]
+
 
 class TestBuildNodeConfigsNonStringHostsUnchanged:
     """Non-string host entries (dict) are untouched by the string-only check."""
