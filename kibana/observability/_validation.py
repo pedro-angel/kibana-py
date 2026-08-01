@@ -51,6 +51,23 @@ from kibana.observability._imports import _HTTP_OTLP_PROTOCOLS, logger
 # plain `threading.Thread(daemon=True)` instead). So the guarantee this
 # constant buys is strictly about the CALLER's wall-clock wait, not about
 # how long the abandoned background thread itself keeps running.
+#
+# That residual COMPOUNDS under repeated calls against a persistently-hung
+# host: each call that times out abandons one more probe thread, and none
+# of them are ever joined or cancelled, so a caller that polls
+# `validate_apm_server_availability`/`_validate_apm_connectivity` in a loop
+# against a chronically unreachable/slow-DNS host accumulates one
+# still-running daemon thread per call, for as long as the OS resolver
+# takes to give up on each -- measured directly: 5 sequential calls against
+# a stub that hangs left 5 such threads alive at once. This package's own
+# call site is one-shot -- `configure_opentelemetry`'s `validate_endpoint`
+# check runs once at startup, not in a loop -- so it never hits this; a
+# caller that wraps this function in its own polling loop against a
+# chronically-hung host is the one that would accumulate threads, and
+# should own that concern itself (e.g. by not polling a host it already
+# knows is chronically unreachable). No new mechanism added for this here:
+# the fix is documenting the residual precisely, not a caller this package
+# doesn't have.
 _PROBE_TOTAL_BUDGET_SECONDS: float = 5.0
 
 

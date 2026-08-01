@@ -417,6 +417,19 @@ version of the fix for which "daemon thread, no caller impact" is a true stateme
 an assumption. `_PROBE_TOTAL_BUDGET_SECONDS`'s comment documents this explicitly, including why
 `ThreadPoolExecutor` was considered and rejected.
 
+**Residual note added at re-review — compounding under repeated calls:** the abandoned-thread
+residual above is per-call, and it compounds: a caller that polls
+`validate_apm_server_availability`/`_validate_apm_connectivity` in a loop against a
+persistently-hung host abandons one more probe thread per call, none of which are ever joined
+or cancelled, so threads accumulate for as long as the OS resolver takes to give up on each one
+— the re-reviewer measured this directly and found 5 threads alive after 5 sequential calls
+against a hung stub. This package's own call site is unaffected: `configure_opentelemetry`'s
+`validate_endpoint` check is one-shot at startup, never a loop, so it never accumulates more
+than one abandoned thread per process. Ruling: no new mechanism added (no thread cap, no
+dedup/coalescing) — a caller that wraps this function in its own polling loop against a
+host it already knows is chronically unreachable owns that concern itself. Documented directly
+in `_PROBE_TOTAL_BUDGET_SECONDS`'s comment in `_validation.py`.
+
 RED (before the fix-round; run against round-1 code at `efea794`, stubbing
 `socket.create_connection` with a double that ignores its arguments — including its own
 `timeout` kwarg — and just blocks, standing in for an unresponsive resolver):
