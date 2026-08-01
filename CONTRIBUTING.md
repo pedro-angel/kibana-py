@@ -645,10 +645,19 @@ not who authored it or how much work it was:
   ([#80](https://github.com/pedro-angel/kibana-py/issues/80)) changed no shipped code
   but changed what a contributor's local gate does.
 - **Don't log it** — plumbing that only CI touches and no contributor invokes directly:
-  a GitHub Actions workflow tweak, a pinned action SHA bump, a CI-only script with no
-  local entry point. These land as plain commits (e.g. the shared pip+setuptools
+  a routine GitHub Actions workflow tweak, a pinned action SHA bump, a CI-only script
+  with no local entry point. These land as plain commits (e.g. the shared pip+setuptools
   upgrade script wired into `test.yml` — no `CHANGELOG.md` entry, since it changed no
   command a contributor runs).
+- **Carve-out — log it anyway:** a change to **release-pipeline *behavior*** — job
+  ordering, gating semantics, anything that changes what a *failed* release leaves
+  behind — is dev-facing even though the only file touched is a workflow. The test is
+  not "does a contributor invoke this file," it's "does this change what a releaser
+  observes or has to recover from" (see [Release Process](#release-process) — releasing
+  is a workflow every maintainer runs). E.g. reordering `release.yml` so `publish-pypi`
+  runs before `publish-github-release` changes the state a failed release leaves behind
+  ([#82](https://github.com/pedro-angel/kibana-py/issues/82)) — logged, unlike a same-file
+  SHA pin bump with no behavior change, which is not.
 
 When a change is a mix (it changes both a shipped behavior and unrelated CI wiring in
 the same PR), log the shipped part and let the CI part pass silently within that entry.

@@ -13,12 +13,11 @@ see [CONTRIBUTING.md § Changelog Policy](CONTRIBUTING.md#changelog-policy).
 - **`release.yml` hardening: direct integration dependency, PyPI-before-GitHub-release
   ordering, immutable pin comment**
   ([#82](https://github.com/pedro-angel/kibana-py/issues/82), found by the 2026-07-31
-  adversarial deep review, release-hygiene lens). This is a dev-facing change to the
-  release pipeline a releaser directly drives by pushing a tag (see
-  [`docs/source/development/release-process.md`](docs/source/development/release-process.md)),
-  so it gets an entry under the
-  [changelog policy](CONTRIBUTING.md#changelog-policy) despite touching only
-  `.github/workflows/release.yml`. Three changes:
+  adversarial deep review, release-hygiene lens). Logged under the
+  [changelog policy](CONTRIBUTING.md#changelog-policy)'s release-pipeline-behavior
+  carve-out: this changes release-pipeline **behavior** — job ordering and gating
+  semantics, specifically what a *failed* release leaves behind — not a routine
+  workflow tweak or pin bump, which is the carve-out's own dividing line. Three changes:
   1. `publish-pypi` and `publish-github-release` both now list `integration` directly in
      `needs:`, not only transitively through each other — a future edit to either job
      can no longer silently drop the release gate.

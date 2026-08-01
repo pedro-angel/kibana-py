@@ -226,8 +226,9 @@ $ echo $?
 ```
 
 All default-stage hooks pass (matches `checks.yml`'s `pre-commit run --all-files` step;
-the manual-stage hooks — `check-pin-comments-match`, `check-diagrams-rendered` — are
-covered separately, §5 above and not re-run here since this change doesn't touch built
+the manual-stage hooks are `check-pin-comments-match` (§5 above) and
+`check-diagrams-rendered`, which runs as part of `make docs` — covered next in §7, since
+this change directly edits a mermaid diagram in `release-process.md` and does touch built
 docs).
 
 `check-commit-trailer` (`stages: [commit-msg]`) is exercised at actual commit time, not by
@@ -239,7 +240,53 @@ installed, not referenced by any workflow) — `check-yaml` (pre-commit-hooks, r
 passed) is this repo's actual YAML-syntax gate and is what's reported here instead of an
 unused tool.
 
-## 7. Gate: job-graph sanity — exact `needs:` edges, all 5 jobs
+## 7. Docs build gate (`make docs`)
+
+`release-process.md`'s mermaid diagram was directly edited (node/edge reorder to
+`build`/`integration` → `publish-pypi` → `publish-github-release`), so the docs build —
+including the diagram-render check — is a real gate for this change, not an optional
+extra. Ran fresh for this evidence file (following `docs-drift-81.md`'s convention):
+
+```
+$ make docs
+.venv/bin/sphinx-build -W --keep-going -b html docs/source docs/build/html
+Running Sphinx v9.0.4
+loading translations [en]... done
+loading pickled environment... The configuration has changed (2 options: 'html_static_path', 'pygments_dark_style')
+... (full HTML build, all pages, including development/release-process) ...
+writing additional pages... search done
+dumping search index in English (code: en)... done
+dumping object inventory... done
+build succeeded.
+
+The HTML pages are in docs/build/html.
+.venv/bin/sphinx-build -b linkcheck docs/source docs/build/linkcheck
+Running Sphinx v9.0.4
+... (full linkcheck, all pages) ...
+(development/release-process: line   9) ok        https://github.com/pedro-angel/kibana-py/blob/main/.github/workflows/release.yml
+(development/release-process: line   86) ok        https://github.com/pedro-angel/kibana-py/blob/main/.readthedocs.yaml
+(development/release-process: line   92) redirect  https://docs.readthedocs.io/en/stable/intro/import-guide.html - with Found to https://docs.readthedocs.com/platform/stable/intro/add-project.html
+(development/release-process: line  161) ok        https://github.com/pedro-angel/kibana-py/blob/main/docs/source/changelog.md
+(development/release-process: line  170) ok        https://github.com/pedro-angel/kibana-py/blob/main/CONTRIBUTING.md
+... (remaining pages: ok/ignored/redirect only, zero broken) ...
+build succeeded.
+
+Look for any errors in the above output or in docs/build/linkcheck/output.txt
+.venv/bin/pre-commit run check-diagrams-rendered --hook-stage manual --all-files
+every mermaid fence rendered in the built docs (post-docs-build; run at CI/manual stage).......................Passed
+```
+
+Exit status: `0`. `-W` turns every Sphinx warning into a build failure, so the clean exit
+confirms no broken MyST syntax, cross-reference, or heading-anchor markup in the touched
+pages (`release-process.md`, `PUBLISHING_GUIDE.md` is not part of the Sphinx tree — it is
+a repo-root file, not under `docs/source/`). Zero broken links (`grep -i broken` over the
+full linkcheck output returns nothing) — only `ok`, `ignored` (localhost URLs), and
+`redirect` (pre-existing 301/302s unrelated to this change) results. The reordered
+`publish-pypi` → `publish-github-release` mermaid diagram was confirmed **rendered**, not
+just parsed: `check-diagrams-rendered` inspects the built HTML for one rendered node per
+fence and passed.
+
+## 8. Gate: job-graph sanity — exact `needs:` edges, all 5 jobs
 
 Direct YAML parse (not `gh workflow view`, which only reflects the version already merged
 to `main` and can't see this branch's uncommitted graph):
