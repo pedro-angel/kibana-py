@@ -3172,24 +3172,31 @@ class TestObservabilityWithoutOpenTelemetry:
 # pytest-randomly, that test can land *before* these `TestImportGuardMatrix`
 # cases in the same pytest process. Every subsequent `subprocess.run()`
 # call -- which is exactly what `_run_with_blocked_imports` does below, and
-# which uses classic POSIX `fork()`+`exec()` because `close_fds` defaults to
-# True (see CPython's `subprocess.Popen._execute_child`: its `posix_spawn`
-# fast path requires `not close_fds`) -- re-enters gRPC's fork-safety
-# machinery in the forked child, *before* that child has exec'd into the
-# probe script. gRPC's POSIX poll-engine backend (`ev_poll_posix.cc` -- used
-# here because macOS has no epoll and falls back to `poll()`; Linux's
-# default backend is `epoll1.cc`, but the same `pthread_atfork` mechanism and
-# diagnostic apply there too, see
-# https://github.com/grpc/grpc/blob/master/doc/fork_support.md) occasionally
-# finds a stale bookkeeping entry left over from the *parent* pytest
-# process's earlier channel and logs an informational line straight to the
-# inherited stderr fd -- which lands in *this* subprocess's captured output,
-# despite the probe script itself never touching gRPC. It is chatter about
-# the test session's own process history, not a "package warning" the
-# import guards under test are responsible for, so it is stripped -- and
-# only this exact, narrowly-anchored pattern -- before the strict
-# emptiness assertions in this class. See docs/evidence/grpc-fork-noise-100.md
-# for the investigation (issue #100).
+# which uses classic POSIX `fork()`+`exec()` on this platform because
+# `close_fds` defaults to True (see CPython's `subprocess.Popen
+# ._execute_child`: its `posix_spawn` fast path requires `not close_fds`) --
+# re-enters gRPC's fork-safety machinery in the forked child, *before* that
+# child has exec'd into the probe script. gRPC's POSIX `poll()`-based
+# polling-engine backend (`ev_poll_posix.cc` -- used here because macOS has
+# no epoll) occasionally finds a stale bookkeeping entry left over from the
+# *parent* pytest process's earlier channel and logs an informational line
+# straight to the inherited stderr fd -- which lands in *this* subprocess's
+# captured output, despite the probe script itself never touching gRPC. It
+# is chatter about the test session's own process history, not a "package
+# warning" the import guards under test are responsible for, so it is
+# stripped -- and only this exact, narrowly-anchored pattern -- before the
+# strict emptiness assertions in this class.
+#
+# This regex is scoped to what was actually observed and verified: the
+# literal "FD from fork parent still in poll list" string was searched for
+# directly in the compiled `grpcio` 1.83.0 `_cython/cygrpc*.so` via `strings`
+# and found only alongside `ev_poll_posix.cc` (both the legacy `iomgr` and
+# newer `posix_engine` copies of that file) -- never alongside
+# `ev_epoll1_linux.cc`. Linux's default `epoll1` backend is a different
+# implementation and, if it ever emits an analogous fork-safety diagnostic at
+# all, it is not confirmed to share this exact wording, so this pattern is
+# deliberately not written to also match a guessed-at Linux shape. See
+# docs/evidence/grpc-fork-noise-100.md for the investigation (issue #100).
 _GRPC_FORK_DIAGNOSTIC_RE = re.compile(
     r"^I\d{4} [0-9:.]+ +\d+ ev_poll_posix\.cc:\d+\] "
     r"FD from fork parent still in poll list: fd\(\d+, generation: \d+\)\n?",
@@ -3637,11 +3644,28 @@ class TestGrpcForkNoiseFilter:
         assert _without_known_benign_fork_noise(other_occurrence) == ""
 
     def test_leaves_a_real_kibana_warning_untouched(self):
-        real_warning = (
-            "kibana.observability: gRPC OTLP trace exporter is installed but "
-            "failed to import (TypeError: ...). RuntimeWarning\n"
+        """The filter must not touch genuine kibana warning output.
+
+        Rather than a hand-typed stand-in (which risks not matching what the
+        code actually emits), this captures the real, verbatim stderr
+        `_report_guarded_import_failure` produces for a corrupted install by
+        running the exact same harness
+        `test_import_kibana_under_corrupted_install` uses, then asserts the
+        filter is a no-op against it.
+        """
+        result = _run_with_blocked_imports(
+            ("opentelemetry.exporter.otlp.proto.grpc",),
+            TestImportGuardMatrix.PROBE,
+            error="TypeError",
         )
-        assert _without_known_benign_fork_noise(real_warning) == real_warning
+        assert (
+            result.returncode == 0
+        ), f"probe failed:\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+        # Sanity check this really did capture the real warning path, not an
+        # accidentally-empty or unrelated stderr.
+        assert "is installed but failed to import" in result.stderr
+        assert "RuntimeWarning" in result.stderr
+        assert _without_known_benign_fork_noise(result.stderr) == result.stderr
 
     def test_leaves_an_unrelated_message_from_the_same_grpc_source_file_untouched(
         self,

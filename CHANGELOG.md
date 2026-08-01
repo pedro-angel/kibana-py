@@ -30,9 +30,13 @@ see [CONTRIBUTING.md § Changelog Policy](CONTRIBUTING.md#changelog-policy).
   suite — a small isolated slice preserving the same relative order did not
   reproduce it, only the full-scale run did). This is gRPC's POSIX `poll()`
   backend (`ev_poll_posix.cc`, used because macOS has no epoll), **not** the
-  Linux-specific `epoll1` backend issue #100 originally assumed — correcting
-  that platform framing; the same `pthread_atfork` mechanism applies to either
-  backend, so Linux CI is exposed the same way, not specially. Fixed by having
+  Linux-specific `epoll1` backend issue #100 originally assumed for this
+  sighting — correcting that specific attribution. Checked directly against
+  the compiled `grpcio` extension: the matched text appears only alongside
+  `ev_poll_posix.cc`, never `ev_epoll1_linux.cc`, so the fix is scoped to the
+  backend actually observed and is not claimed to also cover an unverified,
+  possibly differently-shaped Linux/`epoll1` diagnostic — #100's originally
+  scoped Linux seed-loop gate stands unchanged. Fixed by having
   `_run_with_blocked_imports` strip only this one, narrowly-anchored benign
   pattern from captured subprocess stderr before returning — every other stderr
   assertion in the file (corrupted-install warnings, `-W error` survival, etc.)

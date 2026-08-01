@@ -82,10 +82,13 @@ $ .nox/test-3-12/bin/python -m pytest tests/unit/ --randomly-seed=2442198158 -v 
 `_run_with_blocked_imports` (the matrix tests' shared helper) calls
 `subprocess.run([sys.executable, "-c", ...], capture_output=True, text=True,
 timeout=30)` with no `close_fds` override, so `close_fds` defaults to `True`.
-Reading CPython's `subprocess.Popen._execute_child` directly (not assumed) shows
-its `posix_spawn` fast path is explicitly gated on `not close_fds`:
+Reading CPython's `subprocess.Popen._execute_child` directly (not assumed, and
+checked across all four supported interpreters via `.nox/test-3-*`) shows its
+`posix_spawn` fast path is gated on `close_fds` — but the exact gate is **not**
+the same across the supported version range:
 
 ```python
+# Python 3.11 / 3.12 (checked directly in .nox/test-3-11, .nox/test-3-12):
 if (_USE_POSIX_SPAWN
         and os.path.dirname(executable)
         and preexec_fn is None
@@ -94,10 +97,36 @@ if (_USE_POSIX_SPAWN
         ...):
     self._posix_spawn(...)
     return
-# falls through to the classic fork()+exec() path below
+
+# Python 3.13 / 3.14 (checked directly in .nox/test-3-13, .nox/test-3-14):
+if (_USE_POSIX_SPAWN
+        and os.path.dirname(executable)
+        and preexec_fn is None
+        and (not close_fds or _HAVE_POSIX_SPAWN_CLOSEFROM)   # <- widened
+        and not pass_fds
+        ...):
+    self._posix_spawn(...)
+    return
 ```
 
-So this call path is not designed to dodge `fork()` via `posix_spawn`. (A
+`_HAVE_POSIX_SPAWN_CLOSEFROM = hasattr(os, 'POSIX_SPAWN_CLOSEFROM')` — checked
+directly on this box, `False` for both `.nox/test-3-13` and `.nox/test-3-14`
+(macOS's `os` module has no `POSIX_SPAWN_CLOSEFROM`), so on **this** platform
+`close_fds=True` still disqualifies `posix_spawn` and forces the classic
+`fork()+exec()` path on all four interpreters — which is what actually
+reproduced the bug here. `POSIX_SPAWN_CLOSEFROM` is a real POSIX flag exposed
+by CPython's `os` module only where the platform's libc provides it (glibc ≥
+2.34 on Linux); on a Linux box where it *is* available, 3.13+'s widened
+condition could let `posix_spawn` fire even with `close_fds=True` — and
+`posix_spawn`, unlike `fork()`, does not invoke `pthread_atfork` handlers at
+all, so gRPC's handler would never run and this diagnostic could not appear
+that way on such a system. This is one part of why the "Linux is exposed the
+same way" framing in an earlier draft of this document was too strong — see
+§3 below for the fuller correction.
+
+So this call path is not designed to dodge `fork()` via `posix_spawn` **on this
+platform and interpreter set**, which is what matters for the reproduction
+actually being explained here. (A
 Python-level `os.register_at_fork(after_in_child=...)` probe around an equivalent
 `subprocess.run` call did not itself fire — inconclusive on its own, since gRPC's
 handler is registered directly through the C-level `pthread_atfork()` libc API,
@@ -149,26 +178,41 @@ explain, why #91's 20-round adversarial ordering hunt (which only ever ran the
 two tests in isolation) legitimately found nothing despite deliberately
 constructing what looked like the right preconditions.
 
-### 3. Platform correction
+### 3. Platform correction — and what is, and is not, established about Linux
 
 The captured diagnostic is emitted by **`ev_poll_posix.cc`** — gRPC's plain
 POSIX `poll()`-based polling-engine backend, used here because macOS has no
 `epoll`. Issue #100 framed the fork-unsafety diagnostic as tied to Linux's
 `epoll1` backend (`ev_epoll1_linux.cc`) specifically, and scoped its gate to
-Linux CI on that basis. **That framing does not hold**: the `pthread_atfork`
-registration and post-fork stale-entry check are a general fork-safety mechanism
-gRPC's fork-support doc describes across its POSIX polling backends, not an
-`epoll1`-exclusive feature; this investigation reproduces the identical
-mechanism (a benign post-fork diagnostic from the process's own prior gRPC
-channel, surfacing in a later subprocess's captured stderr) on `poll()`
-(`ev_poll_posix.cc`) instead. Concretely: `ubuntu-latest` (where
-`.github/workflows/test.yml` runs `pytest tests/unit/ --cov=kibana
---cov-fail-under=90` across 3.11–3.14, with no `--randomly-seed` pin — i.e. a
-fresh random seed every run, same as any local invocation) is exposed to this
-same class of noise via `epoll1.cc`'s own atfork handler, not specially exposed
-relative to macOS, and not exposed only if macOS is somehow exempt. The fix
-below is not platform-specific and covers both backends, since it strips by
-message shape, not by asserting anything about which backend produced it.
+Linux CI on that basis. **That specific attribution — that this exact sighting
+is an `epoll1` artifact — does not hold**, since what actually reproduced here
+is the `poll()` backend, not `epoll1`, on a platform that never runs `epoll1`
+at all (macOS has no epoll). That much is a real correction to #100's framing.
+
+**What this investigation does *not* establish, corrected from an earlier
+draft of this document:** that the fix, or the underlying mechanism, transfers
+to Linux/`epoll1`. Checked directly against the installed `grpcio` 1.83.0's
+compiled extension (`strings` against `grpc/_cython/cygrpc.cpython-312-darwin.so`):
+the literal text `"FD from fork parent still in poll list"` appears only
+alongside `ev_poll_posix.cc` (both the legacy `iomgr` and newer `posix_engine`
+copies of that file) — **not** alongside `ev_epoll1_linux.cc` anywhere in the
+binary. `epoll1` is a different implementation; if it emits an analogous
+fork-safety diagnostic on a stale post-fork entry at all, its wording is not
+confirmed to match this pattern, and the regex below is deliberately not
+written to guess at a Linux shape it has never observed. Separately (§1), on a
+Linux box where `os.POSIX_SPAWN_CLOSEFROM` is available (glibc ≥ 2.34), Python
+3.13+'s widened `posix_spawn` fast-path condition could route
+`_run_with_blocked_imports`'s call through `posix_spawn` instead of `fork()`
+even with `close_fds=True` — and `posix_spawn` does not invoke
+`pthread_atfork` handlers at all, so this diagnostic could not arise that way
+on such a system regardless of backend.
+
+Net: **issue #100's original Linux/`epoll1` seed-loop gate remains exactly as
+originally scoped** — this investigation neither confirms nor rules out an
+analogous Linux sighting, and the fix below is verified only against the
+`ev_poll_posix.cc` shape actually observed on this platform. It is not claimed
+to be backend-agnostic, and CI's Linux jobs are not established to be "exposed
+the same way" as this local sighting.
 
 ### 4. `GRPC_VERBOSITY=ERROR` probed as an alternative
 
@@ -387,25 +431,91 @@ check-pin-comments-match (manual stage) ... Passed
   process-wide fork-safety state that a later, unrelated `subprocess.run()`-based
   test can surface as stderr noise; the fix filters exactly that shape and
   nothing else.
-- **The Linux/`epoll1` framing in #100's original gate is corrected, not
-  confirmed.** This investigation demonstrates the identical mechanism on
-  macOS's `poll()` backend (§3), which means the gate's premise — that this is
-  specifically an untested-on-Linux, `epoll1`-only artifact — does not hold as
-  originally stated. The fix is backend-agnostic (it matches by message shape,
-  not by asserting which platform produced it), so it already covers whatever
-  gRPC backend Linux CI uses.
-- **Whether to still run #100's originally-specified Linux seed-loop hunt is
-  left to the controller, as directed**, since it was not executed here (no
-  Linux CI access from this environment) and is now arguably lower-value given
-  the above: any Linux occurrence of this exact diagnostic shape is already
-  handled by this fix regardless of whether a hunt ever captures a seed that
-  produces it, and CI's unit job runs with a fresh, unpinned random seed every
-  time (§3) — the same passive exposure this local sighting came from, not a
-  targeted hunt. If the controller still wants a bounded Linux confirmation for
-  its own sake (independent of whether the fix already covers it), that remains
-  #100's to schedule.
+- **The Linux/`epoll1` framing in #100's original gate is corrected only in
+  its specific attribution, not confirmed or refuted more broadly.** This
+  investigation demonstrates the mechanism reproduces on macOS's `poll()`
+  backend, not on `epoll1` (§3) — so #100's premise that *this exact sighting*
+  is an `epoll1`-specific artifact does not hold, since `epoll1` never runs on
+  the platform where it reproduced. That is the extent of the correction.
+  **The fix is verified only against the `ev_poll_posix.cc` message shape
+  actually observed here** — `strings` against the compiled `grpcio` 1.83.0
+  extension found the matched text only alongside `ev_poll_posix.cc`, never
+  `ev_epoll1_linux.cc` (§3) — and is not claimed to be backend-agnostic or to
+  already cover whatever Linux's `epoll1` backend does or does not emit.
+- **#100's originally-specified Linux seed-loop gate remains as originally
+  scoped and is left to the controller to schedule, as directed** — it was not
+  executed here (no Linux CI access from this environment), and nothing in
+  this investigation reduces its value: whether `epoll1` produces an analogous
+  diagnostic, in what shape, and whether this fix's regex would need a second,
+  Linux-specific pattern to also cover it, is exactly what that gate would
+  determine and remains unanswered. §1 adds a further, separate reason a
+  Linux-specific check still matters: on a Linux box where
+  `os.POSIX_SPAWN_CLOSEFROM` is available (glibc ≥ 2.34), Python 3.13+ could
+  route this same call through `posix_spawn` instead of `fork()`, which would
+  change whether this class of diagnostic can appear at all on such a system —
+  another platform-specific variable this hunt would need to account for.
 - This fix's commit references #100 with `Refs`, not `Fixes` — the issue's
   literal, filed gate (a Linux CI seed-loop hunt with a recorded bounded-clean-
   or-root-caused result) was not executed as part of this change; only the
   local sighting that interrupted `make dod` was root-caused and fixed. The
   controller closes #100 once satisfied with the disposition above.
+
+## Micro-round — filter review response
+
+A reviewer re-attacked this evidence before merge. The regex anchor itself was
+verified tight (real warnings unmatched, an adjacent-but-different
+`ev_poll_posix.cc` line unmatched, and the regression test proven
+non-tautological by a revert-and-rerun showing genuine RED). One MAJOR and two
+minor findings on the surrounding *claims*, all addressed:
+
+1. **[MAJOR] "Backend-agnostic" / "already covers whatever backend Linux CI
+   uses" was refuted, not merely softened.** The reviewer searched the
+   compiled `grpcio` 1.83.0 extension directly and found the literal string
+   `"FD from fork parent still in poll list"` only alongside `ev_poll_posix.cc`
+   — never `ev_epoll1_linux.cc`, whose file-name-anchored appearance in the
+   binary's strings is unrelated (a poller-name enum, not this log line).
+   Independently re-verified in this round with the same technique (`strings`
+   against `grpc/_cython/cygrpc.cpython-312-darwin.so`): confirmed, two hits,
+   both immediately adjacent to the two `ev_poll_posix.cc` paths (legacy
+   `iomgr` and newer `posix_engine`), zero hits adjacent to
+   `ev_epoll1_linux.cc`. Every "backend-agnostic" / "Linux is exposed the same
+   way" / "already covers Linux" claim (the code comment above
+   `_GRPC_FORK_DIAGNOSTIC_RE`, the CHANGELOG entry, and §3 plus "Updated
+   expectations" in this document) is struck and replaced: the fix is scoped
+   to the `ev_poll_posix.cc` shape actually observed; an analogous
+   `epoll1`-emitted diagnostic, if one exists at all, is unverified and not
+   assumed to share this wording; #100's originally-scoped Linux seed-loop
+   gate stands, unchanged in scope by this fix.
+2. **[minor] The `Popen._execute_child` excerpt presented the pre-3.13
+   condition as the whole story.** Checked directly across all four
+   interpreters (`.nox/test-3-11` through `.nox/test-3-14`): 3.11/3.12 gate
+   `posix_spawn` on bare `not close_fds`; 3.13/3.14 widen it to
+   `not close_fds or _HAVE_POSIX_SPAWN_CLOSEFROM`, where
+   `_HAVE_POSIX_SPAWN_CLOSEFROM = hasattr(os, 'POSIX_SPAWN_CLOSEFROM')` — a
+   flag CPython's `os` module only exposes where the platform's libc provides
+   it (glibc ≥ 2.34 on Linux). Confirmed `False` on this macOS box for both
+   3.13 and 3.14 nox envs, so the behavioral conclusion for *this*
+   reproduction is unaffected — but on a Linux 3.13+/glibc≥2.34 combination
+   where it is `True`, `posix_spawn` could fire even with `close_fds=True`,
+   and `posix_spawn` never invokes `pthread_atfork` handlers at all. §1 and §3
+   now state the version split and flag this as a second, independent reason
+   "Linux is exposed the same way" cannot be asserted.
+3. **[minor] `test_leaves_a_real_kibana_warning_untouched` used a hand-typed
+   stand-in for the message `_report_guarded_import_failure` actually
+   emits.** Replaced with a live capture: the test now runs the exact same
+   `_run_with_blocked_imports(("opentelemetry.exporter.otlp.proto.grpc",),
+   TestImportGuardMatrix.PROBE, error="TypeError")` call
+   `test_import_kibana_under_corrupted_install` exercises, asserts the real
+   captured stderr actually contains `"is installed but failed to import"`
+   and `"RuntimeWarning"` (guarding against an accidentally-empty or
+   unrelated capture), and then asserts the filter is a no-op against that
+   verbatim, runtime-produced text — rather than a guess at its shape.
+
+Re-verification after these changes: `pytest tests/unit/test_observability.py`
+(155 passed — the corrected test still passes, and still fails if the fix is
+un-wired, confirmed by re-running the same revert-and-rerun check used
+originally); `pre-commit run --all-files` clean. No behavioral change to the
+shipped filter (`_GRPC_FORK_DIAGNOSTIC_RE` and
+`_without_known_benign_fork_noise` are byte-for-byte the same regex and
+function as before this round) — only the surrounding claims and one test's
+fixture were corrected.
