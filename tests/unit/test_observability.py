@@ -4,7 +4,7 @@ import logging
 import subprocess
 import sys
 import textwrap
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -1337,28 +1337,28 @@ class TestAPMServerIntegration:
         result = _get_trace_endpoint(endpoint, "http/protobuf")
         assert result == "http://h/v1/traces#frag"
 
-    @patch("socket.socket")
-    def test_validate_apm_connectivity_success(self, mock_socket):
+    @patch("socket.create_connection")
+    def test_validate_apm_connectivity_success(self, mock_create_connection):
         """Test successful APM server connectivity validation."""
         from kibana.observability import _validate_apm_connectivity
 
-        # Mock successful connection
-        mock_sock_instance = mock_socket.return_value
-        mock_sock_instance.connect_ex.return_value = 0
+        # Mock successful connection: create_connection returns a
+        # socket-like object rather than an error code.
+        mock_create_connection.return_value = MagicMock()
 
         result = _validate_apm_connectivity(
             endpoint="http://localhost:8200", headers={}, protocol="grpc"
         )
         assert result is True
 
-    @patch("socket.socket")
-    def test_validate_apm_connectivity_failure(self, mock_socket):
+    @patch("socket.create_connection")
+    def test_validate_apm_connectivity_failure(self, mock_create_connection):
         """Test failed APM server connectivity validation."""
         from kibana.observability import _validate_apm_connectivity
 
-        # Mock failed connection
-        mock_sock_instance = mock_socket.return_value
-        mock_sock_instance.connect_ex.return_value = 1
+        # Mock failed connection: create_connection raises OSError rather
+        # than returning a nonzero error code.
+        mock_create_connection.side_effect = OSError("connection refused")
 
         result = _validate_apm_connectivity(
             endpoint="http://localhost:8200",
@@ -1368,14 +1368,16 @@ class TestAPMServerIntegration:
         )
         assert result is False
 
-    @patch("socket.socket")
-    def test_validate_amp_connectivity_with_retry(self, mock_socket):
+    @patch("socket.create_connection")
+    def test_validate_amp_connectivity_with_retry(self, mock_create_connection):
         """Test APM connectivity validation with retry logic."""
         from kibana.observability import _validate_apm_connectivity
 
         # Mock first failure, then success
-        mock_sock_instance = mock_socket.return_value
-        mock_sock_instance.connect_ex.side_effect = [1, 0]  # Fail then succeed
+        mock_create_connection.side_effect = [
+            OSError("connection refused"),
+            MagicMock(),
+        ]
 
         with patch("time.sleep"):  # Speed up test
             result = _validate_apm_connectivity(
@@ -1386,24 +1388,26 @@ class TestAPMServerIntegration:
             )
         assert result is True
 
-    @patch("socket.socket")
-    def test_validate_apm_connectivity_http_protocol_uses_4318_port(self, mock_socket):
+    @patch("socket.create_connection")
+    def test_validate_apm_connectivity_http_protocol_uses_4318_port(
+        self, mock_create_connection
+    ):
         """An http/protobuf endpoint with no explicit port must probe the
         OTLP/HTTP port 4318, not the gRPC port."""
         from kibana.observability import _validate_apm_connectivity
 
-        mock_sock_instance = mock_socket.return_value
-        mock_sock_instance.connect_ex.return_value = 0
+        mock_create_connection.return_value = MagicMock()
 
         _validate_apm_connectivity(
             endpoint="http://localhost", headers={}, protocol="http/protobuf"
         )
 
-        mock_sock_instance.connect_ex.assert_called_once_with(("localhost", 4318))
+        assert mock_create_connection.call_count == 1
+        assert mock_create_connection.call_args.args[0] == ("localhost", 4318)
 
-    @patch("socket.socket")
+    @patch("socket.create_connection")
     def test_validate_apm_connectivity_unrecognized_protocol_uses_grpc_port_bias(
-        self, mock_socket
+        self, mock_create_connection
     ):
         """When the endpoint has no explicit port and the protocol isn't a
         recognized HTTP variant, the port guess must default to the gRPC port
@@ -1411,14 +1415,14 @@ class TestAPMServerIntegration:
         not hardcoded to the HTTP port regardless of protocol."""
         from kibana.observability import _validate_apm_connectivity
 
-        mock_sock_instance = mock_socket.return_value
-        mock_sock_instance.connect_ex.return_value = 0
+        mock_create_connection.return_value = MagicMock()
 
         _validate_apm_connectivity(
             endpoint="http://localhost", headers={}, protocol="bogus"
         )
 
-        mock_sock_instance.connect_ex.assert_called_once_with(("localhost", 4317))
+        assert mock_create_connection.call_count == 1
+        assert mock_create_connection.call_args.args[0] == ("localhost", 4317)
 
     def test_validate_apm_server_availability_public_function(self):
         """Test public APM server availability validation function."""
@@ -1430,6 +1434,78 @@ class TestAPMServerIntegration:
             result = validate_apm_server_availability("http://localhost:8200")
             assert result is True
             mock_validate.assert_called_once()
+
+    def test_validate_apm_connectivity_reaches_ipv6_only_listener(self):
+        """issue #83 (RED before the fix): a probe target that only
+        resolves/binds on IPv6 must still be reachable. The old
+        `socket.AF_INET`-only implementation cannot connect to an IPv6
+        literal at all (it raises `gaierror` trying to resolve "::1" as an
+        IPv4 address), so this fails pre-fix and passes once the probe uses
+        `socket.create_connection` (dual-stack via getaddrinfo).
+
+        Binds a throwaway listener on `::1` (loopback, IPv6-only bind, no
+        IPv4 dual-stack) and probes it via an explicit `[::1]` literal in
+        the endpoint URL -- not the hostname "localhost", which resolves to
+        both families on this host and would let the old AF_INET code
+        "accidentally" pass by reaching the IPv4 loopback instead of really
+        exercising IPv6.
+        """
+        import socket
+
+        from kibana.observability import _validate_apm_connectivity
+
+        server = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+        try:
+            server.bind(("::1", 0))
+            server.listen(1)
+            port = server.getsockname()[1]
+
+            result = _validate_apm_connectivity(
+                endpoint=f"http://[::1]:{port}",
+                headers={},
+                protocol="grpc",
+                max_retries=0,
+            )
+            assert result is True
+        finally:
+            server.close()
+
+    def test_validate_apm_connectivity_total_wait_budget_capped(self):
+        """issue #83 (RED before the fix): the probe's total wall-clock time
+        (all attempts + backoff sleeps combined) must be hard-capped,
+        regardless of the (default) `timeout`/`max_retries` the caller uses
+        -- see `_PROBE_TOTAL_BUDGET_SECONDS` in `_validation.py`.
+
+        Targets a real RFC 5737 TEST-NET-1 address (192.0.2.1), reserved
+        for documentation and never routed, so the connection attempt
+        genuinely blocks until timeout instead of failing instantly with a
+        fast "connection refused" -- the same "endpoint hangs instead of
+        refusing" scenario the issue describes for an unreachable/
+        misconfigured APM host, and confirmed in this environment to
+        actually block for the full per-attempt timeout rather than
+        returning early.
+
+        Pre-fix, the default args (`timeout=5`, `max_retries=2`) can block
+        for up to ~18s (3 x 5s timeouts + 1s + 2s backoff); this assertion
+        uses a generous CI-safe cap+margin that the old code cannot meet,
+        proving the fix actually bounds the wait rather than merely
+        reducing it.
+        """
+        import time
+
+        from kibana.observability import _validate_apm_connectivity
+
+        start = time.monotonic()
+        result = _validate_apm_connectivity(
+            endpoint="http://192.0.2.1:8300", headers={}, protocol="grpc"
+        )
+        elapsed = time.monotonic() - start
+
+        assert result is False
+        assert elapsed < 7.5, (
+            f"probe blocked the caller for {elapsed:.2f}s -- the total wait "
+            "budget cap is not being enforced"
+        )
 
     def test_handle_telemetry_error_authentication(self, caplog):
         """Test handling authentication-related telemetry errors."""

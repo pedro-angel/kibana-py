@@ -10,6 +10,22 @@ see [CONTRIBUTING.md § Changelog Policy](CONTRIBUTING.md#changelog-policy).
 ## [Unreleased]
 
 ### Fixed
+- **APM connectivity probe (`validate_apm_server_availability` /
+  `configure_opentelemetry(validate_endpoint=True)`) is now dual-stack and
+  time-bounded** ([#83](https://github.com/pedro-angel/kibana-py/issues/83), found by
+  the 2026-07-31 adversarial deep review, code-quality lens). The probe used a raw
+  `socket.AF_INET` socket, so an IPv6-only APM host always failed validation —
+  silently disabling telemetry against a server that was actually reachable — and its
+  retries could block the synchronous `configure_opentelemetry` call for up to ~18s
+  against an endpoint that hangs instead of refusing the connection. Now uses
+  `socket.create_connection` (resolves via `getaddrinfo`, honors `/etc/hosts`, tries
+  every address family the host resolves to) and hard-caps the total wall-clock time
+  across all attempts and backoff sleeps at 5s (`_PROBE_TOTAL_BUDGET_SECONDS` in
+  `kibana/observability/_validation.py`) regardless of the `timeout`/`max_retries`
+  arguments, so the configure path never stalls process startup for tens of seconds on
+  an unreachable or IPv6-only endpoint. Public function contract unchanged
+  (`validate_apm_server_availability`'s signature, return semantics, and `protocol`
+  param are untouched).
 - **`release.yml` hardening: direct integration dependency, PyPI-before-GitHub-release
   ordering, immutable pin comment**
   ([#82](https://github.com/pedro-angel/kibana-py/issues/82), found by the 2026-07-31
