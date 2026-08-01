@@ -1,6 +1,7 @@
 """Unit tests for OpenTelemetry observability."""
 
 import logging
+import re
 import subprocess
 import sys
 import textwrap
@@ -3162,6 +3163,49 @@ class TestObservabilityWithoutOpenTelemetry:
         set_span_error(None, Exception("test"))
 
 
+# gRPC's C-core registers a process-wide `pthread_atfork` handler the first
+# time any channel is created in the process -- and this test *session's*
+# process is exactly where `TestAPMServerIntegration
+# .test_create_otlp_exporter_grpc_protocol` (elsewhere in this file) creates
+# one for real: it calls `_create_otlp_exporter(..., protocol="grpc")`
+# unmocked, which constructs a genuine `grpc.insecure_channel`. Under
+# pytest-randomly, that test can land *before* these `TestImportGuardMatrix`
+# cases in the same pytest process. Every subsequent `subprocess.run()`
+# call -- which is exactly what `_run_with_blocked_imports` does below, and
+# which uses classic POSIX `fork()`+`exec()` because `close_fds` defaults to
+# True (see CPython's `subprocess.Popen._execute_child`: its `posix_spawn`
+# fast path requires `not close_fds`) -- re-enters gRPC's fork-safety
+# machinery in the forked child, *before* that child has exec'd into the
+# probe script. gRPC's POSIX poll-engine backend (`ev_poll_posix.cc` -- used
+# here because macOS has no epoll and falls back to `poll()`; Linux's
+# default backend is `epoll1.cc`, but the same `pthread_atfork` mechanism and
+# diagnostic apply there too, see
+# https://github.com/grpc/grpc/blob/master/doc/fork_support.md) occasionally
+# finds a stale bookkeeping entry left over from the *parent* pytest
+# process's earlier channel and logs an informational line straight to the
+# inherited stderr fd -- which lands in *this* subprocess's captured output,
+# despite the probe script itself never touching gRPC. It is chatter about
+# the test session's own process history, not a "package warning" the
+# import guards under test are responsible for, so it is stripped -- and
+# only this exact, narrowly-anchored pattern -- before the strict
+# emptiness assertions in this class. See docs/evidence/grpc-fork-noise-100.md
+# for the investigation (issue #100).
+_GRPC_FORK_DIAGNOSTIC_RE = re.compile(
+    r"^I\d{4} [0-9:.]+ +\d+ ev_poll_posix\.cc:\d+\] "
+    r"FD from fork parent still in poll list: fd\(\d+, generation: \d+\)\n?",
+    re.MULTILINE,
+)
+
+
+def _without_known_benign_fork_noise(stderr: str) -> str:
+    """Strip gRPC's benign post-fork stderr diagnostic, if present.
+
+    See the comment above `_GRPC_FORK_DIAGNOSTIC_RE` for why this specific
+    pattern, and only this pattern, is safe to discard here.
+    """
+    return _GRPC_FORK_DIAGNOSTIC_RE.sub("", stderr)
+
+
 def _run_with_blocked_imports(
     blocked_prefixes: tuple[str, ...],
     probe: str,
@@ -3205,7 +3249,7 @@ def _run_with_blocked_imports(
 
         sys.meta_path.insert(0, _Blocker())
         """)
-    return subprocess.run(
+    result = subprocess.run(
         [
             sys.executable,
             *interpreter_args,
@@ -3216,6 +3260,13 @@ def _run_with_blocked_imports(
         text=True,
         timeout=30,
     )
+    # Strip only the specific, benign gRPC fork diagnostic (see the comment
+    # above `_GRPC_FORK_DIAGNOSTIC_RE`) -- every other assertion callers make
+    # against `result.stderr` (substring checks for a corrupted-install
+    # warning, `error in result.stderr`, etc.) still sees everything else
+    # verbatim, including any *unexpected* stderr output.
+    result.stderr = _without_known_benign_fork_noise(result.stderr)
+    return result
 
 
 @pytest.mark.skipif(not OTEL_AVAILABLE, reason="OpenTelemetry not installed")
@@ -3530,4 +3581,102 @@ class TestImportGuardMatrix:
         assert "is installed but failed to import" in result.stderr, (
             "the log report must survive even when warnings are fatal:\n"
             f"{result.stderr}"
+        )
+
+
+class TestGrpcForkNoiseFilter:
+    """Regression coverage for issue #100.
+
+    `TestImportGuardMatrix`'s "a missing optional package must stay quiet"
+    assertions started failing locally on Python 3.12 (never on 3.11/3.13/
+    3.14 in the same run): pytest-randomly happened to schedule
+    `TestAPMServerIntegration.test_create_otlp_exporter_grpc_protocol`
+    (which creates a real, unmocked `grpc.insecure_channel` -- see that
+    test, above) shortly before these matrix cases in the same pytest
+    process. Every later `subprocess.run()`-based fork in that process --
+    exactly what `_run_with_blocked_imports` performs -- re-enters gRPC's
+    `pthread_atfork` machinery in the forked child, which occasionally logs
+    a benign informational diagnostic straight to the inherited (soon to be
+    captured) stderr fd, *before* the child has exec'd into the probe
+    script:
+
+        I0801 19:19:22.245823 14779649 ev_poll_posix.cc:593] FD from fork
+        parent still in poll list: fd(17, generation: 1)
+
+    Full investigation, the seed-pinned real reproduction transcript, and
+    the platform correction (this is gRPC's POSIX `poll()` backend, used on
+    macOS -- issue #100 originally assumed Linux/`epoll1`) are in
+    docs/evidence/grpc-fork-noise-100.md.
+
+    A literal, minimal, fast reproduction of the underlying race turned out
+    to be infeasible: it did not reproduce standalone, nor from a small
+    curated pytest slice preserving the exact same relative test order --
+    only running the *entire* `tests/unit/` suite with the exact seed that
+    originally surfaced it did (documented in the evidence file as the
+    verified RED/GREEN transcript pair). That scale/timing dependency is
+    exactly why this is tested here directly against the filter, using the
+    verbatim captured diagnostic, rather than by re-deriving the race on
+    every test run.
+    """
+
+    # Verbatim text captured from the real local failure (see the evidence
+    # file); only the pid/timestamp/fd digits are incidental.
+    _REAL_CAPTURED_NOISE = (
+        "I0801 19:19:22.245823 14779649 ev_poll_posix.cc:593] "
+        "FD from fork parent still in poll list: fd(17, generation: 1)\n"
+    )
+
+    def test_strips_the_real_captured_diagnostic_verbatim(self):
+        assert _without_known_benign_fork_noise(self._REAL_CAPTURED_NOISE) == ""
+
+    def test_strips_regardless_of_the_incidental_pid_timestamp_and_fd(self):
+        other_occurrence = (
+            "I0102 03:04:05.678901 999 ev_poll_posix.cc:42] "
+            "FD from fork parent still in poll list: fd(3, generation: 7)\n"
+        )
+        assert _without_known_benign_fork_noise(other_occurrence) == ""
+
+    def test_leaves_a_real_kibana_warning_untouched(self):
+        real_warning = (
+            "kibana.observability: gRPC OTLP trace exporter is installed but "
+            "failed to import (TypeError: ...). RuntimeWarning\n"
+        )
+        assert _without_known_benign_fork_noise(real_warning) == real_warning
+
+    def test_leaves_an_unrelated_message_from_the_same_grpc_source_file_untouched(
+        self,
+    ):
+        """The pattern is anchored on the full benign sentence, not merely
+        the source file -- a *different* diagnostic ever emitted from
+        `ev_poll_posix.cc` must not be silently swallowed too."""
+        different_diagnostic = (
+            "I0801 19:19:22.245823 14779649 ev_poll_posix.cc:593] "
+            "some other, unrelated poll-engine message\n"
+        )
+        assert (
+            _without_known_benign_fork_noise(different_diagnostic)
+            == different_diagnostic
+        )
+
+    def test_end_to_end_through_run_with_blocked_imports(self):
+        """Simulates the poisoned-parent scenario through the actual helper
+        the matrix tests call: the probe subprocess writes the exact benign
+        diagnostic to its own stderr -- standing in for gRPC's pre-exec fork
+        hook, which (per this class's docstring) this harness cannot force
+        deterministically -- immediately before running the ordinary probe
+        body, and `_run_with_blocked_imports` must still report clean
+        stderr, exactly as `test_import_kibana_under_partial_install` needs.
+        """
+        noisy_probe = (
+            f"import sys; sys.stderr.write({self._REAL_CAPTURED_NOISE!r})\n"
+            + TestImportGuardMatrix.PROBE
+        )
+        result = _run_with_blocked_imports((), noisy_probe)
+
+        assert (
+            result.returncode == 0
+        ), f"probe failed:\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+        assert result.stderr == "", (
+            "the benign gRPC fork diagnostic must not surface as a package "
+            f"warning:\n{result.stderr}"
         )
