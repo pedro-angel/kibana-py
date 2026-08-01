@@ -55,7 +55,11 @@ from kibana._async.client.workflows import AsyncWorkflowsClient
 from kibana._rate_limiter import AsyncRateLimiter
 from kibana._space_cache import shared_space_cache
 from kibana._sync.client import _build_node_configs, _build_node_options
-from kibana.exceptions import NotFoundError, SpaceNotFoundError
+from kibana.exceptions import (
+    NotFoundError,
+    SpaceNotFoundError,
+    translate_transport_errors,
+)
 from kibana.serializer import DEFAULT_SERIALIZERS
 
 __all__ = ["AsyncKibana", "AsyncSpaceScopedKibana", "DEFAULT", "DefaultType"]
@@ -344,12 +348,18 @@ class AsyncKibana(AsyncBaseClient):
 
         This closes all connections in the connection pool.
         After calling close(), the client should not be used.
+
+        Transport-layer close failures are translated to their
+        ``kibana.exceptions`` equivalents -- the same translation the request
+        path uses (see :func:`kibana.exceptions.translate_transport_errors`) --
+        and re-raised rather than swallowed, so a leaked connection/socket is
+        visible to the caller instead of only a WARNING log line. Callers that
+        want a best-effort close can wrap the call in
+        ``contextlib.suppress(kibana.exceptions.TransportError)``.
         """
-        try:
+        with translate_transport_errors():
             await self._transport.close()
-            logger.debug("AsyncKibana client closed")
-        except Exception as e:
-            logger.warning("Error closing AsyncKibana client: %s", e)
+        logger.debug("AsyncKibana client closed")
 
     async def __aenter__(self) -> AsyncKibana:
         """Enter async context manager."""

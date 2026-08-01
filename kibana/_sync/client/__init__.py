@@ -55,7 +55,11 @@ from kibana._sync.client.uptime import UptimeClient
 from kibana._sync.client.utils import _check_space_id_format
 from kibana._sync.client.visualizations import VisualizationsClient
 from kibana._sync.client.workflows import WorkflowsClient
-from kibana.exceptions import NotFoundError, SpaceNotFoundError
+from kibana.exceptions import (
+    NotFoundError,
+    SpaceNotFoundError,
+    translate_transport_errors,
+)
 from kibana.serializer import DEFAULT_SERIALIZERS
 
 __all__ = ["Kibana", "SpaceScopedKibana", "DEFAULT", "DefaultType"]
@@ -344,12 +348,18 @@ class Kibana(BaseClient):
 
         This closes all connections in the connection pool.
         After calling close(), the client should not be used.
+
+        Transport-layer close failures are translated to their
+        ``kibana.exceptions`` equivalents -- the same translation the request
+        path uses (see :func:`kibana.exceptions.translate_transport_errors`) --
+        and re-raised rather than swallowed, so a leaked connection/socket is
+        visible to the caller instead of only a WARNING log line. Callers that
+        want a best-effort close can wrap the call in
+        ``contextlib.suppress(kibana.exceptions.TransportError)``.
         """
-        try:
+        with translate_transport_errors():
             self._transport.close()
-            logger.debug("Kibana client closed")
-        except Exception as e:
-            logger.warning("Error closing Kibana client: %s", e)
+        logger.debug("Kibana client closed")
 
     def __enter__(self) -> Kibana:
         """Enter context manager."""
