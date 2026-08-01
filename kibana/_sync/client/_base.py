@@ -147,33 +147,32 @@ def _redact_body_secrets_sequence(
     return tuple(redacted_elements) if isinstance(values, tuple) else redacted_elements
 
 
-def _redact_nested_body_value(value: Any, depth: int) -> Any:
+def _redact_nested_body_value(value: Any, _depth: int) -> Any:
     """
     Redact a value nested one level inside a dict or list/tuple.
 
     Dispatches to :func:`_redact_body_secrets` for a dict, to
     :func:`_redact_body_secrets_sequence` for a list/tuple, and passes any
     scalar through unchanged -- scalars never recurse, so the depth cap does
-    not apply to them. Enforces ``_MAX_REDACTION_DEPTH`` for both container
-    branches: once ``depth`` reaches the cap, the container is replaced with
+    not apply to them. Enforces ``_MAX_REDACTION_DEPTH`` once, ahead of the
+    dict-vs-list/tuple dispatch, for both container branches: once
+    ``_depth`` reaches the cap, the container is replaced with
     ``_REDACTION_DEPTH_LIMIT_PLACEHOLDER`` instead of being recursed into
     further, so a pathologically deep body fails closed (a placeholder in
     the log) rather than raising ``RecursionError``.
 
     :param value: A single dict value or list/tuple element to redact
-    :param depth: Current recursion depth (the depth of ``value`` itself,
+    :param _depth: Current recursion depth (the depth of ``value`` itself,
         i.e. how many dict/list/tuple levels were already unwrapped to
         reach it)
     :return: The redacted value, unchanged for a scalar
     """
+    if isinstance(value, (dict, list, tuple)) and _depth >= _MAX_REDACTION_DEPTH:
+        return _REDACTION_DEPTH_LIMIT_PLACEHOLDER
     if isinstance(value, dict):
-        if depth >= _MAX_REDACTION_DEPTH:
-            return _REDACTION_DEPTH_LIMIT_PLACEHOLDER
-        return _redact_body_secrets(value, depth + 1)
+        return _redact_body_secrets(value, _depth + 1)
     if isinstance(value, (list, tuple)):
-        if depth >= _MAX_REDACTION_DEPTH:
-            return _REDACTION_DEPTH_LIMIT_PLACEHOLDER
-        return _redact_body_secrets_sequence(value, depth + 1)
+        return _redact_body_secrets_sequence(value, _depth + 1)
     return value
 
 

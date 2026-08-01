@@ -1,6 +1,7 @@
 """Unit tests for AsyncBaseClient."""
 
 import logging
+from collections import namedtuple
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -415,3 +416,88 @@ class TestAsyncLogging:
         assert "hunter2" not in log_messages
         assert "[REDACTED]" in log_messages
         assert "my-webhook" in log_messages
+
+    @pytest.mark.asyncio
+    async def test_debug_logging_pathologically_deep_dict_body_does_not_raise(
+        self, mock_async_transport, mock_response, caplog
+    ):
+        """A ~1000-deep dict body must not raise ``RecursionError`` out of
+        ``perform_request`` when DEBUG logging is enabled -- the request
+        must still reach the transport instead of aborting.
+
+        Async twin of the sync regression test for the #78 fix-round MAJOR
+        (recursion-depth cap).
+        """
+        from kibana._async.client._base import AsyncBaseClient
+
+        mock_async_transport.perform_request = AsyncMock(
+            return_value=mock_response(body={"result": "success"}, status=200)
+        )
+
+        client = AsyncBaseClient(_transport=mock_async_transport)
+        body: dict = {"leaf": "value"}
+        for _ in range(1000):
+            body = {"nested": body}
+
+        with caplog.at_level(logging.DEBUG, logger="kibana"):
+            await client.perform_request("POST", "/api/actions/connector", body=body)
+
+        mock_async_transport.perform_request.assert_called_once()
+        log_messages = " ".join(record.message for record in caplog.records)
+        assert "<redaction depth limit>" in log_messages
+
+    @pytest.mark.asyncio
+    async def test_debug_logging_pathologically_deep_list_body_does_not_raise(
+        self, mock_async_transport, mock_response, caplog
+    ):
+        """Same fail-closed guarantee for a ~1000-deep list body (the other
+        recursion axis, same shared depth cap). Async twin of the sync test."""
+        from kibana._async.client._base import AsyncBaseClient
+
+        mock_async_transport.perform_request = AsyncMock(
+            return_value=mock_response(body={"result": "success"}, status=200)
+        )
+
+        client = AsyncBaseClient(_transport=mock_async_transport)
+        items: list = ["leaf"]
+        for _ in range(1000):
+            items = [items]
+        body = {"items": items}
+
+        with caplog.at_level(logging.DEBUG, logger="kibana"):
+            await client.perform_request("POST", "/api/actions/connector", body=body)
+
+        mock_async_transport.perform_request.assert_called_once()
+        log_messages = " ".join(record.message for record in caplog.records)
+        assert "<redaction depth limit>" in log_messages
+
+    @pytest.mark.asyncio
+    async def test_debug_logging_namedtuple_bearing_body_does_not_raise(
+        self, mock_async_transport, mock_response, caplog
+    ):
+        """A namedtuple-valued body field must not crash ``perform_request``.
+
+        Async twin of the sync regression test for the #78 fix-round
+        BLOCKER (``type(values)(redacted_elements)`` crashing on a
+        multi-field namedtuple).
+        """
+        from kibana._async.client._base import AsyncBaseClient
+
+        mock_async_transport.perform_request = AsyncMock(
+            return_value=mock_response(body={"result": "success"}, status=200)
+        )
+
+        client = AsyncBaseClient(_transport=mock_async_transport)
+        Point = namedtuple("Point", ["x", "y"])
+        body = {
+            "connectors": Point(x={"secrets": {"password": "hunter2"}}, y="keep-me")
+        }
+
+        with caplog.at_level(logging.DEBUG, logger="kibana"):
+            await client.perform_request("POST", "/api/actions/connector", body=body)
+
+        mock_async_transport.perform_request.assert_called_once()
+        log_messages = " ".join(record.message for record in caplog.records)
+        assert "hunter2" not in log_messages
+        assert "[REDACTED]" in log_messages
+        assert "keep-me" in log_messages
