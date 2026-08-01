@@ -8,6 +8,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Credentials nested inside a list-valued request-body field reached DEBUG
+  logs in cleartext** ([#78](https://github.com/pedro-angel/kibana-py/issues/78)).
+  `_redact_body_secrets` (`kibana/_sync/client/_base.py`, shared by the async
+  client) recursed into dict values but not into list/tuple values, so a
+  shape like `{"connectors": [{"secrets": {...}}]}` — a secrets dict living
+  one level inside a list — was logged with the secret intact instead of
+  `[REDACTED]`; only secrets nested directly under dict keys were ever
+  caught. A live probe against a running Kibana confirmed the leak (the exact
+  reproduction from the issue, sent as a real request body) before the fix
+  and the redaction after it. A new `_redact_body_secrets_sequence` helper
+  now recurses into list/tuple elements — dicts and nested lists/tuples
+  recurse, scalars pass through unchanged — mirroring the existing dict
+  recursion and preserving the container type (list stays list, tuple stays
+  tuple). The function still returns a full copy and never mutates the
+  caller's body; the redacted-key set and dict-recursion logic are unchanged.
 - **`configure_opentelemetry()` is now idempotent: repeat calls no longer stack
   log handlers, and reconfiguring actually takes effect instead of silently
   doing nothing** ([#76](https://github.com/pedro-angel/kibana-py/issues/76)).

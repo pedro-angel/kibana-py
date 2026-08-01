@@ -6,7 +6,11 @@ from unittest.mock import MagicMock
 import pytest
 from elastic_transport import ApiResponseMeta, ObjectApiResponse
 
-from kibana._sync.client._base import BaseClient, _redact_sensitive_headers
+from kibana._sync.client._base import (
+    BaseClient,
+    _redact_body_secrets,
+    _redact_sensitive_headers,
+)
 from kibana._utils import deprecated, warn_deprecated
 
 
@@ -72,6 +76,112 @@ class TestSensitiveDataRedaction:
         assert redacted["content-type"] == "application/json"
         assert redacted["x-api-key"] == "[REDACTED]"
         assert redacted["kbn-xsrf"] == "true"
+
+
+class TestBodySecretRedaction:
+    """Test that ``_redact_body_secrets`` recurses into lists and tuples.
+
+    Regression coverage for GitHub #78: the helper recursed into nested dicts
+    but not into list/tuple-valued fields, so a ``secrets`` dict living inside
+    a list (e.g. ``{"connectors": [{"secrets": {...}}]}``) reached DEBUG logs
+    in cleartext.
+    """
+
+    def test_dict_in_list_is_redacted(self):
+        """A secrets dict nested inside a list element is redacted."""
+        body = {"connectors": [{"secrets": {"password": "hunter2"}}]}
+        redacted = _redact_body_secrets(body)
+        assert redacted["connectors"][0]["secrets"] == "[REDACTED]"
+
+    def test_non_secret_siblings_in_list_untouched(self):
+        """Non-sensitive fields alongside a redacted one keep their value."""
+        body = {
+            "connectors": [{"name": "my-webhook", "secrets": {"password": "hunter2"}}]
+        }
+        redacted = _redact_body_secrets(body)
+        assert redacted["connectors"][0]["name"] == "my-webhook"
+        assert redacted["connectors"][0]["secrets"] == "[REDACTED]"
+
+    def test_list_in_dict_in_list_is_redacted(self):
+        """A secrets dict nested list-in-dict-in-list deep is still found."""
+        body = {
+            "connectors": [
+                {
+                    "config": {
+                        "items": [
+                            {"name": "a", "token": "abc123"},
+                            {"name": "b"},
+                        ]
+                    }
+                }
+            ]
+        }
+        redacted = _redact_body_secrets(body)
+        items = redacted["connectors"][0]["config"]["items"]
+        assert items[0]["token"] == "[REDACTED]"
+        assert items[0]["name"] == "a"
+        assert items[1] == {"name": "b"}
+
+    def test_tuple_elements_are_redacted(self):
+        """Tuple-valued fields recurse the same way lists do."""
+        body = {"connectors": ({"secrets": {"password": "hunter2"}},)}
+        redacted = _redact_body_secrets(body)
+        assert isinstance(redacted["connectors"], tuple)
+        assert redacted["connectors"][0]["secrets"] == "[REDACTED]"
+
+    def test_deeply_nested_mixed_containers(self):
+        """Alternating list/tuple/dict nesting still reaches the secret."""
+        body = {
+            "outer": [
+                (
+                    {
+                        "inner": [
+                            {"api_key": "sekret", "keep": "me"},
+                        ]
+                    },
+                )
+            ]
+        }
+        redacted = _redact_body_secrets(body)
+        inner = redacted["outer"][0][0]["inner"][0]
+        assert inner["api_key"] == "[REDACTED]"
+        assert inner["keep"] == "me"
+
+    def test_list_of_scalars_untouched(self):
+        """A list of plain scalars passes through unchanged."""
+        body = {"tags": ["a", "b", "c"], "count": 3}
+        redacted = _redact_body_secrets(body)
+        assert redacted["tags"] == ["a", "b", "c"]
+        assert redacted["count"] == 3
+
+    def test_empty_list_and_tuple_untouched(self):
+        """Empty containers redact to the same empty container."""
+        body = {"items": [], "other": ()}
+        redacted = _redact_body_secrets(body)
+        assert redacted["items"] == []
+        assert redacted["other"] == ()
+
+    def test_input_is_not_mutated(self):
+        """The original body object is never modified in place."""
+        secrets_dict = {"password": "hunter2"}
+        connector = {"name": "my-webhook", "secrets": secrets_dict}
+        connectors_list = [connector]
+        body = {"connectors": connectors_list}
+
+        _redact_body_secrets(body)
+
+        # Same objects, unchanged contents.
+        assert body["connectors"] is connectors_list
+        assert body["connectors"][0] is connector
+        assert body["connectors"][0]["secrets"] is secrets_dict
+        assert body["connectors"][0]["secrets"]["password"] == "hunter2"
+
+    def test_returns_a_copy_not_the_same_object(self):
+        """Top-level and nested containers in the result are new objects."""
+        body = {"connectors": [{"secrets": {"password": "hunter2"}}]}
+        redacted = _redact_body_secrets(body)
+        assert redacted is not body
+        assert redacted["connectors"] is not body["connectors"]
 
 
 class TestRequestResponseLogging:

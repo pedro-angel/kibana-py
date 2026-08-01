@@ -79,8 +79,10 @@ def _redact_body_secrets(body: dict[str, Any]) -> dict[str, Any]:
     Redact sensitive fields from a request body for safe logging.
 
     Connector creation/update payloads often contain a ``secrets`` dict with
-    credentials (webhook URLs, passwords, API tokens, etc.).  This helper
-    produces a shallow copy with those fields replaced by ``[REDACTED]``.
+    credentials (webhook URLs, passwords, API tokens, etc.), sometimes nested
+    inside a list (e.g. ``{"connectors": [{"secrets": {...}}]}``). This helper
+    produces a deep copy with those fields replaced by ``[REDACTED]``, never
+    mutating the caller's original body.
 
     :param body: Original request body dictionary
     :return: Copy of the body with sensitive values redacted
@@ -92,9 +94,38 @@ def _redact_body_secrets(body: dict[str, Any]) -> dict[str, Any]:
         elif isinstance(value, dict):
             # One level of nesting (e.g. {"config": {"password": "x"}})
             redacted[key] = _redact_body_secrets(value)
+        elif isinstance(value, (list, tuple)):
+            # Nesting through a list/tuple (e.g. {"connectors": [{"secrets": {...}}]})
+            redacted[key] = _redact_body_secrets_sequence(value)
         else:
             redacted[key] = value
     return redacted
+
+
+def _redact_body_secrets_sequence(
+    values: list[Any] | tuple[Any, ...],
+) -> list[Any] | tuple[Any, ...]:
+    """
+    Redact sensitive fields from the elements of a list or tuple.
+
+    List/tuple elements have no key of their own to check against
+    ``_SENSITIVE_BODY_KEYS``, so only container elements recurse (dicts via
+    :func:`_redact_body_secrets`, nested lists/tuples via this function);
+    scalar elements pass through unchanged. The result keeps the same
+    container type as ``values``.
+
+    :param values: Original list or tuple of body values
+    :return: Copy of ``values`` with any nested sensitive values redacted
+    """
+    redacted_elements = [
+        (
+            _redact_body_secrets(v)
+            if isinstance(v, dict)
+            else _redact_body_secrets_sequence(v) if isinstance(v, (list, tuple)) else v
+        )
+        for v in values
+    ]
+    return type(values)(redacted_elements)
 
 
 def encode_query_params(params: Mapping[str, Any]) -> str:

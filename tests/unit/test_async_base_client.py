@@ -1,5 +1,6 @@
 """Unit tests for AsyncBaseClient."""
 
+import logging
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -387,3 +388,30 @@ class TestAsyncLogging:
             await client.perform_request("GET", "/api/saved_objects/dashboard/missing")
 
         assert mock_logger.debug.called
+
+    @pytest.mark.asyncio
+    async def test_debug_logging_redacts_secrets_nested_in_list(
+        self, mock_async_transport, mock_response, caplog
+    ):
+        """A ``secrets`` dict nested inside a list-valued field is redacted.
+
+        Async twin of the sync regression test for GitHub #78.
+        """
+        from kibana._async.client._base import AsyncBaseClient
+
+        mock_async_transport.perform_request = AsyncMock(
+            return_value=mock_response(body={"result": "success"}, status=200)
+        )
+
+        client = AsyncBaseClient(_transport=mock_async_transport)
+        body = {
+            "connectors": [{"name": "my-webhook", "secrets": {"password": "hunter2"}}]
+        }
+
+        with caplog.at_level(logging.DEBUG, logger="kibana"):
+            await client.perform_request("POST", "/api/actions/connector", body=body)
+
+        log_messages = " ".join(record.message for record in caplog.records)
+        assert "hunter2" not in log_messages
+        assert "[REDACTED]" in log_messages
+        assert "my-webhook" in log_messages
