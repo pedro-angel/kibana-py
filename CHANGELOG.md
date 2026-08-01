@@ -8,6 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **`make audit` never refreshed base build tools on an existing venv**
+  ([#80](https://github.com/pedro-angel/kibana-py/issues/80)), a residual of
+  [#67](https://github.com/pedro-angel/kibana-py/pull/67): that fix upgraded pip+setuptools
+  in `make setup` and CI's per-job install via one shared script
+  (`scripts/upgrade-base-build-tools.sh`), but `make audit` / the DoD `audit_clean` criterion
+  ran against whatever `.venv` already existed, so the next setuptools advisory would
+  re-create the exact 0.4.2 incident (CI green, local DoD NO-GO) on any long-lived venv. The
+  `audit` leaf now runs the same shared script (with the same `PYTHON=$(VENV_BIN)/python`
+  threading `make setup` uses) before `pip-audit`, so a stale venv self-heals on every
+  `make audit` / `make dod` run instead of only at `make setup` — no second hand-synced
+  upgrade line, still one source. Dev-tooling only: not shipped in the package, no CI change
+  needed (CI never calls `make audit`; see `docs/evidence/audit-self-heal-80.md`).
+
 - **Request-body JSON semantics diverged between the stdlib and orjson serializer
   backends** ([#79](https://github.com/pedro-angel/kibana-py/issues/79)). `kibana/serializer.py`
   picks one of the two at import time depending on whether `orjson` is installed, and,

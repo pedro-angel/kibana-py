@@ -106,6 +106,12 @@ lint: ## Run mypy type checker
 
 .PHONY: audit
 audit: ## Audit dependencies for known vulnerabilities
+	@# Self-heal: refresh base build tools (pip + setuptools) via the same shared
+	@# script `make setup` and CI call, so a long-lived venv can't drift back into
+	@# the 0.4.2 incident (CI green, local audit NO-GO on a stale setuptools) — #80.
+	@# One source, not a hand-synced copy; the upgrade line stays visible below so
+	@# a self-heal is observable, not silent.
+	PYTHON=$(VENV_BIN)/python ./scripts/upgrade-base-build-tools.sh
 	$(VENV_BIN)/pip-audit
 
 .PHONY: sast
