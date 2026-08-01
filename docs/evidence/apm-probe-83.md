@@ -90,7 +90,8 @@ implementation detail (mock target moved from `socket.socket`/`connect_ex` to
 
 Run against a clean **git worktree of `main`@`3a35c6b`** (pre-fix code), from a neutral cwd
 with no local `kibana/` to shadow it — confirmed the loaded module's `__file__` was inside the
-worktree before proceeding:
+worktree before proceeding. Paths elided per evidence hygiene (`<neutral-dir>`, `<worktree>`);
+otherwise verbatim:
 
 ```
 $ cd <neutral-dir>
@@ -337,3 +338,279 @@ validation on."
   in principle fail such a connection instantly (fast `ENETUNREACH`) rather than timing out —
   that would only make the probe return *faster*, never slower than the 5s cap, so it would
   not weaken the fix.
+
+## Fix round — spec review response
+
+A spec review of the round-1 fix (commit `efea794`) found 1 BLOCKER + 1 MAJOR + 2 minors, all
+addressed in the fix-round commit that follows on the same branch (see `git log`).
+
+### [BLOCKER] The round-1 budget only bounded the connect phase, not DNS resolution
+
+Round 1's docstring claimed the probe "never blocks its caller ... beyond that cap, even
+against an endpoint that hangs" — **not fully true as written**. Round 1 called
+`socket.create_connection((host, port), timeout=attempt_timeout)` directly, in the caller's own
+thread. `create_connection` resolves the host via `getaddrinfo` *before* it ever opens a socket,
+and `getaddrinfo` takes no timeout parameter of its own — an unresponsive or misbehaving DNS
+resolver can hang there indefinitely, entirely ahead of the connect-phase `timeout` kwarg ever
+applying. The budget was real for a slow/refusing *connect*, not for a resolver that never
+answers.
+
+**Fix:** each attempt (DNS resolution + TCP connect, together, since they can't be bounded
+separately with the standard library's own API) now runs on a background `threading.Thread(daemon=True)`
+(`_probe_attempt_worker` in `_validation.py`), reporting its outcome back through a
+`queue.Queue`. The calling thread enforces the deadline itself: `outcome.get(timeout=attempt_timeout)`.
+If the worker hasn't reported back in time, the attempt is treated as failed and the worker is
+abandoned — not joined. This makes the total-budget guarantee a true wall-clock deadline from
+the *caller's* side, independent of whatever `create_connection`'s own timeout handling does or
+doesn't cover internally.
+
+**Honest residual, verified empirically (not assumed):** an abandoned worker stuck in
+`getaddrinfo` keeps running in the background until the OS resolver itself gives up. Whether
+that's harmless depends entirely on whether the mechanism used is a *daemon* thread. This was
+checked directly rather than trusted, because the two obvious choices differ:
+
+```
+$ .venv/bin/python -c "
+import concurrent.futures, time
+ex = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+fut = ex.submit(time.sleep, 9999)
+try:
+    fut.result(timeout=0.5)
+except concurrent.futures.TimeoutError:
+    print('timed out as expected, returning without shutdown()')
+print('about to exit process')
+" &
+PID=$!; sleep 5
+kill -0 $PID 2>/dev/null && echo "STILL RUNNING after 5s -- blocked" || echo "exited cleanly"
+```
+```
+timed out as expected, returning without shutdown()
+about to exit process
+STILL RUNNING after 5s -- blocked
+```
+(process had to be killed — `concurrent.futures.ThreadPoolExecutor`'s own `atexit` hook joins
+every worker thread it ever created, including one permanently stuck in a blocking call, which
+hangs interpreter shutdown.)
+
+```
+$ .venv/bin/python -c "
+import threading, time
+t = threading.Thread(target=time.sleep, args=(9999,), daemon=True)
+t.start(); t.join(timeout=0.5)
+print(f'join timed out as expected, thread alive={t.is_alive()}')
+print('about to exit process')
+" &
+PID=$!; sleep 3
+kill -0 $PID 2>/dev/null && echo "STILL RUNNING after 3s -- blocked" || echo "exited cleanly (exit code 0)"
+```
+```
+join timed out as expected, thread alive=True
+about to exit process
+process exited cleanly within 3s -- daemon thread does NOT block exit
+exit code: 0
+```
+
+**Conclusion, acted on:** a plain `threading.Thread(daemon=True)` is what's actually used (not
+`concurrent.futures.ThreadPoolExecutor`, whose pooled workers are joined at exit and would turn
+an abandoned DNS-hang attempt into a hung process on every affected exit) — this is the only
+version of the fix for which "daemon thread, no caller impact" is a true statement rather than
+an assumption. `_PROBE_TOTAL_BUDGET_SECONDS`'s comment documents this explicitly, including why
+`ThreadPoolExecutor` was considered and rejected.
+
+RED (before the fix-round; run against round-1 code at `efea794`, stubbing
+`socket.create_connection` with a double that ignores its arguments — including its own
+`timeout` kwarg — and just blocks, standing in for an unresponsive resolver):
+
+```
+$ .venv/bin/pytest tests/unit/test_observability.py -k test_validate_apm_connectivity_hung_attempt_bounded_by_deadline --no-cov -v
+...
+FAILED test_validate_apm_connectivity_hung_attempt_bounded_by_deadline
+  AssertionError: probe blocked the caller for 30.00s against a stub connect call that never
+  returns -- the deadline is not being enforced independent of create_connection's own timeout
+  kwarg
+  assert 30.000475542037748 < 2.5
+WARNING  kibana.observability:_validation.py:122 APM server connectivity validation failed:
+  'NoneType' object has no attribute 'close'
+1 failed, 149 deselected in 30.18s
+```
+
+(The 30.00s is the stub's own `time.sleep(30)` running to completion, uninterrupted, inside
+round-1's single-threaded call — confirming there was no mechanism to abandon it. The
+`'NoneType' object has no attribute 'close'` warning is round-1's `sock.close()` finally running
+against the stub's `None` return, 30 seconds after the call started — not a new bug, just what
+happens once the stub returns.)
+
+GREEN (after the fix-round; same test, same stub, same 0.5s patched budget):
+
+```
+$ .venv/bin/pytest tests/unit/test_observability.py -k test_validate_apm_connectivity_hung_attempt_bounded_by_deadline --no-cov -v
+...
+1 passed in <1s
+```
+
+### [MAJOR] The ~5s un-mocked network test didn't belong in the fast unit tier
+
+Round 1's `test_validate_apm_connectivity_total_wait_budget_capped` made a real, un-mocked
+network call to `192.0.2.1` and took ~5s by design — 28% of that unit file's wall clock, and
+real-network semantics belong in the integration tier regardless of raw cost.
+
+**Fix:**
+- **Moved** to `tests/integration/test_log_graceful_degradation_integration.py` as
+  `TestOTLPEndpointUnavailable.test_apm_connectivity_total_wait_budget_capped_live`, right next
+  to its closest existing sibling (`test_otlp_connectivity_validation_with_timeout`, a
+  non-routable-IP timeout test that already lives there). Needs no local stack — only outbound
+  network reachability, same as its sibling.
+- **Added** a fast sibling in the unit tier,
+  `TestAPMServerIntegration::test_validate_apm_connectivity_hung_attempt_bounded_by_deadline`
+  (the same test that RED-verifies the BLOCKER above) — patches `_PROBE_TOTAL_BUDGET_SECONDS`
+  down to `0.5` and stubs `socket.create_connection` to hang, pinning the deadline mechanism
+  itself without a real network round-trip. One test now serves both the BLOCKER's RED
+  requirement and this MAJOR's "fast sibling" requirement, rather than duplicating near-identical
+  coverage under two names.
+
+Before/after, unit-tier wall clock (the exact slice affected):
+
+```
+# round 1 (includes the ~5s real-network test)
+$ .venv/bin/pytest tests/unit/test_observability.py -k "validate_apm_connectivity or validate_apm_server_availability" --no-cov -v
+7 passed, 143 deselected in 5.08s
+
+# fix-round (real-network test moved out, fast stub sibling added)
+$ .venv/bin/pytest tests/unit/test_observability.py -k "validate_apm_connectivity or validate_apm_server_availability" --no-cov -v
+7 passed, 143 deselected in 0.59s
+
+$ .venv/bin/pytest tests/unit/test_observability.py --no-cov -q
+# round 1: 150 passed in 13.43s
+# fix-round: 150 passed in 8.95s
+```
+
+Live run of the moved integration test (real network, no stack required):
+
+```
+$ .venv/bin/pytest tests/integration/test_log_graceful_degradation_integration.py -k "connectivity" --no-cov -v
+test_apm_connectivity_total_wait_budget_capped_live PASSED
+test_otlp_connectivity_validation_with_timeout PASSED
+test_connectivity_validation_failure PASSED
+test_log_forwarding_with_intermittent_connectivity PASSED
+4 passed, 18 deselected in 17.21s
+
+$ .venv/bin/pytest tests/integration/test_log_graceful_degradation_integration.py --no-cov -q
+22 passed, 10 warnings in 28.25s
+```
+
+### Minor 1 — IPv6-only-listener test gains a capability guard
+
+`test_validate_apm_connectivity_reaches_ipv6_only_listener` now wraps `server.bind(("::1", 0))`
+in `try`/`except OSError: pytest.skip(...)` — some sandboxes/CI runners disable IPv6 loopback
+binding entirely, and this test exists to prove the probe *can* reach an IPv6-only target, which
+is meaningless to assert on a host that cannot even create one. Skip, not fail or false-pass.
+
+### Minor 2 — path-elision labeling
+
+The RED transcript above (worktree baseline) elides absolute paths (`<neutral-dir>`,
+`<worktree>`) for identity hygiene; the transcript is now explicitly labeled "Paths elided per
+evidence hygiene ...; otherwise verbatim", per the `async-validation-order-74-75.md` precedent.
+
+### Correcting the round-1 "Fix summary" claim
+
+Round 1's fix summary and docstrings said the probe "never blocks its caller ... beyond that
+cap, even against an endpoint that hangs instead of refusing the connection." As the BLOCKER
+above shows, that was true for a hanging *connect*, not for a hanging *resolve* — an overclaim.
+The docstrings and `_PROBE_TOTAL_BUDGET_SECONDS` comment have been rewritten in the fix-round
+commit to state the guarantee precisely (a true caller-side wall-clock deadline covering
+resolution and connect together, via the background-thread mechanism) and to name the one
+honest residual (the abandoned daemon thread's own lifetime, empirically confirmed harmless to
+the caller and to interpreter shutdown) rather than asserting unqualified "never blocks."
+
+### Full verification after the fix-round
+
+```
+$ .venv/bin/pytest tests/unit/ --cov=kibana --cov-fail-under=90 -q
+3384 passed
+Required test coverage of 90% reached. Total coverage: 94.37%
+
+$ .venv/bin/mypy kibana/
+Success: no issues found in 103 source files
+
+$ make hooks
+.venv/bin/pre-commit run --all-files
+... (all hooks) ... Passed
+.venv/bin/pre-commit run check-pin-comments-match --hook-stage manual --all-files
+every pin's # comment still dereferences to its SHA (network; run at CI/manual stage) ... Passed
+```
+
+(`black` reformatted `tests/unit/test_observability.py` again on its first run against the new
+test — line-wrapping only; re-run was clean, full suite + mypy re-confirmed green after.)
+
+### Re-battle-test after the fix-round (mechanism changed materially — re-checked, not assumed)
+
+```
+$ curl -s -o /dev/null -w "APM reachable, HTTP %{http_code}\n" --max-time 3 http://localhost:8200
+APM reachable, HTTP 200
+
+$ .venv/bin/python -c "
+import time
+from kibana.observability import validate_apm_server_availability
+for protocol in ('grpc', 'http/protobuf'):
+    start = time.monotonic()
+    result = validate_apm_server_availability('http://localhost:8200', protocol=protocol)
+    elapsed = time.monotonic() - start
+    print(f'protocol={protocol!r} -> result={result} elapsed={elapsed:.3f}s')
+"
+protocol='grpc' -> result=True elapsed=0.001s
+protocol='http/protobuf' -> result=True elapsed=0.001s
+
+$ .venv/bin/python -c "
+import time
+from kibana.observability import validate_apm_server_availability
+start = time.monotonic()
+result = validate_apm_server_availability('http://192.0.2.1:8300', protocol='grpc')
+elapsed = time.monotonic() - start
+print(f'unreachable result={result} elapsed={elapsed:.3f}s')
+"
+unreachable result=False elapsed=5.004s
+```
+
+**PASS** — both the reachable and unreachable live scenarios behave identically to round 1
+(sub-2ms success, 5.004s bounded failure), confirming the thread/queue-based deadline mechanism
+didn't regress the already-verified live behavior.
+
+```
+$ .venv/bin/python -c "
+from kibana.observability import configure_opentelemetry, create_span
+configure_opentelemetry(
+    enabled=True, protocol='http/protobuf', endpoint='http://localhost:8200',
+    validate_endpoint=True, logs_enabled=False,
+    service_name='kibana-py-apm-probe-83-fixround-battletest',
+)
+span = create_span('apm-probe-83.fixround-validate-endpoint-true-smoke')
+span.end()
+print('configure_opentelemetry(validate_endpoint=True) completed WITHOUT EXCEPTION (fix-round)')
+"
+configure_opentelemetry(validate_endpoint=True) completed WITHOUT EXCEPTION (fix-round)
+
+$ curl -s -u "elastic:${ES_LOCAL_PASSWORD}" "http://localhost:9200/traces-apm*/_search" \
+    -H "Content-Type: application/json" -d '{
+  "query": { "match": { "service.name": "kibana-py-apm-probe-83-fixround-battletest" } },
+  "_source": ["service.name","transaction.name","@timestamp","processor.event"]
+}'
+{"hits":{"total":{"value":1,"relation":"eq"},"hits":[{"_source":{
+  "@timestamp":"2026-08-01T13:23:51.816Z",
+  "service":{"name":"kibana-py-apm-probe-83-fixround-battletest"},
+  "processor":{"event":"transaction"},
+  "transaction":{"name":"apm-probe-83.fixround-validate-endpoint-true-smoke"}
+}}]}}
+```
+
+**PASS** — `configure_opentelemetry(validate_endpoint=True)` end-to-end against the live server
+still works after the fix-round, span accepted and indexed.
+
+### Scope note (fix-round)
+
+No change to the port-guess logic, the public function contract
+(`validate_apm_server_availability`'s signature/return semantics/`protocol` param), or either
+real caller (`_config.py`, `_logging.py`) — all round-1 scope notes above still hold. The
+fix-round changed only: (1) how an attempt's deadline is enforced (background daemon thread +
+queue instead of trusting `create_connection`'s own timeout kwarg alone), (2) where the
+real-network budget test lives (moved to integration, with a fast stub-based sibling pinning the
+same semantics in the unit tier), and (3) the precision of the docstrings' own claims.

@@ -1456,7 +1456,15 @@ class TestAPMServerIntegration:
 
         server = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
         try:
-            server.bind(("::1", 0))
+            try:
+                server.bind(("::1", 0))
+            except OSError as e:
+                # Capability guard, not a functional skip: some sandboxes/CI
+                # runners disable IPv6 loopback binding entirely. This test
+                # exists to prove the probe *can* reach an IPv6-only target,
+                # which is meaningless to assert on a host that cannot even
+                # create one -- skip rather than fail or false-pass.
+                pytest.skip(f"IPv6 loopback bind unavailable on this host: {e}")
             server.listen(1)
             port = server.getsockname()[1]
 
@@ -1470,41 +1478,67 @@ class TestAPMServerIntegration:
         finally:
             server.close()
 
-    def test_validate_apm_connectivity_total_wait_budget_capped(self):
-        """issue #83 (RED before the fix): the probe's total wall-clock time
-        (all attempts + backoff sleeps combined) must be hard-capped,
-        regardless of the (default) `timeout`/`max_retries` the caller uses
-        -- see `_PROBE_TOTAL_BUDGET_SECONDS` in `_validation.py`.
+    def test_validate_apm_connectivity_hung_attempt_bounded_by_deadline(self):
+        """issue #83 fix-round (RED before the fix-round): the total-budget
+        cap must be a true wall-clock deadline enforced from the CALLER's
+        side, not merely whatever `socket.create_connection`'s own
+        `timeout` kwarg happens to bound. `create_connection` resolves the
+        host via `getaddrinfo` *before* opening a socket at all, and
+        `getaddrinfo` has no timeout parameter of its own -- an
+        unresponsive/misbehaving DNS resolver can hang indefinitely there,
+        ahead of the connect-phase timeout ever applying.
 
-        Targets a real RFC 5737 TEST-NET-1 address (192.0.2.1), reserved
-        for documentation and never routed, so the connection attempt
-        genuinely blocks until timeout instead of failing instantly with a
-        fast "connection refused" -- the same "endpoint hangs instead of
-        refusing" scenario the issue describes for an unreachable/
-        misconfigured APM host, and confirmed in this environment to
-        actually block for the full per-attempt timeout rather than
-        returning early.
+        Stubs `socket.create_connection` itself with a double that ignores
+        its arguments (including the `timeout` kwarg) and just blocks --
+        standing in for "the whole attempt, resolution included, never
+        comes back on its own" -- and patches
+        `_PROBE_TOTAL_BUDGET_SECONDS` down to 0.5s so this pins the deadline
+        mechanism itself (not a real network round-trip) and stays in the
+        fast unit tier: the real, un-mocked, ~5s network version of this
+        assertion (an actual unreachable address, the real 5s budget) lives
+        in `tests/integration/` instead
+        (`TestOTLPEndpointUnavailable.test_apm_connectivity_total_wait_budget_capped_live`),
+        since a genuine multi-second network wait doesn't belong in the
+        fast tier.
 
-        Pre-fix, the default args (`timeout=5`, `max_retries=2`) can block
-        for up to ~18s (3 x 5s timeouts + 1s + 2s backoff); this assertion
-        uses a generous CI-safe cap+margin that the old code cannot meet,
-        proving the fix actually bounds the wait rather than merely
-        reducing it.
+        RED before the fix-round: the round-1 fix (`socket.create_connection`
+        called directly, in the caller's own thread, with only its own
+        `timeout` kwarg to bound it) has no way to give up on a call that
+        never returns regardless of that kwarg -- a stub that ignores its
+        arguments and blocks forever demonstrates exactly that gap. This
+        assertion, on a small deliberately-short 2.5s margin, is what fails
+        against the round-1 code (which just hangs, uninterrupted, for as
+        long as the stub blocks).
         """
         import time
+        from unittest.mock import patch
 
         from kibana.observability import _validate_apm_connectivity
 
-        start = time.monotonic()
-        result = _validate_apm_connectivity(
-            endpoint="http://192.0.2.1:8300", headers={}, protocol="grpc"
-        )
-        elapsed = time.monotonic() - start
+        def _hangs_forever(*args, **kwargs):
+            time.sleep(30)
+
+        with (
+            patch("kibana.observability._validation._PROBE_TOTAL_BUDGET_SECONDS", 0.5),
+            patch("socket.create_connection", side_effect=_hangs_forever),
+        ):
+            start = time.monotonic()
+            result = _validate_apm_connectivity(
+                endpoint="http://stub-hanging-resolver.invalid:8300",
+                headers={},
+                protocol="grpc",
+                timeout=60,  # deliberately far larger than the (patched) total
+                # budget -- create_connection's own timeout kwarg must not be
+                # what bounds this call; the deadline mechanism must be.
+                max_retries=0,
+            )
+            elapsed = time.monotonic() - start
 
         assert result is False
-        assert elapsed < 7.5, (
-            f"probe blocked the caller for {elapsed:.2f}s -- the total wait "
-            "budget cap is not being enforced"
+        assert elapsed < 2.5, (
+            f"probe blocked the caller for {elapsed:.2f}s against a stub "
+            "connect call that never returns -- the deadline is not being "
+            "enforced independent of create_connection's own timeout kwarg"
         )
 
     def test_handle_telemetry_error_authentication(self, caplog):

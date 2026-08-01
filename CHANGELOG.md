@@ -12,8 +12,8 @@ see [CONTRIBUTING.md § Changelog Policy](CONTRIBUTING.md#changelog-policy).
 ### Fixed
 - **APM connectivity probe (`validate_apm_server_availability` /
   `configure_opentelemetry(validate_endpoint=True)`) is now dual-stack and
-  time-bounded** ([#83](https://github.com/pedro-angel/kibana-py/issues/83), found by
-  the 2026-07-31 adversarial deep review, code-quality lens). The probe used a raw
+  time-bounded, including DNS resolution** ([#83](https://github.com/pedro-angel/kibana-py/issues/83),
+  found by the 2026-07-31 adversarial deep review, code-quality lens). The probe used a raw
   `socket.AF_INET` socket, so an IPv6-only APM host always failed validation —
   silently disabling telemetry against a server that was actually reachable — and its
   retries could block the synchronous `configure_opentelemetry` call for up to ~18s
@@ -23,9 +23,14 @@ see [CONTRIBUTING.md § Changelog Policy](CONTRIBUTING.md#changelog-policy).
   across all attempts and backoff sleeps at 5s (`_PROBE_TOTAL_BUDGET_SECONDS` in
   `kibana/observability/_validation.py`) regardless of the `timeout`/`max_retries`
   arguments, so the configure path never stalls process startup for tens of seconds on
-  an unreachable or IPv6-only endpoint. Public function contract unchanged
-  (`validate_apm_server_availability`'s signature, return semantics, and `protocol`
-  param are untouched).
+  an unreachable or IPv6-only endpoint. The 5s cap is a true wall-clock deadline enforced
+  from the caller's side (each attempt runs on a background daemon thread the caller
+  waits on with the remaining budget as its own timeout), not merely whatever
+  `create_connection`'s own `timeout` kwarg happens to bound — that kwarg cannot cover
+  `getaddrinfo`, which has no timeout of its own and can hang independently of it, so an
+  unresponsive DNS resolver is bounded by the cap too, not just a refusing/hanging TCP
+  connect. Public function contract unchanged (`validate_apm_server_availability`'s
+  signature, return semantics, and `protocol` param are untouched).
 - **`release.yml` hardening: direct integration dependency, PyPI-before-GitHub-release
   ordering, immutable pin comment**
   ([#82](https://github.com/pedro-angel/kibana-py/issues/82), found by the 2026-07-31

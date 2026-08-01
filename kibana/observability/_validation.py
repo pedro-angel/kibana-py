@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import queue
 import re
+import threading
 
 from kibana.observability._imports import _HTTP_OTLP_PROTOCOLS, logger
 
@@ -28,7 +30,55 @@ from kibana.observability._imports import _HTTP_OTLP_PROTOCOLS, logger
 # retry/sleep short once the endpoint has already proven itself slow enough
 # that letting the caller's own `timeout`/`max_retries` run to completion
 # would blow past a sane startup-latency ceiling.
+#
+# This is enforced as a true wall-clock deadline for the CALLER, not merely
+# "whatever `socket.create_connection`'s own `timeout` kwarg happens to
+# bound": `create_connection` resolves the host via `getaddrinfo` *before*
+# opening a socket at all, and `getaddrinfo` takes no timeout of its own --
+# an unresponsive/misbehaving DNS resolver can hang indefinitely there,
+# ahead of the connect-phase timeout we pass in ever applying (fix-round
+# finding on issue #83). Each attempt therefore runs on a background daemon
+# thread, and the calling thread waits for it with this budget as a hard
+# ceiling (see `_probe_attempt_worker` below) -- if the worker hasn't
+# reported back by the deadline, the attempt counts as failed and the
+# worker is abandoned, not joined. The one honest residual: an abandoned
+# worker stuck in `getaddrinfo` keeps running (until the OS resolver itself
+# gives up) on its own daemon thread -- confirmed empirically that this
+# does *not* block interpreter shutdown (a daemon thread is not joined at
+# exit, unlike e.g. a bare `concurrent.futures.ThreadPoolExecutor`, whose
+# worker threads are joined by its own atexit hook and would hang process
+# exit in this same scenario -- verified directly, which is why this uses a
+# plain `threading.Thread(daemon=True)` instead). So the guarantee this
+# constant buys is strictly about the CALLER's wall-clock wait, not about
+# how long the abandoned background thread itself keeps running.
 _PROBE_TOTAL_BUDGET_SECONDS: float = 5.0
+
+
+def _probe_attempt_worker(
+    host: str, port: int, timeout: float, outcome: queue.Queue[Exception | None]
+) -> None:
+    """Attempt one connection on a background thread and report the outcome.
+
+    Runs entirely off the calling thread so the caller can bound its own
+    wait with a hard wall-clock deadline (see `_PROBE_TOTAL_BUDGET_SECONDS`)
+    instead of trusting `socket.create_connection`'s `timeout` kwarg to
+    cover the whole attempt -- that kwarg does not bound `getaddrinfo`,
+    which `create_connection` calls first.
+
+    Puts `None` on `outcome` on success, the raised exception on failure.
+    Closes the socket itself on success -- the caller only ever cared about
+    reachability, not the connection -- so a very-late arrival (one that
+    completes only after the calling thread has already given up and moved
+    on) cleans up after itself instead of leaking an open, un-closed socket.
+    """
+    import socket
+
+    try:
+        sock = socket.create_connection((host, port), timeout=timeout)
+        sock.close()
+        outcome.put(None)
+    except Exception as e:
+        outcome.put(e)
 
 
 def _validate_apm_connectivity(
@@ -45,15 +95,25 @@ def _validate_apm_connectivity(
     resolves to -- IPv4 and IPv6 alike -- rather than forcing IPv4 only, so
     an IPv6-only APM host is reachable (issue #83).
 
-    Regardless of `timeout`/`max_retries`, the total wall-clock time spent
-    across all attempts and backoff sleeps is hard-capped at
-    `_PROBE_TOTAL_BUDGET_SECONDS` seconds -- see that constant's comment for
-    the justification. This function never blocks its caller (notably
-    `configure_opentelemetry`'s synchronous `validate_endpoint` check)
-    beyond that cap, even against an endpoint that hangs instead of
-    refusing the connection.
+    Regardless of `timeout`/`max_retries`, the total wall-clock time this
+    function makes its CALLER wait -- across all attempts and backoff
+    sleeps -- is hard-capped at `_PROBE_TOTAL_BUDGET_SECONDS` seconds, and
+    that cap is a true wall-clock deadline enforced from the caller's side
+    (each attempt runs on a background daemon thread; the calling thread
+    waits on it with the remaining budget as a timeout and moves on if it
+    isn't back in time), not merely whatever `create_connection`'s own
+    `timeout` kwarg happens to bound -- that kwarg cannot cover the
+    `getaddrinfo` resolution step, which has no timeout of its own and can
+    hang independently of it. See `_PROBE_TOTAL_BUDGET_SECONDS`'s comment
+    for the full justification, including the one honest residual: an
+    abandoned attempt that's still stuck resolving/connecting keeps running
+    in the background (confirmed harmless to the caller and to interpreter
+    shutdown, since it's a daemon thread that is never joined). This
+    function never blocks its caller (notably `configure_opentelemetry`'s
+    synchronous `validate_endpoint` check) beyond that cap, even against an
+    endpoint that hangs instead of refusing the connection -- whether it
+    hangs during DNS resolution or during the TCP handshake itself.
     """
-    import socket
     import time
     from urllib.parse import urlparse
 
@@ -90,33 +150,65 @@ def _validate_apm_connectivity(
                 break
 
             attempt_timeout = min(timeout, remaining)
+
+            # The attempt (DNS resolution + TCP connect together) runs on
+            # its own background thread; this thread waits for it with
+            # `attempt_timeout` as a hard wall-clock deadline of its own,
+            # rather than trusting `create_connection`'s `timeout` kwarg
+            # alone to bound the whole thing (see `_probe_attempt_worker`
+            # and `_PROBE_TOTAL_BUDGET_SECONDS`'s comment -- issue #83
+            # fix-round).
+            outcome: queue.Queue[Exception | None] = queue.Queue(maxsize=1)
+            worker = threading.Thread(
+                target=_probe_attempt_worker,
+                args=(host, port, attempt_timeout, outcome),
+                daemon=True,
+                name="kibana-apm-probe-attempt",
+            )
+            worker.start()
             try:
-                sock = socket.create_connection((host, port), timeout=attempt_timeout)
-                sock.close()
+                error = outcome.get(timeout=attempt_timeout)
+            except queue.Empty:
+                # Still resolving/connecting past our own deadline. The
+                # worker is abandoned here, deliberately not joined -- it's
+                # a daemon thread, so it cannot block interpreter shutdown,
+                # and it will finish (or not) entirely on its own, in the
+                # background. This is the honest residual documented on
+                # `_PROBE_TOTAL_BUDGET_SECONDS`: the guarantee is about this
+                # (the caller's) wall-clock wait, not the abandoned
+                # thread's lifetime.
+                error = TimeoutError(
+                    f"connection attempt to {host}:{port} (including DNS "
+                    f"resolution) did not complete within "
+                    f"{attempt_timeout:.1f}s"
+                )
+
+            if error is None:
                 logger.debug(
                     f"APM server connectivity validated: {host}:{port} "
                     f"(attempt {attempt + 1})"
                 )
                 return True
-            except OSError as e:
-                # Covers connection refused, `TimeoutError`/`socket.timeout`
-                # (an `OSError` subclass), and DNS failures
-                # (`socket.gaierror`, also an `OSError` subclass) uniformly --
-                # `create_connection` raises `OSError` for all of them.
-                remaining = _PROBE_TOTAL_BUDGET_SECONDS - (time.monotonic() - start)
-                if attempt < max_retries and remaining > 0:
-                    delay = min(2**attempt, remaining)
-                    logger.debug(
-                        f"APM server not reachable at {host}:{port}: {e}, "
-                        f"retrying in {delay:.1f}s "
-                        f"(attempt {attempt + 1}/{max_retries + 1})"
-                    )
-                    time.sleep(delay)
-                else:
-                    logger.warning(
-                        f"APM server not reachable at {host}:{port}: {e} "
-                        f"after {attempt + 1} attempt(s)"
-                    )
+
+            # Covers connection refused, `TimeoutError`/`socket.timeout` (an
+            # `OSError` subclass) from within `create_connection` itself,
+            # DNS failures (`socket.gaierror`, also an `OSError` subclass),
+            # and the synthetic deadline-exceeded `TimeoutError` above
+            # uniformly.
+            remaining = _PROBE_TOTAL_BUDGET_SECONDS - (time.monotonic() - start)
+            if attempt < max_retries and remaining > 0:
+                delay = min(2**attempt, remaining)
+                logger.debug(
+                    f"APM server not reachable at {host}:{port}: {error}, "
+                    f"retrying in {delay:.1f}s "
+                    f"(attempt {attempt + 1}/{max_retries + 1})"
+                )
+                time.sleep(delay)
+            else:
+                logger.warning(
+                    f"APM server not reachable at {host}:{port}: {error} "
+                    f"after {attempt + 1} attempt(s)"
+                )
         return False
     except Exception as e:
         logger.warning(f"APM server connectivity validation failed: {e}")
