@@ -200,7 +200,13 @@ float leaf check stays `type(value) is float` (safe, per the reasoning above). T
 (`test_non_finite_float_inside_dict_subclass_still_raises`, parametrized over both
 backends) in `tests/unit/test_serializer.py`.
 
-### Final overhead measurement (shipped mechanism, post-wiring)
+### Overhead measurement, round 1 (shipped mechanism at the time, before the fix-round below)
+
+**Superseded by "Final overhead measurement (shipped mechanism, after the reorder
+fix)" in the "Fix round" section further down** -- kept here, not deleted, as the
+measurement this round's "ship the guard" decision was actually made against; the
+fix round below both adds dataclass/Enum coverage and (after fixing a regression that
+briefly appeared while adding it) ends up faster than these numbers, not slower.
 
 Measured directly against the shipped `OrjsonSerializer.dumps` / `_reject_non_finite_floats`
 (not a standalone prototype), same representative ~9.2KB body, `timeit` N=20000, 3
@@ -212,7 +218,7 @@ trial 1: raw=6.26us guarded=24.67us stdlib=39.86us overhead=294.3% guarded_vs_st
 trial 2: raw=6.26us guarded=24.68us stdlib=39.89us overhead=294.3% guarded_vs_stdlib=1.62x
 ```
 
-**FINAL overhead: ~300% relative to raw `orjson.dumps`** (absolute added cost ~18.4us
+**Overhead at this point: ~300% relative to raw `orjson.dumps`** (absolute added cost ~18.4us
 on the ~9.2KB representative body: 24.6us guarded vs. 6.2us raw). This is higher than
 the originally-measured "iterative" prototype's 215.9%, because the `isinstance`-based
 container checks (necessary for correctness — see above) cost a bit more than the
@@ -528,11 +534,260 @@ Every space created across all three passes was deleted in the script's `finally
 block; the script prints a `deleted space <id>` line per cleanup and no `WARNING:
 failed to delete` line appeared in any run.
 
+## Fix round — spec review response (1 BLOCKER + 1 MAJOR + 1 MINOR)
+
+A spec review of the guard as it stood after the "ship the guard" commit found 1
+BLOCKER + 1 MAJOR + 1 MINOR. All three addressed below; a real, unplanned performance
+regression was also found and fixed while doing so (documented in its own subsection,
+since it directly changes the final overhead number this file reports).
+
+### [BLOCKER] `_reject_non_finite_floats` didn't recurse into dataclass instances or Enum members
+
+**Confirmed live** (installed orjson 3.11.9), before writing any fix, per
+environment-research:
+
+```
+>>> import orjson, dataclasses, enum, json
+
+>>> @dataclasses.dataclass
+... class Point:
+...     x: float
+...     y: float
+>>> p = Point(x=1.0, y=float("nan"))
+>>> orjson.dumps({"p": p})
+b'{"p":{"x":1.0,"y":null}}'
+>>> json.dumps({"p": p})
+TypeError: Object of type Point is not JSON serializable
+
+>>> class Color(enum.Enum):
+...     RED = 1.0
+...     BAD = float("nan")
+>>> orjson.dumps({"c": Color.RED})
+b'{"c":1.0}'
+>>> orjson.dumps({"c": Color.BAD})
+b'{"c":null}'
+>>> json.dumps({"c": Color.RED})
+TypeError: Object of type Color is not JSON serializable
+
+>>> # nested: dataclass-in-list, dataclass-with-enum-field, 2-level-deep dataclass
+>>> orjson.dumps({"lst": [Point(v=1.0), Point(v=float("inf"))]})  # (abbreviated field)
+b'{"lst":[{"v":1.0},{"v":null}]}'
+>>> orjson.dumps({"o": Outer(inner=Point(x=1.0, y=float("-inf")), tag="t")})
+b'{"o":{"inner":{"x":1.0,"y":null},"tag":"t"}}'
+
+>>> # OPT_PASSTHROUGH_DATACLASS -- does NOT help; it makes orjson treat the
+>>> # dataclass as an opaque unsupported type instead (the clue the reviewer
+>>> # named: OPT_PASSTHROUGH_DATACLASS was in this evidence file's own
+>>> # `dir(orjson)` listing from the very first probe, and its existence is
+>>> # what tips off that orjson has *native*, opt-out (not opt-in) dataclass
+>>> # handling by default).
+>>> orjson.dumps({"p": p}, option=orjson.OPT_PASSTHROUGH_DATACLASS)
+TypeError: Type is not JSON serializable: Point
+```
+
+Confirmed: orjson serializes a dataclass **instance** natively (each field,
+recursively, with zero opt-in) and an `Enum` member's `.value` natively -- both silently
+null a non-finite float inside, exactly the defect #79 exists to close, just for two
+more types the original guard didn't walk into. stdlib raises `TypeError` for either
+regardless of field/value finiteness (no `_default` support for either type at all).
+
+**Decided parity boundary (binding, matches the reviewer's own framing):** the
+guarantee is "a non-finite float raises wherever a backend will *actually serialize*
+one" -- not "wherever the naive JSON containers are". stdlib never serializes a
+dataclass or `Enum` member at all (unrelated `TypeError`, pre-existing, unchanged,
+out of scope), so there is nothing to guard on that side; orjson does serialize both
+natively, so the guard must walk into both to make the NaN/Infinity guarantee actually
+hold for everything orjson will hand to Kibana.
+
+**Fix:** `_reject_non_finite_floats` gained two more branches -- `dataclasses.is_dataclass(value)
+and not isinstance(value, type)` (excluding the dataclass *class* object itself) walking
+`dataclasses.fields(value)`, and `isinstance(value, enum.Enum)` walking `.value`.
+
+RED (fix stashed back to the pre-fix-round commit `4bee8ef`; new dataclass/Enum tests at
+HEAD):
+
+```
+$ git stash push -m "wu8 fix-round: stash dataclass/enum guard for RED capture" -- kibana/serializer.py
+$ .venv/bin/pytest tests/unit/test_serializer.py -k "Dataclass or Enum" -v --no-cov
+...
+FAILED test_orjson_rejects_nan_inside_dataclass_field
+  Failed: DID NOT RAISE SerializationError
+FAILED test_orjson_rejects_nan_inside_dataclass_in_list
+  Failed: DID NOT RAISE SerializationError
+FAILED test_orjson_rejects_nan_inside_nested_dataclass_field
+  Failed: DID NOT RAISE SerializationError
+FAILED test_orjson_rejects_nan_inside_enum_value
+  Failed: DID NOT RAISE SerializationError
+4 failed, 4 passed in 0.10s
+```
+
+(The 4 that already passed: the two "accepts finite dataclass/Enum" guard-against-overbroad-fix
+tests, which don't depend on the new branches, plus the two `test_stdlib_raises_typeerror_for_*`
+parity-boundary pins, which were already true and unaffected either way.)
+
+GREEN (fix restored):
+
+```
+$ git stash pop
+$ .venv/bin/pytest tests/unit/test_serializer.py -k "Dataclass or Enum" -v --no-cov
+...
+8 passed in 0.06s
+```
+
+### A real performance regression, found and fixed while re-measuring overhead
+
+Before re-measuring, the *initial* dataclass/Enum fix was checked with `isinstance`/
+`Enum` branches placed **before** the `dict`/`list`/leaf-scalar checks (matching the
+order those checks were first written in, mirroring the docstring's explanation of
+*why* `Enum` needs checking ahead of a plain float check for the mixin case). Measuring
+that version against the same representative ~9.2KB body surfaced a serious, unplanned
+regression:
+
+```
+trial 0: raw=6.10us guarded=58.12us stdlib=39.30us overhead=853.2% guarded_vs_stdlib=0.68x
+trial 1: raw=6.14us guarded=58.09us stdlib=39.02us overhead=846.8% guarded_vs_stdlib=0.67x
+trial 2: raw=6.15us guarded=58.40us stdlib=40.58us overhead=849.1% guarded_vs_stdlib=0.69x
+```
+
+**~850% overhead, and guarded orjson now *slower* than the stdlib fallback
+(0.68x)** -- directly contradicting the adjudication's own stated reason to ship
+("guarded orjson remains faster than the stdlib fallback"). Root-caused by isolating
+each branch's cost independently (`timeit` on the walk alone, four variants: no
+dataclass/Enum, Enum-only, dataclass-only, both):
+
+```
+v1_no_enum_no_dc: 18.08 us/call
+v2_enum_only:     29.49 us/call   (+11.4us just from adding the Enum check)
+v3_dc_only:       39.02 us/call   (+20.9us just from adding the dataclass check)
+v4_both:          52.31 us/call
+```
+
+`dataclasses.is_dataclass()` is expensive per call, and with `Enum`/`dataclass` checked
+*before* the `dict`/`list`/leaf-scalar branches, it ran on **every** string/int/bool/None
+leaf in the body -- which vastly outnumber floats and containers in a typical body (this
+representative body has dozens of plain string/int/bool leaves and only ~150+60 floats/
+UUID-strings in comparison) -- instead of only on values that had already failed every
+cheaper, more-common check.
+
+**Fix:** reordered to float first, then an identity check against
+`_INERT_LEAF_TYPES = frozenset((str, int, bool, type(None)))` (a fast short-circuit --
+still safe against the `Enum`-mixin case: a mixin `Enum` member's exact `type()` is
+always its own class, never exactly `str`/`int`/`bool`/`NoneType`, so this never
+swallows one), then `dict`, then `list`/`tuple`, then `Enum`, then `dataclasses` last --
+so the expensive `is_dataclass` check is only reached by values that already failed
+every cheaper, more-common check first. Re-measured after reordering:
+
+```
+raw orjson: 5.90us  guarded: 18.43us  overhead=212.5%
+```
+
+Back in line with (in fact slightly better than) the pre-dataclass/Enum "~300%"
+number. All 60 tests in `tests/unit/test_serializer.py` (including the new
+dataclass/Enum RED/GREEN cases) re-confirmed passing after the reorder -- the fix is a
+pure performance reorder, not a behavior change.
+
+### Final overhead measurement (shipped mechanism, after the reorder fix)
+
+Measured against the actual shipped `OrjsonSerializer.dumps`/`_reject_non_finite_floats`,
+same representative ~9.2KB body, `timeit` N=20000, 3 trials:
+
+```
+trial 0: raw=6.19us guarded=19.01us stdlib=39.36us overhead=207.1% guarded_vs_stdlib=2.07x
+trial 1: raw=6.26us guarded=19.01us stdlib=39.08us overhead=203.7% guarded_vs_stdlib=2.06x
+trial 2: raw=6.13us guarded=19.04us stdlib=39.40us overhead=210.7% guarded_vs_stdlib=2.07x
+```
+
+**FINAL overhead: ~207% relative to raw `orjson.dumps`** (absolute added cost ~12.8us:
+19.0us guarded vs. 6.2us raw). Guarded orjson is now **~2.07x faster** than the stdlib
+fallback -- *better* than every number cited in the original adjudication (1.77x) and
+the first post-dataclass/Enum measurement (1.6x), because the reorder that fixed the
+regression also made the pre-existing dict/list/float path a little cheaper than before
+(the `_INERT_LEAF_TYPES` short-circuit skips scalar leaves faster than falling through
+to `isinstance(value, dict)`/`isinstance(value, (list, tuple))` and failing both, which
+is what the non-reordered walk did for every scalar leaf even before this fix round).
+
+### [MAJOR] "No known observable divergence remains" claim corrected
+
+The prior version of this file's "Scope & caveats" section asserted "no known
+observable serialization-semantics divergence remains between the two backends for
+#79's scope" -- disproved by the BLOCKER above (dataclass/Enum were a real, live,
+confirmed divergence at the time that claim was written). Corrected in place below,
+with the precise boundary now stated instead of an unqualified "no divergence" claim.
+
+### [MINOR] numpy: one-time probe in a disposable venv
+
+Per the review's own two acceptable options (a real probe, or an explicit
+not-verified note), a real probe was run rather than just asserting the absence of a
+claim -- numpy is not a project dependency, so this used a throwaway venv
+(`python3 -m venv`, `pip install orjson numpy`, deleted immediately after), not the
+project's own `.venv`:
+
+```
+>>> import orjson, numpy as np, json
+
+>>> # actual shipped call shape: orjson.dumps(data) -- NO option kwarg passed anywhere
+>>> # in kibana/serializer.py, so OPT_SERIALIZE_NUMPY is never set.
+>>> orjson.dumps({"v": np.float64("nan")})          # no option
+TypeError: Type is not JSON serializable: numpy.float64
+>>> orjson.dumps({"v": np.array([1.0, float("nan")])})  # no option
+TypeError: Type is not JSON serializable: numpy.ndarray
+>>> orjson.dumps({"v": np.float64(1.0)})            # finite, still no option
+TypeError: Type is not JSON serializable: numpy.float64
+
+>>> # for contrast only -- confirms numpy support really is opt-in, not the
+>>> # project's configuration:
+>>> orjson.dumps({"v": np.float64("nan")}, option=orjson.OPT_SERIALIZE_NUMPY)
+b'{"v":null}'
+
+>>> # stdlib: np.float64 IS a genuine `float` subclass (isinstance(np.float64(1.0), float) is True),
+>>> # so the C encoder's own isinstance-based dispatch treats it as a plain float:
+>>> json.dumps({"v": np.float64("nan")}, allow_nan=False)
+ValueError: Out of range float values are not JSON compliant: np.float64(nan)
+>>> json.dumps({"v": np.float64(1.0)}, allow_nan=False)
+'{"v": 1.0}'
+>>> json.dumps({"v": np.array([1.0, 2.0])}, default=..., allow_nan=False)  # ndarray, not a float subclass
+TypeError  # (via the default hook -- unsupported, matches the existing generic behavior)
+```
+
+**Result: no silent-null risk for numpy under the actual shipped configuration.**
+Because `OrjsonSerializer.dumps` never passes `option=orjson.OPT_SERIALIZE_NUMPY`, a
+numpy scalar or array of *any* finiteness raises `TypeError` from orjson itself --
+unconditionally unsupported, the same "unsupported type -> loud exception, never
+silent success" family as a real `float` subclass or a `namedtuple` (see the BLOCKER
+section of the original guard's docstring reasoning). `_reject_non_finite_floats`'s
+`type(value) is float` leaf check correctly skips a numpy scalar (its exact type is
+`numpy.float64`, not `float`), and that's fine precisely because orjson's own call
+(with no numpy option) will reject it as an unsupported type regardless of finiteness
+-- there is no path by which a numpy NaN silently becomes `null` in this project's
+actual code. A **pre-existing, unrelated, out-of-scope** backend divergence was
+observed in the same probe: stdlib successfully serializes a *finite* `numpy.float64`
+(because it's a genuine `float` subclass) while orjson (as configured here) rejects
+*any* numpy value outright -- this is a general numpy-support gap, not a NaN/UUID
+divergence, predates this issue, and is not addressed here (numpy is not a dependency
+of this project). If a future change ever adds `OPT_SERIALIZE_NUMPY` to
+`OrjsonSerializer.dumps`, this guard's numpy blind spot would need revisiting;
+noted here so that connection isn't lost.
+
 ## Scope & caveats
 
-- The orjson-side NaN/Infinity divergence is now closed. No known observable
-  serialization-semantics divergence remains between the two backends for #79's scope
-  (NaN/Infinity/-Infinity, UUID).
+- **Corrected (see MAJOR above):** no known observable NaN/Infinity/UUID
+  serialization-semantics divergence remains between the two backends for **any type
+  either backend will actually serialize** -- this now explicitly includes `dict`/
+  `list`/`tuple` (and subclasses), `dataclasses.dataclass` instances, and `enum.Enum`
+  members, not just plain JSON containers. This is *not* the same claim as "the two
+  backends serialize the same set of input types" -- see the next bullet.
+- **Backends still differ on *which types they'll serialize at all*, and that is
+  intentional and out of scope for #79:** stdlib's `JSONSerializer._default` has no
+  case for dataclasses or `Enum` (or `set`, or a plain custom class) -- it raises
+  `TypeError` for any of these regardless of whether they contain a non-finite float,
+  while orjson serializes dataclasses/`Enum` natively. A body containing one of these
+  types either succeeds only on orjson or fails on both for different reasons; #79 is
+  about *observable NaN/Infinity/UUID semantics diverging for inputs both backends
+  accept*, not about making stdlib support every type orjson natively supports.
+- numpy: **not verified as part of this project's dependency surface** -- see the
+  MINOR section above for the actual probe result (no silent-null risk under the
+  current, no-`OPT_SERIALIZE_NUMPY` configuration) and the one pre-existing,
+  out-of-scope numpy-general divergence it surfaced.
 - Point-in-time result: Kibana's space-description schema (strict, rejects `null` for
   a `string` field) is current as of 2026-08-01, but no longer load-bearing for this
   fix's guarantees — both backends now reject a non-finite float before any request is
@@ -543,5 +798,6 @@ failed to delete` line appeared in any run.
   both backends and out of scope for #79.
 - `_reject_non_finite_floats`'s guard is scoped to what the client actually constructs
   request bodies from (`dict`/`list`/`tuple`, including subclasses of the first two;
-  `float`; and whatever `JSONSerializer._default`/orjson's native types handle) — it is
-  not a general-purpose arbitrary-object walker, matching the scope of #79 itself.
+  `dataclasses.dataclass` instances; `enum.Enum` members; `float`; and whatever
+  `JSONSerializer._default`/orjson's native types handle) — it is not a general-purpose
+  arbitrary-object walker, matching the scope of #79 itself.

@@ -1,5 +1,7 @@
 """Unit tests for serializer classes."""
 
+import dataclasses
+import enum
 import importlib.util
 import json
 import uuid
@@ -536,3 +538,107 @@ class TestCrossBackendEqualityForNormalBodies:
         stdlib_out = JSONSerializer().dumps(data)
         orjson_out = OrjsonSerializer().dumps(data)
         assert json.loads(stdlib_out) == json.loads(orjson_out) == data
+
+
+# --- #79 fix-round (spec review BLOCKER): dataclasses and Enum members -----
+#
+# orjson serializes a dataclass **instance** (each field, recursively) and an
+# Enum **member's** ``.value`` NATIVELY, with zero opt-in -- confirmed live
+# (see docs/evidence/serializer-parity-79.md's fix-round section): a NaN
+# hidden in either silently became JSON ``null``, the same defect #79 exists
+# to close, just for two more types ``_reject_non_finite_floats`` didn't
+# originally walk into.
+#
+# Parity boundary (intentional, documented, not a gap): stdlib has no
+# ``_default`` support for dataclasses or Enum at all, so ``JSONSerializer``
+# raises ``TypeError`` for either regardless of whether any field/value is
+# finite -- that TypeError is stdlib's own pre-existing, correct behavior for
+# an unsupported type (unchanged, out of scope), not a divergence this guard
+# needs to close. The guarantee this issue makes is "a non-finite float
+# raises wherever a backend will actually serialize one" -- stdlib never
+# serializes a dataclass/Enum at all, so there is nothing to guard there.
+
+
+@dataclasses.dataclass
+class _PointForTests:
+    x: float
+    y: float
+
+
+@dataclasses.dataclass
+class _OuterForTests:
+    inner: _PointForTests
+    tag: str
+
+
+class _ColorForTests(enum.Enum):
+    OK = 1.0
+    BAD = float("nan")
+
+
+class TestDataclassAndEnumNonFiniteFloatParity:
+    """Fix-round regression tests for the spec-review BLOCKER."""
+
+    def test_orjson_rejects_nan_inside_dataclass_field(self):
+        if not _orjson_installed():
+            pytest.skip("orjson not installed")
+        from kibana.serializer import OrjsonSerializer
+
+        with pytest.raises(SerializationError):
+            OrjsonSerializer().dumps({"p": _PointForTests(x=1.0, y=float("nan"))})
+
+    def test_orjson_rejects_nan_inside_nested_dataclass_field(self):
+        """NaN two dataclass levels deep, not just the outer one."""
+        if not _orjson_installed():
+            pytest.skip("orjson not installed")
+        from kibana.serializer import OrjsonSerializer
+
+        outer = _OuterForTests(inner=_PointForTests(x=1.0, y=float("-inf")), tag="t")
+        with pytest.raises(SerializationError):
+            OrjsonSerializer().dumps({"o": outer})
+
+    def test_orjson_rejects_nan_inside_dataclass_in_list(self):
+        if not _orjson_installed():
+            pytest.skip("orjson not installed")
+        from kibana.serializer import OrjsonSerializer
+
+        points = [_PointForTests(x=1.0, y=2.0), _PointForTests(x=1.0, y=float("inf"))]
+        with pytest.raises(SerializationError):
+            OrjsonSerializer().dumps({"points": points})
+
+    def test_orjson_accepts_dataclass_with_all_finite_fields(self):
+        """Guard against a too-broad fix rejecting ordinary dataclasses."""
+        if not _orjson_installed():
+            pytest.skip("orjson not installed")
+        from kibana.serializer import OrjsonSerializer
+
+        result = OrjsonSerializer().dumps({"p": _PointForTests(x=1.0, y=2.0)})
+        assert json.loads(result) == {"p": {"x": 1.0, "y": 2.0}}
+
+    def test_orjson_rejects_nan_inside_enum_value(self):
+        if not _orjson_installed():
+            pytest.skip("orjson not installed")
+        from kibana.serializer import OrjsonSerializer
+
+        with pytest.raises(SerializationError):
+            OrjsonSerializer().dumps({"c": _ColorForTests.BAD})
+
+    def test_orjson_accepts_enum_with_finite_value(self):
+        """Guard against a too-broad fix rejecting ordinary Enum members."""
+        if not _orjson_installed():
+            pytest.skip("orjson not installed")
+        from kibana.serializer import OrjsonSerializer
+
+        result = OrjsonSerializer().dumps({"c": _ColorForTests.OK})
+        assert json.loads(result) == {"c": 1.0}
+
+    def test_stdlib_raises_typeerror_for_dataclass_regardless_of_field_values(self):
+        """Pin the parity boundary: stdlib's TypeError for a dataclass is
+        pre-existing, correct, unrelated behavior -- not part of this guard,
+        and not expected to become a SerializationError."""
+        with pytest.raises(TypeError):
+            JSONSerializer().dumps({"p": _PointForTests(x=1.0, y=1.0)})
+
+    def test_stdlib_raises_typeerror_for_enum_regardless_of_value(self):
+        with pytest.raises(TypeError):
+            JSONSerializer().dumps({"c": _ColorForTests.OK})

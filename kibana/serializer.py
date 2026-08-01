@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import dataclasses
+import enum
 import json
 import math
 import uuid
@@ -18,6 +20,13 @@ from kibana.exceptions import SerializationError
 # change to either backend can't let the two drift apart silently.
 _NON_FINITE_FLOAT_MESSAGE = "Out of range float values are not JSON compliant"
 
+# Exact leaf types that never need a finiteness check or recursion, checked
+# by identity (``type(value) in _INERT_LEAF_TYPES``) as a fast short-circuit
+# in ``_reject_non_finite_floats`` -- see that function's docstring for why
+# checking these *before* the ``enum``/``dataclasses`` branches matters for
+# performance, and why identity (not ``isinstance``) is still safe there.
+_INERT_LEAF_TYPES = frozenset((str, int, bool, type(None)))
+
 
 def _reject_non_finite_floats(data: Any) -> None:
     """Raise ``SerializationError`` if any float anywhere in *data* is
@@ -30,30 +39,91 @@ def _reject_non_finite_floats(data: Any) -> None:
     Walks the structure with an explicit stack rather than recursion (cheaper
     per docs/evidence/serializer-parity-79.md's measurements).
 
-    Container checks use ``isinstance`` rather than ``type(x) is dict``:
-    orjson natively serializes ``dict``/``list``/``tuple`` **subclasses**
-    too (confirmed empirically -- ``OrderedDict`` and a custom ``dict``/
-    ``list`` subclass all serialize the same as the plain type), so a
-    stricter identity check would silently skip recursing into one of those
-    and let a non-finite float hidden inside slip past this guard
-    undetected -- reintroducing the exact bug this guard exists to close,
-    just scoped to container subclasses. The float leaf check stays
-    ``type(value) is float`` (not ``isinstance``): the opposite risk doesn't
-    exist there, because orjson *rejects* real float subclasses outright as
-    an unsupported type (``TypeError``) -- skipping one here just means
-    that already-obscure case raises orjson's own exception instead of
-    this one, never a silent success.
+    The walk covers every type orjson will *actually serialize* the value
+    of, not just plain JSON containers -- **the parity guarantee is "a
+    non-finite float raises wherever a backend will actually serialize
+    one", not "wherever the naive JSON containers are"**:
+
+    - ``dict``/``list``/``tuple``: checked with ``isinstance`` rather than
+      ``type(x) is dict``. orjson natively serializes ``dict``/``list``/
+      ``tuple`` **subclasses** too (confirmed empirically -- ``OrderedDict``
+      and a custom ``dict``/``list`` subclass all serialize the same as the
+      plain type), so a stricter identity check would silently skip
+      recursing into one of those and let a non-finite float hidden inside
+      slip past this guard undetected.
+    - ``dataclasses``: orjson serializes a dataclass **instance** natively
+      (each field, recursively) with zero opt-in -- confirmed live: a
+      dataclass with a NaN-valued float field serializes to ``null`` for
+      that field with no exception. stdlib has no such native support
+      (``JSONSerializer._default`` doesn't handle dataclasses, so it raises
+      ``TypeError`` for one regardless of whether any field is finite) --
+      that TypeError is correct, unrelated stdlib behavior, not part of
+      this guard's job. Walked via ``dataclasses.is_dataclass(value) and
+      not isinstance(value, type)`` (excluding the dataclass *class* object
+      itself, which isn't a value a body would ever contain) +
+      ``dataclasses.fields(value)``.
+    - ``enum.Enum`` members: orjson serializes a member's ``.value``
+      natively -- confirmed live: an ``Enum`` member whose value is
+      ``float("nan")`` serializes to ``null``, no exception. A plain
+      ``Enum`` member is never itself a ``float``/``str``/``int``/``bool``
+      instance by exact type (``type(member) is not float`` even when the
+      member's ``.value`` is one -- ``type()`` always returns the member's
+      own class), but a mixin ``Enum`` (``class X(float, enum.Enum): ...``,
+      or stdlib's ``IntEnum``/``StrEnum``) *would* pass ``isinstance(...,
+      float)``/``isinstance(..., int)``/etc. Recursing into ``.value``
+      whenever ``isinstance(value, enum.Enum)`` handles both the plain and
+      the mixin shape uniformly through the same path, so this check must
+      run before anything that would otherwise treat a mixin member as a
+      plain ``float``/``int``/``str`` and skip looking at ``.value``.
+
+    **Ordering is a deliberate, measured performance choice, not just
+    correctness:** an earlier version checked ``isinstance(value,
+    enum.Enum)`` and ``dataclasses.is_dataclass(value)`` *before* the
+    ``dict``/``list``/inert-leaf checks, which measured 853% overhead on the
+    representative ~9KB body (up from ~300%) -- because ``dataclasses.is_dataclass``
+    is expensive per call, and with that ordering it ran on *every* string/int/
+    bool/None leaf in the body (which vastly outnumber floats and containers
+    in a typical body), not just on values that could plausibly be a
+    dataclass. The current order -- float, then an identity check against
+    ``_INERT_LEAF_TYPES`` (``str``/``int``/``bool``/``None``, which safely
+    short-circuits without missing an ``Enum`` mixin: those never have
+    ``type(member) is str``/``int``/``bool`` exactly, only ``isinstance``),
+    then ``dict``, then ``list``/``tuple``, then ``Enum``, then
+    ``dataclasses`` last -- measures back down to ~300% by reaching the
+    expensive ``is_dataclass`` check only for values that already failed
+    every cheaper, more-common check first. See
+    docs/evidence/serializer-parity-79.md for both measurements.
+
+    The float leaf check itself stays ``type(value) is float`` (not
+    ``isinstance``): the opposite risk doesn't exist there, because orjson
+    *rejects* real float subclasses (that aren't also an ``Enum``) outright
+    as an unsupported type (``TypeError``) -- skipping one here just means
+    that already-obscure case raises orjson's own exception instead of this
+    one, never a silent success.
+
+    Not verified: numpy scalar/array values. numpy is not a dependency of
+    this project (orjson's ``OPT_SERIALIZE_NUMPY`` is opt-in and unused
+    here) -- no claim is made about numpy inputs one way or the other. See
+    docs/evidence/serializer-parity-79.md for a one-time probe in a
+    disposable venv, if numpy behavior is ever needed.
     """
     stack: list[Any] = [data]
     while stack:
         value = stack.pop()
-        if type(value) is float:
+        value_type = type(value)
+        if value_type is float:
             if not math.isfinite(value):
                 raise SerializationError(_NON_FINITE_FLOAT_MESSAGE)
+        elif value_type in _INERT_LEAF_TYPES:
+            continue
         elif isinstance(value, dict):
             stack.extend(value.values())
         elif isinstance(value, (list, tuple)):
             stack.extend(value)
+        elif isinstance(value, enum.Enum):
+            stack.append(value.value)
+        elif dataclasses.is_dataclass(value) and not isinstance(value, type):
+            stack.extend(getattr(value, f.name) for f in dataclasses.fields(value))
 
 
 class Serializer:

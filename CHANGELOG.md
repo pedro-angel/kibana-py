@@ -20,13 +20,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `JSONSerializer.dumps` now passes `allow_nan=False`. orjson has no native option for
   this (confirmed against orjson 3.11.9; open upstream request `ijl/orjson#170`), so a
   new `_reject_non_finite_floats` walk runs before `orjson.dumps` and raises the same
-  exception; measured at ~300% CPU overhead / ~18µs absolute on a representative ~9KB
+  exception — walking not just `dict`/`list`/`tuple` (including subclasses) but also
+  `dataclasses.dataclass` instances and `enum.Enum` members, both of which orjson
+  serializes natively with zero opt-in and would otherwise still silently null a
+  non-finite value inside; stdlib has no such native support for either type and keeps
+  raising its own `TypeError` for them, which is unrelated, pre-existing, and out of
+  scope. Measured at ~207% CPU overhead / ~12.8µs absolute on a representative ~9KB
   body — accepted because the absolute cost is noise against real request latency,
-  guarded orjson (~24.6µs) still beats the stdlib fallback this project already ships
-  when orjson isn't installed (~39.7µs), and silently losing a caller's NaN/Infinity
-  value on the majority backend is exactly the defect this issue exists to remove (full
-  measurements, the walk's container-subclass-safety design, and the decision record are
-  in `docs/evidence/serializer-parity-79.md`). **UUID (both backends):**
+  guarded orjson (~19.0µs) is ~2x faster than the stdlib fallback this project already
+  ships when orjson isn't installed (~39.4µs), and silently losing a caller's
+  NaN/Infinity value on the majority backend is exactly the defect this issue exists to
+  remove (full measurements, an unplanned performance regression found and fixed while
+  adding dataclass/Enum coverage, a numpy probe, and the decision record are in
+  `docs/evidence/serializer-parity-79.md`). **UUID (both backends):**
   `JSONSerializer._default` gained a `uuid.UUID` case (serializing to the canonical
   string form, `str(obj)`), matching orjson's pre-existing native handling — a UUID
   value anywhere in a body now serializes identically regardless of which backend is
