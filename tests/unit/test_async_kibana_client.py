@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 from elastic_transport import AsyncTransport
+from elastic_transport import ConnectionError as ETConnectionError
 
 
 class TestAsyncKibanaClientInitialization:
@@ -338,6 +339,46 @@ class TestAsyncCloseMethod:
             pass
 
         client.close.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_aexit_propagates_close_translation_error(self):
+        """__aexit__ delegates to close(); when close() raises a translated
+        transport error (issue #84), __aexit__ lets it propagate -- matching
+        elasticsearch-py's own (sync) ``__exit__`` convention, which has no
+        masking-avoidance of its own and simply calls ``self.close()``."""
+        from kibana import AsyncKibana
+        from kibana.exceptions import ConnectionError as KibanaConnectionError
+
+        client = AsyncKibana(hosts="http://localhost:5601")
+        client._transport.close = AsyncMock(side_effect=ETConnectionError("boom"))
+
+        with pytest.raises(KibanaConnectionError):
+            async with client:
+                pass
+
+    @pytest.mark.asyncio
+    async def test_aexit_close_error_chains_body_exception_as_context(self):
+        """If the async-with body itself raised, a close() failure inside
+        __aexit__ becomes the propagating exception -- Python's ordinary
+        implicit chaining preserves the body exception rather than silently
+        dropping it. It ends up two links down the ``__context__`` chain
+        (translated error -> raw elastic_transport error it was translated
+        from -> body exception that was propagating when the raw error was
+        thrown into ``translate_transport_errors()``'s generator), not
+        directly on the translated error itself."""
+        from kibana import AsyncKibana
+        from kibana.exceptions import ConnectionError as KibanaConnectionError
+
+        client = AsyncKibana(hosts="http://localhost:5601")
+        client._transport.close = AsyncMock(side_effect=ETConnectionError("boom"))
+
+        body_exc = ValueError("body failure")
+        with pytest.raises(KibanaConnectionError) as excinfo:
+            async with client:
+                raise body_exc
+
+        assert excinfo.value.__context__ is excinfo.value.__cause__  # the ET source
+        assert excinfo.value.__context__.__context__ is body_exc
 
 
 class TestAsyncKibanaClientInheritance:

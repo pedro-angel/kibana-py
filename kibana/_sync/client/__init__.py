@@ -55,7 +55,11 @@ from kibana._sync.client.uptime import UptimeClient
 from kibana._sync.client.utils import _check_space_id_format
 from kibana._sync.client.visualizations import VisualizationsClient
 from kibana._sync.client.workflows import WorkflowsClient
-from kibana.exceptions import NotFoundError, SpaceNotFoundError
+from kibana.exceptions import (
+    NotFoundError,
+    SpaceNotFoundError,
+    translate_transport_errors,
+)
 from kibana.serializer import DEFAULT_SERIALIZERS
 
 __all__ = ["Kibana", "SpaceScopedKibana", "DEFAULT", "DefaultType"]
@@ -344,19 +348,53 @@ class Kibana(BaseClient):
 
         This closes all connections in the connection pool.
         After calling close(), the client should not be used.
+
+        Transport-layer close failures are translated to their
+        ``kibana.exceptions`` equivalents -- the same translation the request
+        path uses (see :func:`kibana.exceptions.translate_transport_errors`) --
+        logged as a WARNING (same message shape as before, so visibility
+        survives even if the caller suppresses the raise), and then
+        re-raised rather than swallowed, so a leaked connection/socket is
+        visible to the caller instead of only a WARNING log line. Callers
+        that want a best-effort close can wrap the call in
+        ``contextlib.suppress(kibana.exceptions.TransportError,
+        kibana.exceptions.SerializationError)`` -- both are needed because
+        ``SerializationError`` subclasses ``KibanaException`` directly, not
+        ``TransportError``, so ``TransportError`` alone misses it.
+
+        Caveat -- multi-node transports: ``elastic_transport.Transport.close()``
+        loops over every node in the pool with no per-node try/except; if an
+        earlier node's close call raises, the loop aborts and every node after
+        it is never closed. Retrying or suppressing the error this method
+        raises does NOT reclaim those unreached nodes -- neither this method
+        nor ``elastic_transport`` has a mechanism to resume the loop past the
+        failing node. This is upstream ``elastic_transport`` behavior, not
+        introduced by this translation.
         """
         try:
-            self._transport.close()
-            logger.debug("Kibana client closed")
+            with translate_transport_errors():
+                self._transport.close()
         except Exception as e:
             logger.warning("Error closing Kibana client: %s", e)
+            raise
+        logger.debug("Kibana client closed")
 
     def __enter__(self) -> Kibana:
-        """Enter context manager."""
+        """Enter context manager.
+
+        Exiting the ``with`` block calls :meth:`close`, which raises a
+        translated ``kibana.exceptions`` error on a transport-layer close
+        failure instead of swallowing it.
+        """
         return self
 
     def __exit__(self, *args: Any) -> None:
-        """Exit context manager and close client."""
+        """Exit context manager and close client.
+
+        Delegates to :meth:`close`; a transport-layer close failure raises
+        the translated ``kibana.exceptions`` error out of the ``with`` block
+        rather than being swallowed.
+        """
         self.close()
 
     def __repr__(self) -> str:
@@ -698,16 +736,27 @@ class SpaceScopedKibana:
         """
         Close the underlying client and release resources.
 
-        This delegates to the main Kibana client's close() method.
+        This delegates to the main Kibana client's close() method, including
+        its translated-raise behavior on a transport-layer close failure.
         """
         self._client.close()
 
     def __enter__(self) -> SpaceScopedKibana:
-        """Enter context manager."""
+        """Enter context manager.
+
+        Exiting the ``with`` block calls :meth:`close`, which raises a
+        translated ``kibana.exceptions`` error on a transport-layer close
+        failure instead of swallowing it.
+        """
         return self
 
     def __exit__(self, *args: Any) -> None:
-        """Exit context manager and close client."""
+        """Exit context manager and close client.
+
+        Delegates to :meth:`close`; a transport-layer close failure raises
+        the translated ``kibana.exceptions`` error out of the ``with`` block
+        rather than being swallowed.
+        """
         self.close()
 
     def __repr__(self) -> str:

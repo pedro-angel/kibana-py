@@ -3,6 +3,7 @@
 from unittest.mock import Mock, patch
 
 import pytest
+from elastic_transport import ConnectionError as ETConnectionError
 from elastic_transport import Transport
 
 
@@ -279,6 +280,45 @@ class TestCloseMethod:
             with client:
                 pass
             mock_close.assert_called_once()
+
+    def test_exit_propagates_close_translation_error(self):
+        """__exit__ delegates to close(); when close() raises a translated
+        transport error (issue #84), __exit__ lets it propagate -- matching
+        elasticsearch-py's own ``Elasticsearch.__exit__``, which has no
+        masking-avoidance of its own and simply calls ``self.close()``."""
+        from kibana import Kibana
+        from kibana.exceptions import ConnectionError as KibanaConnectionError
+
+        client = Kibana(hosts="http://localhost:5601")
+        client._transport.close = Mock(side_effect=ETConnectionError("boom"))
+
+        with pytest.raises(KibanaConnectionError):
+            with client:
+                pass
+
+    def test_exit_close_error_chains_body_exception_as_context(self):
+        """If the with-body itself raised, a close() failure inside __exit__
+        becomes the propagating exception -- Python's ordinary implicit
+        chaining (same as elasticsearch-py, which does not special-case
+        this) preserves the body exception rather than silently dropping it.
+        It ends up two links down the ``__context__`` chain (translated
+        error -> raw elastic_transport error it was translated from -> body
+        exception that was propagating when the raw error was thrown into
+        ``translate_transport_errors()``'s generator), not directly on the
+        translated error itself."""
+        from kibana import Kibana
+        from kibana.exceptions import ConnectionError as KibanaConnectionError
+
+        client = Kibana(hosts="http://localhost:5601")
+        client._transport.close = Mock(side_effect=ETConnectionError("boom"))
+
+        body_exc = ValueError("body failure")
+        with pytest.raises(KibanaConnectionError) as excinfo:
+            with client:
+                raise body_exc
+
+        assert excinfo.value.__context__ is excinfo.value.__cause__  # the ET source
+        assert excinfo.value.__context__.__context__ is body_exc
 
 
 class TestKibanaClientInheritance:

@@ -10,6 +10,34 @@ see [CONTRIBUTING.md § Changelog Policy](CONTRIBUTING.md#changelog-policy).
 ## [Unreleased]
 
 ### Fixed
+- **`close()` on both clients now translates and re-raises transport-layer close
+  failures instead of swallowing them** ([#84](https://github.com/pedro-angel/kibana-py/issues/84),
+  found by the 2026-07-31 adversarial deep review, code-quality lens). **Behavior
+  change:** `Kibana.close()` / `AsyncKibana.close()` (and the space-scoped clients,
+  which delegate to them) used to catch bare `Exception` around
+  `self._transport.close()` and only log a WARNING — a close failure (a leaked
+  connection or socket) was invisible to the caller, and unlike the request path
+  (aligned in 0.4.1), it was never translated to a `kibana.exceptions` type. `close()`
+  now wraps the transport close call in the same
+  `kibana.exceptions.translate_transport_errors()` the request path already uses, so
+  a transport-layer close failure surfaces as the matching `kibana.exceptions` type
+  (`ConnectionError`, `ConnectionTimeout`, `SSLError`, `SerializationError`,
+  `TransportError`) with `.message` set and the original `elastic_transport`
+  exception preserved as `__cause__` — and any other, non-transport exception is no
+  longer caught at all, so it propagates as-is (same "translate-or-propagate"
+  convention the request path already follows). Callers that relied on the old
+  best-effort swallow and want that behavior back can wrap the call in
+  `contextlib.suppress(kibana.exceptions.TransportError,
+  kibana.exceptions.SerializationError)` — both are required: `SerializationError`
+  subclasses `KibanaException` directly, not `TransportError`, so `TransportError`
+  alone does not suppress it. `__enter__`/`__exit__`
+  and `__aenter__`/`__aexit__` are unchanged — they still just delegate to
+  `close()`/`await close()`, matching `elasticsearch-py`'s own `Elasticsearch.__exit__`,
+  which has no masking-avoidance of its own either; if the `with`/`async with` body
+  already raised and `close()` now also raises, Python's ordinary implicit exception
+  chaining keeps both (the body exception as `__context__` of the `elastic_transport`
+  source exception, itself the `__context__`/`__cause__` of the translated one) rather
+  than silently dropping either.
 - **APM connectivity probe (`validate_apm_server_availability` /
   `configure_opentelemetry(validate_endpoint=True)`) is now dual-stack and
   time-bounded, including DNS resolution** ([#83](https://github.com/pedro-angel/kibana-py/issues/83),
