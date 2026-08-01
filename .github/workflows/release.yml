@@ -125,29 +125,15 @@ jobs:
         # PYTEST=pytest because CI installs into the system Python, not a venv.
         run: make test-integration-ci PYTEST=pytest
 
-  publish-github-release:
-    name: Publish GitHub Release
-    needs: [build, integration]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-
-    steps:
-      - name: Download artifact
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: dist
-          path: dist/
-
-      - name: Create GitHub release
-        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
-        with:
-          generate_release_notes: true
-          files: dist/*
-
+  # Publishes to PyPI before creating the GitHub release. A PyPI failure here leaves
+  # only the tag (no GH release, no package) — recoverable by fixing the cause and
+  # re-running this job. The inverse order (GH release first) is what the repo actually
+  # hit in the 0.1.x era: a PyPI publish failure left a public tag + GH release with no
+  # installable package. Re-running publish-github-release afterward is always safe (see
+  # publish-github-release below), so PyPI-first is the fail-closed direction.
   publish-pypi:
     name: Publish to PyPI
-    needs: [build, publish-github-release]
+    needs: [build, integration]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -164,6 +150,26 @@ jobs:
         run: rm -f dist/*.json
 
       - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@ba38be9e461d3875417946c167d0b5f3d385a247 # release/v1
+        uses: pypa/gh-action-pypi-publish@ba38be9e461d3875417946c167d0b5f3d385a247 # v1.14.1
         with:
           packages-dir: dist/
+
+  publish-github-release:
+    name: Publish GitHub Release
+    needs: [build, integration, publish-pypi]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: dist
+          path: dist/
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
+        with:
+          generate_release_notes: true
+          files: dist/*
