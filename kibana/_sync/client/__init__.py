@@ -352,16 +352,31 @@ class Kibana(BaseClient):
         Transport-layer close failures are translated to their
         ``kibana.exceptions`` equivalents -- the same translation the request
         path uses (see :func:`kibana.exceptions.translate_transport_errors`) --
-        and re-raised rather than swallowed, so a leaked connection/socket is
-        visible to the caller instead of only a WARNING log line. Callers that
-        want a best-effort close can wrap the call in
+        logged as a WARNING (same message shape as before, so visibility
+        survives even if the caller suppresses the raise), and then
+        re-raised rather than swallowed, so a leaked connection/socket is
+        visible to the caller instead of only a WARNING log line. Callers
+        that want a best-effort close can wrap the call in
         ``contextlib.suppress(kibana.exceptions.TransportError,
         kibana.exceptions.SerializationError)`` -- both are needed because
         ``SerializationError`` subclasses ``KibanaException`` directly, not
         ``TransportError``, so ``TransportError`` alone misses it.
+
+        Caveat -- multi-node transports: ``elastic_transport.Transport.close()``
+        loops over every node in the pool with no per-node try/except; if an
+        earlier node's close call raises, the loop aborts and every node after
+        it is never closed. Retrying or suppressing the error this method
+        raises does NOT reclaim those unreached nodes -- neither this method
+        nor ``elastic_transport`` has a mechanism to resume the loop past the
+        failing node. This is upstream ``elastic_transport`` behavior, not
+        introduced by this translation.
         """
-        with translate_transport_errors():
-            self._transport.close()
+        try:
+            with translate_transport_errors():
+                self._transport.close()
+        except Exception as e:
+            logger.warning("Error closing Kibana client: %s", e)
+            raise
         logger.debug("Kibana client closed")
 
     def __enter__(self) -> Kibana:

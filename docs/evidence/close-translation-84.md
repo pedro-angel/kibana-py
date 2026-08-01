@@ -562,7 +562,7 @@ teardown: real transport.close() succeeded afterward
   `SerializationError` subclasses `KibanaException` directly (confirmed via
   `SerializationError.__mro__`), so `contextlib.suppress(TransportError)` alone
   silently misses it -- an earlier round of this evidence stated the single-type
-  recipe, caught by spec review; see "Fix round" below and
+  recipe, caught by spec review; see "Fix round 1" below and
   `test_documented_close_suppress_recipe_covers_every_mapped_type_sync`/`_async` in
   `tests/unit/test_transport_exceptions.py`, which now pin the corrected recipe against
   all 5 types.
@@ -574,8 +574,29 @@ teardown: real transport.close() succeeded afterward
   monkeypatch the transport's `close` directly (same approach the request-path's own
   translation tests use for the mocked cases) rather than relying on triggering a real
   close failure, which this environment cannot organically produce.
+- **Multi-node caveat (round-2 finding).** `elastic_transport.Transport.close()` /
+  `AsyncTransport.close()` (`elastic_transport/_transport.py:542`,
+  `elastic_transport/_async_transport.py:428`) loop over every node in the pool with
+  no per-node `try`/`except`. If an earlier node's `close()` raises, the loop aborts
+  and every node after it is **never closed** — on multi-node transports, a failing
+  node aborts the pool-close loop, and retrying or suppressing this method's raised
+  error does **not** reclaim the unreached nodes; there is no mechanism, in this
+  method or in `elastic_transport` itself, to resume the loop past the failing node.
+  This is upstream `elastic_transport` behavior, not introduced by this fix's
+  translation — documented in both `close()` docstrings and pinned by
+  `test_multi_node_close_failure_aborts_pool_loop_retry_does_not_help_sync`/`_async`
+  in `tests/unit/test_transport_exceptions.py` (see "Round 2" below).
+- **Concurrent close-vs-in-flight-request — explicitly out of scope.** Calling
+  `close()` while another coroutine/thread has an in-flight `perform_request()` on
+  the same client is untested interleaving; any resulting exception that is not one
+  of the 5 mapped ET types propagates untranslated, per the same convention this
+  whole fix already follows (`translate_transport_errors()` only translates the
+  mapped types; anything else passes through as-is). No new concurrency test was
+  added for this — proportionality ruling (round-2 review, MINOR #3): the request
+  path already owns testing that class of interleaving; this fix's scope is `close()`
+  gaining translation and raising, not a general concurrency audit of the client.
 
-## Fix round — spec review response
+## Fix round 1 — spec review response
 
 A spec review of the round-1 fix found 2 BLOCKER-equivalent MAJORs + 2 minors, all
 addressed here, on the same branch, same commit lineage.
@@ -703,3 +724,206 @@ a mocked transport, same as round 1's mocked translation tests — no behavior o
 live path changed). Round 1's live battle-test results (clean sync/async
 open→use→close, forced-failure translation surfacing on a live client, both above)
 still hold unmodified.
+
+## Fix round 2 — code-quality review response
+
+A code-quality review of the round-1 fix found 1 MAJOR + 2 minors, all addressed
+here, on the same branch, same commit lineage.
+
+### [MAJOR] Multi-node pool-close loop aborts on the first failing node; retry/suppress can't reclaim later nodes
+
+The reviewer reproduced this directly against a 2-node pool: 3 successive
+`client.close()` calls, node 1 never touched. Reproduced independently here, same
+result:
+
+```
+$ .venv/bin/python -c "
+from kibana import Kibana
+from unittest.mock import Mock
+from elastic_transport import ConnectionError as ETConnectionError
+
+client = Kibana(hosts=['http://localhost:5601', 'http://localhost:5602'])
+nodes = list(client._transport.node_pool.all())
+node0, node1 = nodes[0], nodes[1]
+node0.close = Mock(side_effect=ETConnectionError('node0 down'))
+node1.close = Mock()
+
+for i in range(3):
+    try:
+        client.close()
+        print(f'attempt {i}: no exception (unexpected)')
+    except Exception as e:
+        print(f'attempt {i}: raised {type(e).__module__}.{type(e).__name__}: {e}')
+
+print('node0.close call_count:', node0.close.call_count)
+print('node1.close call_count:', node1.close.call_count)
+"
+attempt 0: raised kibana.exceptions.ConnectionError: Connection error
+attempt 1: raised kibana.exceptions.ConnectionError: Connection error
+attempt 2: raised kibana.exceptions.ConnectionError: Connection error
+node0.close call_count: 3
+node1.close call_count: 0
+```
+
+Root cause, confirmed by reading the upstream source directly (already quoted earlier
+in this file):
+
+```python
+# elastic_transport/_transport.py:542
+def close(self) -> None:
+    """
+    Explicitly closes all nodes in the transport's pool
+    """
+    for node in self.node_pool.all():
+        node.close()
+```
+
+No per-node `try`/`except` — a `node.close()` raise on any iteration propagates
+straight out of the `for` loop, so every node after the failing one is skipped
+entirely. Confirmed this is not something retry or the documented suppress recipe can
+work around — re-running `client.close()` (even wrapped in
+`contextlib.suppress(TransportError, SerializationError)`, the exact documented
+recipe) 3 times in a row still never reaches `node1`:
+
+```
+$ .venv/bin/python -c "
+import contextlib
+from kibana import Kibana
+from kibana.exceptions import TransportError, SerializationError
+from unittest.mock import Mock
+from elastic_transport import ConnectionError as ETConnectionError
+
+client = Kibana(hosts=['http://localhost:5601', 'http://localhost:5602'])
+nodes = list(client._transport.node_pool.all())
+node0, node1 = nodes[0], nodes[1]
+node0.close = Mock(side_effect=ETConnectionError('node0 down'))
+node1.close = Mock()
+
+for i in range(3):
+    with contextlib.suppress(TransportError, SerializationError):
+        client.close()
+
+print('node0.close call_count:', node0.close.call_count)
+print('node1.close call_count:', node1.close.call_count)
+"
+node0.close call_count: 3
+node1.close call_count: 0
+```
+
+This means the docstring's own suppress recipe implied best-effort close "works" (in
+the sense of eventually closing everything) when it does not on a multi-node
+transport with a persistently-failing early node — an honest gap the docstring needed
+to name, not paper over.
+
+**Fix (a) — documented the caveat** in both `close()` docstrings
+(`kibana/_sync/client/__init__.py`, `kibana/_async/client/__init__.py`) and in this
+evidence's "Scope & caveats" section above: *"on multi-node transports a failing node
+aborts the pool-close loop; retry/suppress does not reclaim nodes after the failing
+one — upstream `elastic_transport` behavior."*
+
+**Fix (b) — added the regression test** pinning that retry does not help,
+`test_multi_node_close_failure_aborts_pool_loop_retry_does_not_help_sync`/`_async` in
+`tests/unit/test_transport_exceptions.py` — the reviewer's 2-node instrumented repro,
+asserting `node1.close` is never called across 3 `client.close()` attempts (each
+wrapped in the documented suppress recipe). This is **not** a RED-then-GREEN pair:
+there is nothing in kibana-py to fix here (the loop lives in `elastic_transport`,
+out of this package's control), so the test is a characterization test that **passes
+today** and documents reality — its purpose is to fail loudly if a future
+`elastic_transport` upgrade ever changes this behavior out from under the documented
+caveat, not to drive a code change now:
+
+```
+$ .venv/bin/pytest tests/unit/test_transport_exceptions.py -k "multi_node" --no-cov -q -v
+tests/unit/test_transport_exceptions.py::test_multi_node_close_failure_aborts_pool_loop_retry_does_not_help_sync PASSED
+tests/unit/test_transport_exceptions.py::test_multi_node_close_failure_aborts_pool_loop_retry_does_not_help_async PASSED
+2 passed, 39 deselected in 0.07s
+```
+
+### [MINOR] Observability regression: a suppressed close failure now logs nothing
+
+Pre-fix (before issue #84's round-1 fix), `close()`'s bare
+`except Exception as e: logger.warning(...)` logged a WARNING for **every** close
+failure unconditionally — silently swallowed afterward, but always logged. Round 1
+removed that catch entirely in favor of translate-and-raise, so a caller who wraps
+`close()` in the documented `contextlib.suppress(...)` recipe now gets **total
+silence**: the failure is invisible again, just via a different mechanism (a
+suppressed raise instead of a swallowed catch) than the original issue described.
+
+**Fix:** re-added a `try`/`except Exception as e: logger.warning(...); raise` around
+the `with translate_transport_errors():` block in both `close()` methods — the
+WARNING is logged (same message shape as the pre-fix code:
+`"Error closing Kibana client: %s"` / `"Error closing AsyncKibana client: %s"`)
+**immediately before** the (already-translated, since `translate_transport_errors()`
+runs inside the `try`) exception is re-raised via a bare `raise`, preserving the exact
+exception object, its `__cause__`, and its `__context__` untouched. This gives both
+visibility (the WARNING always fires, suppress or not) and the raise (nothing is
+swallowed) — resolving the regression without reintroducing round-1's swallow.
+
+**RED-then-GREEN**, pinned in the existing translation-matrix tests
+(`test_sync_client_close_translates_transport_error`/
+`test_async_client_close_translates_transport_error` in
+`tests/unit/test_transport_exceptions.py`, parametrized over all 5 mapped types) —
+extended with a `caplog` fixture and assertion, per the review's instruction to pin
+this in "the translation-matrix test" specifically:
+
+RED (against the round-1 code, before re-adding the log):
+```
+$ .venv/bin/pytest tests/unit/test_transport_exceptions.py::test_sync_client_close_translates_transport_error tests/unit/test_transport_exceptions.py::test_async_client_close_translates_transport_error --no-cov -q
+...
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+>   assert len(warnings) == 1
+E   assert 0 == 1
+E    +  where 0 = len([])
+...
+10 failed in 0.10s
+```
+
+All 10 cases (5 mapped types x sync/async) fail identically: zero WARNING records
+captured, confirming the regression precisely as the reviewer described.
+
+GREEN (after re-adding the log-before-raise):
+```
+$ .venv/bin/pytest tests/unit/test_transport_exceptions.py --no-cov -q
+.........................................                                 [100%]
+41 passed in 0.08s
+```
+
+### [MINOR] Concurrent close-vs-in-flight-request scoped out explicitly
+
+Addressed directly in this evidence's "Scope & caveats" section above (new bullet,
+"Concurrent close-vs-in-flight-request — explicitly out of scope"), stating plainly
+that this interleaving is untested and that any non-mapped exception it produces
+propagates untranslated per the package's existing convention. Per the review's own
+proportionality ruling, no new concurrency test was added — the request path already
+owns testing that class of interleaving, and this fix's scope is `close()` gaining
+translation and raising, not a full concurrency audit of the client.
+
+### Full verification after fix round 2
+
+```
+$ .venv/bin/pytest tests/unit/ --cov=kibana --cov-fail-under=90 -q -p no:randomly
+3413 passed
+Required test coverage of 90% reached. Total coverage: 94.45%
+
+$ .venv/bin/pytest tests/unit/test_sync_async_parity.py --no-cov -q
+144 passed in 0.64s
+
+$ .venv/bin/mypy kibana/
+Success: no issues found in 103 source files
+
+$ .venv/bin/pre-commit run --all-files
+... (all hooks, incl. black/isort/ruff) ... Passed
+```
+
+3413 vs fix-round-1's 3411: +2, both in `test_transport_exceptions.py` —
+`test_multi_node_close_failure_aborts_pool_loop_retry_does_not_help_sync`/`_async`.
+The 10 caplog assertions added to the existing translation-matrix tests are not new
+*test items* (same parametrized `CASES` collection, 5 x 2 = 10 cases, unchanged
+count) — they extend assertions inside already-collected tests, so they don't move
+the total.
+
+No live re-run performed for this round either: all 3 findings were addressed via
+docstrings, this evidence file, and unit tests exercising a mocked transport (the
+multi-node repro instruments `Mock`/`AsyncMock` node objects inside a real
+multi-host `Kibana`/`AsyncKibana` client — no live network I/O). Round 1's live
+battle-test results are unaffected and still hold.
