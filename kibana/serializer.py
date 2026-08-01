@@ -44,13 +44,24 @@ def _reject_non_finite_floats(data: Any) -> None:
     non-finite float raises wherever a backend will actually serialize
     one", not "wherever the naive JSON containers are"**:
 
-    - ``dict``/``list``/``tuple``: checked with ``isinstance`` rather than
-      ``type(x) is dict``. orjson natively serializes ``dict``/``list``/
-      ``tuple`` **subclasses** too (confirmed empirically -- ``OrderedDict``
-      and a custom ``dict``/``list`` subclass all serialize the same as the
-      plain type), so a stricter identity check would silently skip
-      recursing into one of those and let a non-finite float hidden inside
-      slip past this guard undetected.
+    - ``dict``/``list``: checked with ``isinstance`` rather than ``type(x)
+      is dict``. orjson natively serializes ``dict``/``list`` **subclasses**
+      too (confirmed empirically -- ``OrderedDict`` and a custom ``dict``/
+      ``list`` subclass all serialize the same as the plain type), so a
+      stricter identity check would silently skip recursing into one of
+      those and let a non-finite float hidden inside slip past this guard
+      undetected.
+    - ``tuple``: checked by **identity** (``type(value) is tuple``), *not*
+      ``isinstance`` -- unlike ``dict``/``list``, orjson rejects any tuple
+      *subclass* outright as an unsupported type (confirmed empirically:
+      a ``namedtuple`` raises ``TypeError: Type is not JSON serializable``
+      from orjson itself, non-finite float inside or not). Walking into a
+      ``namedtuple`` via ``isinstance`` and raising this guard's own
+      ``SerializationError`` for a NaN inside it would be a *misleading*
+      error -- the real, correct failure for that body is orjson's own
+      unsupported-type ``TypeError``, not a float complaint. Plain
+      ``tuple`` instances (exact type) are still walked, since orjson does
+      serialize those (as a JSON array) same as a ``list``.
     - ``dataclasses``: orjson serializes a dataclass **instance** natively
       (each field, recursively) with zero opt-in -- confirmed live: a
       dataclass with a NaN-valued float field serializes to ``null`` for
@@ -101,6 +112,37 @@ def _reject_non_finite_floats(data: Any) -> None:
     that already-obscure case raises orjson's own exception instead of this
     one, never a silent success.
 
+    **Cycle- and DAG-safety (round 3):** a permanent, add-and-never-remove
+    ``id()``-keyed ``visited`` set tracks every ``dict``/``list``/``tuple``/
+    dataclass instance the walk has already started expanding. This is
+    deliberately *not* push/pop-scoped (a "currently on the path" set that
+    would be removed again on backtrack): the same object always yields the
+    same verdict regardless of how many times or which path reaches it, so
+    skipping a re-visit is *correct*, not just an optimization. Three
+    things fall out of this one rule together:
+
+    1. A self-referential container (``d["self"] = d``) used to hang this
+       walk forever -- pre-fix, orjson's own cycle detection
+       (``TypeError: Recursion limit reached``, confirmed live) would have
+       fired instantly, but this guard runs *before* ``orjson.dumps`` and
+       never gave it the chance to. With the visited set, the second visit
+       to the same object is skipped instead of re-expanded, so the walk
+       always terminates; ``orjson.dumps`` then raises its own cycle error
+       afterward, honestly, on the merits of the actual cycle -- this guard
+       never invents a misleading message for it.
+    2. A DAG (the same sub-object reachable via multiple paths, not a
+       cycle -- e.g. a shared sub-dict referenced from two list elements)
+       is walked once per *distinct object* instead of once per *path* to
+       it, making the walk linear in graph size instead of exponential in
+       path count.
+    3. ``id()`` is safe to key on here specifically because every object
+       the walk can reach is kept alive for the walk's entire duration by
+       the references the root ``data`` argument holds (directly or
+       transitively) -- CPython never reuses an id while a reference to the
+       object is still live, so no two distinct containers visited during
+       one call can ever collide on id(), and the set is thrown away (not
+       cached across calls) the moment this function returns.
+
     Not verified: numpy scalar/array values. numpy is not a dependency of
     this project (orjson's ``OPT_SERIALIZE_NUMPY`` is opt-in and unused
     here) -- no claim is made about numpy inputs one way or the other. See
@@ -108,6 +150,9 @@ def _reject_non_finite_floats(data: Any) -> None:
     disposable venv, if numpy behavior is ever needed.
     """
     stack: list[Any] = [data]
+    # See "Cycle- and DAG-safety" above: permanent (add, never remove),
+    # id()-keyed, scoped to this one call only.
+    visited: set[int] = set()
     while stack:
         value = stack.pop()
         value_type = type(value)
@@ -117,12 +162,21 @@ def _reject_non_finite_floats(data: Any) -> None:
         elif value_type in _INERT_LEAF_TYPES:
             continue
         elif isinstance(value, dict):
+            if id(value) in visited:
+                continue
+            visited.add(id(value))
             stack.extend(value.values())
-        elif isinstance(value, (list, tuple)):
+        elif isinstance(value, list) or value_type is tuple:
+            if id(value) in visited:
+                continue
+            visited.add(id(value))
             stack.extend(value)
         elif isinstance(value, enum.Enum):
             stack.append(value.value)
         elif dataclasses.is_dataclass(value) and not isinstance(value, type):
+            if id(value) in visited:
+                continue
+            visited.add(id(value))
             stack.extend(getattr(value, f.name) for f in dataclasses.fields(value))
 
 
@@ -159,17 +213,39 @@ class JSONSerializer(Serializer):
         (the stdlib default) -- Kibana would reject those with a 400 anyway,
         so raising client-side surfaces the problem immediately instead of
         as an opaque server error. See #79.
+
+        Only a ``ValueError`` whose message is *actually* the out-of-range-float
+        one gets ``_NON_FINITE_FLOAT_MESSAGE`` (round 3 fix): ``json.dumps``'s
+        own cycle detection (``check_circular``, on by default) also raises a
+        plain ``ValueError`` -- ``"Circular reference detected"`` -- for a
+        self-referential body, which a blanket ``except ValueError`` used to
+        mislabel as a bad float too (confirmed live). Any other ``ValueError``
+        is wrapped honestly with its own message instead, matching this
+        module's other error-wrapping call sites (``str(e)``, chained via
+        ``from e``) rather than inventing a misleading one.
+
+        ``.encode("utf-8")`` runs *after* the try, not inside it: a lone
+        (unpaired) UTF-16 surrogate character is a valid Python ``str`` code
+        point that ``json.dumps`` happily round-trips as-is with
+        ``ensure_ascii=False``, but cannot be UTF-8 encoded --
+        ``UnicodeEncodeError`` (itself a ``ValueError`` subclass) used to be
+        caught by the same blanket handler and mislabeled as a bad float too
+        (confirmed live). It now propagates as the encoding error it actually
+        is, unrelated to this guard's job.
         """
         if isinstance(data, bytes):
             return data
         if isinstance(data, str):
             return data.encode("utf-8")
         try:
-            return json.dumps(
+            encoded = json.dumps(
                 data, default=self._default, ensure_ascii=False, allow_nan=False
-            ).encode("utf-8")
+            )
         except ValueError as e:
-            raise SerializationError(_NON_FINITE_FLOAT_MESSAGE) from e
+            if str(e) == _NON_FINITE_FLOAT_MESSAGE:
+                raise SerializationError(_NON_FINITE_FLOAT_MESSAGE) from e
+            raise SerializationError(str(e)) from e
+        return encoded.encode("utf-8")
 
     def loads(self, data: bytes) -> Any:
         """Deserialize JSON bytes to Python objects."""

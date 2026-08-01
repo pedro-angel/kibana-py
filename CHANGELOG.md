@@ -20,18 +20,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `JSONSerializer.dumps` now passes `allow_nan=False`. orjson has no native option for
   this (confirmed against orjson 3.11.9; open upstream request `ijl/orjson#170`), so a
   new `_reject_non_finite_floats` walk runs before `orjson.dumps` and raises the same
-  exception — walking not just `dict`/`list`/`tuple` (including subclasses) but also
-  `dataclasses.dataclass` instances and `enum.Enum` members, both of which orjson
-  serializes natively with zero opt-in and would otherwise still silently null a
-  non-finite value inside; stdlib has no such native support for either type and keeps
-  raising its own `TypeError` for them, which is unrelated, pre-existing, and out of
-  scope. Measured at ~207% CPU overhead / ~12.8µs absolute on a representative ~9KB
-  body — accepted because the absolute cost is noise against real request latency,
-  guarded orjson (~19.0µs) is ~2x faster than the stdlib fallback this project already
-  ships when orjson isn't installed (~39.4µs), and silently losing a caller's
-  NaN/Infinity value on the majority backend is exactly the defect this issue exists to
-  remove (full measurements, an unplanned performance regression found and fixed while
-  adding dataclass/Enum coverage, a numpy probe, and the decision record are in
+  exception — walking not just `dict`/`list` (including subclasses, which orjson
+  serializes transparently) but also plain `tuple` (exact type only — a `tuple`
+  *subclass* like `namedtuple` is deliberately left unwalked, since orjson rejects any
+  tuple subclass outright as an unsupported type; walking into one would have produced
+  a misleading "bad float" instead of that correct error), `dataclasses.dataclass`
+  instances, and `enum.Enum` members, both of which orjson serializes natively with
+  zero opt-in and would otherwise still silently null a non-finite value inside; stdlib
+  has no such native support for dataclasses/Enum and keeps raising its own `TypeError`
+  for them, which is unrelated, pre-existing, and out of scope. The walk uses a
+  permanent, `id()`-keyed visited set for every container it starts expanding — a
+  self-referential body used to hang the walk forever (orjson's own cycle detection
+  never got the chance to fire, since this walk runs first and previously had no cycle
+  protection of its own); the same visited set also makes a DAG (shared sub-object
+  reachable via multiple paths) linear instead of exponential. Stdlib's own
+  `except ValueError` used to mislabel any `ValueError` — including its own circular-
+  reference detection and a `UnicodeEncodeError` from encoding a lone surrogate
+  character — as the non-finite-float message; it now only does that for the actual
+  out-of-range-float error and wraps anything else honestly with its own message.
+  Measured at ~262% CPU overhead / ~16.4µs absolute on a representative ~9KB body —
+  accepted because the absolute cost is noise against real request latency, guarded
+  orjson (~22.8µs) is ~1.7x faster than the stdlib fallback this project already ships
+  when orjson isn't installed (~39.5µs), and silently losing a caller's NaN/Infinity
+  value on the majority backend is exactly the defect this issue exists to remove (full
+  measurements, two unplanned regressions found and fixed along the way — a
+  dataclass/Enum performance regression and this round's cycle/error-honesty/tuple-
+  subclass fixes — a numpy probe, and the decision record are all in
   `docs/evidence/serializer-parity-79.md`). **UUID (both backends):**
   `JSONSerializer._default` gained a `uuid.UUID` case (serializing to the canonical
   string form, `str(obj)`), matching orjson's pre-existing native handling — a UUID

@@ -768,14 +768,310 @@ of this project). If a future change ever adds `OPT_SERIALIZE_NUMPY` to
 `OrjsonSerializer.dumps`, this guard's numpy blind spot would need revisiting;
 noted here so that connection isn't lost.
 
+## Round 3 — code-quality review response (2 BLOCKERs + 1 MAJOR + 3 minors)
+
+A code-quality review of the guard as it stood after round 2 found 2 BLOCKERs + 1
+MAJOR + 3 minors, all probe-verified before any fix was written. All addressed below,
+TDD (RED first for each behavioral item).
+
+### [BLOCKER 1] No cycle tracking -- a self-referential dict/list hung the guard forever
+
+**Confirmed live** before writing any fix, per environment-research -- including a
+bounded probe (a 3-second `signal.alarm`, not an actual open-ended hang) to prove the
+hang without waiting for one:
+
+```
+>>> import orjson, json
+
+>>> d = {}
+>>> d["self"] = d
+>>> orjson.dumps(d)
+TypeError: Recursion limit reached
+>>> json.dumps(d)
+ValueError: Circular reference detected
+
+>>> l = []
+>>> l.append(l)
+>>> orjson.dumps(l)
+TypeError: Recursion limit reached
+```
+
+```python
+import signal
+class Timeout(Exception): pass
+signal.signal(signal.SIGALRM, lambda signum, frame: (_ for _ in ()).throw(Timeout()))
+signal.alarm(3)
+try:
+    _reject_non_finite_floats(d)   # the pre-fix guard, no visited set
+    print("returned normally (unexpected)")
+except Timeout:
+    print("CONFIRMED HANG (pre-fix)")
+finally:
+    signal.alarm(0)
+```
+```
+CONFIRMED HANG (pre-fix)
+```
+
+Confirmed: both orjson and stdlib's *own* serializers detect a cycle instantly and
+raise their own error (`TypeError: Recursion limit reached` / `ValueError: Circular
+reference detected`) -- but `_reject_non_finite_floats` runs *before* `orjson.dumps`
+on the orjson path, with no cycle protection of its own, so it never gave orjson's
+detection a chance to fire; it just looped forever re-expanding the same object.
+
+**Decided fix (matches the reviewer's own framing):** a permanent (add, never remove)
+`id()`-keyed `visited` set for every `dict`/`list`/`tuple`/dataclass-instance the walk
+starts expanding. Not push/pop-scoped: the same object always yields the same verdict
+regardless of how many times or which path reaches it, so skipping a re-visit is
+*correct*, not just an optimization -- and this single rule also fixes the DAG
+exponential-rewalk minor from round 2 (linear in distinct objects, not exponential in
+paths to reach them) in the same move. `id()` is safe to key on here because every
+object the walk reaches is kept alive for the whole call by the references the root
+`data` argument holds (directly or transitively) -- documented as a comment in
+`_reject_non_finite_floats` per the review's own instruction. On a detected cycle the
+walk simply stops re-expanding that object -- then `orjson.dumps`/`json.dumps` raise
+their own cycle errors afterward, on the actual merits, which is what "surfaces
+honestly" means here (this guard never invents a message for a cycle it happens to
+have skipped).
+
+RED (fix stashed back to the pre-round-3 commit `f819225`; new tests at HEAD, each
+using a `signal.alarm`-bounded runner so a genuine hang fails the test fast instead of
+freezing the suite):
+
+```
+$ .venv/bin/pytest tests/unit/test_serializer.py -k "TestCycleSafety" -v --no-cov
+...
+FAILED test_self_referential_dict_does_not_hang_orjson
+  AssertionError: assert 'suspected hang' not in '...did not return within 5s -- suspected hang'
+FAILED test_self_referential_list_does_not_hang_orjson
+  AssertionError: assert 'suspected hang' not in '...did not return within 5s -- suspected hang'
+FAILED test_diamond_shaped_dag_is_not_exponential
+  _HangTimeout: did not return within 5s -- suspected hang
+1 passed, 3 failed
+```
+
+(`test_self_referential_dict_does_not_hang_stdlib` already passed pre-fix -- stdlib's
+own `check_circular` was never broken; it's a parity regression pin alongside the
+orjson fix, not a round-3 RED case. `test_diamond_shaped_dag_is_not_exponential` uses
+24 levels of doubling fan-out through one shared object -- empirically calibrated,
+not guessed: 20 levels completed in 0.38s even pre-fix, 22 in 1.43s, 24 timed out
+(>5s) -- chosen so the test genuinely fails pre-fix instead of asserting a shape that
+happens to stay cheap at a smaller depth.)
+
+GREEN (fix restored):
+
+```
+$ .venv/bin/pytest tests/unit/test_serializer.py -k "TestCycleSafety" -v --no-cov
+4 passed in <1s
+```
+
+### [BLOCKER 2] stdlib's blanket `except ValueError` mislabeled unrelated errors as the float message
+
+**Confirmed live**, per environment-research:
+
+```
+>>> import json
+
+>>> d = {}
+>>> d["self"] = d
+>>> json.dumps(d)
+ValueError: Circular reference detected
+
+>>> out = json.dumps({"v": "\ud800"}, ensure_ascii=False)   # succeeds -- lone
+>>> out                                                      # surrogate round-trips
+'{"v": "\ud800"}'                                            # as a raw str value
+>>> out.encode("utf-8")
+UnicodeEncodeError: 'utf-8' codec can't encode character '\ud800' in position 7: surrogates not allowed
+>>> UnicodeEncodeError.__mro__
+(<class 'UnicodeEncodeError'>, <class 'UnicodeError'>, <class 'ValueError'>, ...)
+```
+
+`UnicodeEncodeError` **is** a `ValueError` subclass, and (pre-fix) `.encode("utf-8")`
+ran *inside* the same `try` block as `json.dumps`. Confirmed the actual, shipped
+mislabeling live, through `JSONSerializer.dumps` itself:
+
+```
+>>> from kibana.serializer import JSONSerializer
+>>> JSONSerializer().dumps(d)
+SerializationError: Out of range float values are not JSON compliant   # WRONG -- it's a cycle
+>>> JSONSerializer().dumps({"v": "\ud800"})
+SerializationError: Out of range float values are not JSON compliant   # WRONG -- it's an encoding error
+```
+
+**Fix:** `.encode("utf-8")` moved *outside* the `try` (it now runs on the already-produced
+string, after `json.dumps` has already succeeded, so a `UnicodeEncodeError` from it
+was never inside the `except ValueError` handler's reach to begin with -- it
+propagates as the encoding error it actually is). Inside the `try`, a caught
+`ValueError` is only relabeled as `_NON_FINITE_FLOAT_MESSAGE` when its own message
+*is* that exact text (`str(e) == _NON_FINITE_FLOAT_MESSAGE`); any other `ValueError`
+(e.g. the circular-reference one) is wrapped honestly instead --
+`SerializationError(str(e)) from e` -- matching this file's existing error-wrapping
+convention elsewhere (`kibana/exceptions.py`'s `translate_transport_errors`: reuse
+`str(e)` as the new exception's message, chain via `from e`, never invent a different
+one).
+
+RED:
+
+```
+$ .venv/bin/pytest tests/unit/test_serializer.py -k "TestStdlibErrorHonesty" -v --no-cov
+...
+FAILED test_circular_dict_does_not_get_the_float_message
+  AssertionError: assert 'Out of range float values are not JSON compliant' != 'Out of range float values are not JSON compliant'
+FAILED test_lone_surrogate_does_not_get_the_float_message
+  AssertionError: assert 'Out of range float values are not JSON compliant' != 'Out of range float values are not JSON compliant'
+1 passed, 2 failed
+```
+
+(`test_normal_finite_nan_message_is_unaffected` already passed -- the real
+non-finite-float case's message pin, confirming the fix doesn't break the case it
+must keep working.)
+
+GREEN:
+
+```
+$ .venv/bin/pytest tests/unit/test_serializer.py -k "TestStdlibErrorHonesty" -v --no-cov
+3 passed in <1s
+```
+
+Post-fix, live:
+
+```
+>>> JSONSerializer().dumps(d)
+SerializationError: Circular reference detected     # accurate now
+>>> JSONSerializer().dumps({"v": "\ud800"})
+UnicodeEncodeError: 'utf-8' codec can't encode character '\ud800' in position 7: surrogates not allowed
+                                                     # propagates as-is -- accurate, not mislabeled
+```
+
+### [MAJOR] The guard walked into tuple subclasses, but orjson rejects any tuple subclass outright
+
+**Confirmed live** (this is the same probe already in this file's round-1 fix-round
+section, re-cited here because it's exactly what this MAJOR turns on):
+
+```
+>>> from collections import namedtuple
+>>> Point = namedtuple("Point", ["x", "y"])
+>>> import orjson
+>>> orjson.dumps({"p": Point(x=1.0, y=float("nan"))})
+TypeError: Type is not JSON serializable: Point
+```
+
+orjson rejects a `namedtuple` outright as an unsupported type -- regardless of
+whether any field is finite. Pre-fix, the guard's `isinstance(value, (list, tuple))`
+branch walked into the namedtuple's elements anyway (since `isinstance` doesn't
+distinguish `tuple` from a `tuple` subclass), found the NaN, and raised this guard's
+own `SerializationError` with the float message -- a **misleading** error: the real,
+correct failure for that body is orjson's own unsupported-type `TypeError`, not a
+float complaint. This also directly contradicted the function's own docstring, which
+already documented (correctly) that orjson rejects real float subclasses as
+unsupported and treats that as a *non*-silent-success case -- the tuple branch just
+hadn't been written to match that same reasoning.
+
+**Fix:** `type(value) is tuple` identity for the tuple branch (excludes any subclass,
+namedtuples included); `isinstance` stays for `dict`/`list` only, where orjson
+genuinely treats subclasses transparently (confirmed empirically in round 1's
+fix-round section: `OrderedDict` and a custom `dict`/`list` subclass all serialize
+the same as the plain type). Docstring corrected to state the tuple exception
+explicitly instead of grouping `dict`/`list`/`tuple` together as if all three were
+subclass-transparent.
+
+RED:
+
+```
+$ .venv/bin/pytest tests/unit/test_serializer.py -k "TestTupleSubclassNotWalked" -v --no-cov
+...
+FAILED test_namedtuple_with_nan_raises_orjsons_own_type_error_not_serialization_error
+  Failed: DID NOT RAISE TypeError  (raised SerializationError instead)
+1 passed, 1 failed
+```
+
+(`test_plain_tuple_with_nan_still_raises_serialization_error` already passed --
+confirming a plain, non-subclass `tuple` was never the problem.)
+
+GREEN:
+
+```
+$ .venv/bin/pytest tests/unit/test_serializer.py -k "TestTupleSubclassNotWalked" -v --no-cov
+2 passed in <1s
+```
+
+### Minors (same round)
+
+1. **Cycle regression tests, both backends** -- covered by the BLOCKER 1 RED/GREEN
+   above (`test_self_referential_dict_does_not_hang_stdlib` pins the stdlib side,
+   which was never broken but wasn't previously pinned as a regression test either).
+2. **Message-content assertions on at least one dataclass and one Enum case** --
+   `test_orjson_rejects_nan_inside_dataclass_field` and
+   `test_orjson_rejects_nan_inside_enum_value` (both from round 2) now additionally
+   assert `str(exc_info.value) == "Out of range float values are not JSON compliant"`,
+   not just the exception type.
+3. **DAG memoization documented in the docstring** -- covered by the BLOCKER 1 fix's
+   docstring addition (the visited-set's "Cycle- and DAG-safety" paragraph explicitly
+   calls out linear-vs-exponential for the DAG case, not just cycle termination).
+
+### Final overhead measurement (after the visited-set)
+
+The visited set adds a `set` membership check + `id()` call + `set.add` per
+container-typed node (not per scalar leaf) -- measured against the same shipped
+`OrjsonSerializer.dumps`, same representative ~9.2KB body, `timeit` N=20000, 3 trials:
+
+```
+trial 0: raw=6.26us guarded=22.87us stdlib=39.32us overhead=265.6% guarded_vs_stdlib=1.72x
+trial 1: raw=6.29us guarded=22.71us stdlib=39.49us overhead=261.0% guarded_vs_stdlib=1.74x
+trial 2: raw=6.31us guarded=22.73us stdlib=39.46us overhead=260.5% guarded_vs_stdlib=1.74x
+```
+
+**FINAL overhead: ~262% relative to raw `orjson.dumps`** (absolute added cost ~16.4us
+on the ~9.2KB representative body: 22.8us guarded vs. 6.3us raw). Up modestly from
+round 2's ~207%/~2.07x -- the correctness cost of cycle/DAG safety -- but still
+**~1.73x faster** than the stdlib fallback this project already ships when orjson
+isn't installed, so the "guarded orjson beats the no-orjson path" conclusion the
+original adjudication was made on continues to hold at this number too.
+
+### Full verification after round 3
+
+```
+$ .venv/bin/pytest tests/unit/test_serializer.py -q --no-cov
+69 passed in 0.72s
+
+$ make test
+...
+3382 passed
+Required test coverage of 90% reached. Total coverage: 94.30%
+
+$ .venv/bin/pytest tests/unit/test_sync_async_parity.py -q --no-cov
+144 passed in 0.68s
+
+$ make lint
+.venv/bin/mypy kibana/
+Success: no issues found in 103 source files
+
+$ make hooks
+... (all hooks) Passed
+```
+
+No live re-run: the round-3 fixes only change behavior for pathological inputs
+(self-referential bodies, lone surrogates, namedtuples) that don't occur in the
+existing live battle-test's normal request paths; normal-body cross-backend equality
+is still covered by the existing unit tests (`TestCrossBackendEqualityForNormalBodies`,
+unaffected and still passing).
+
 ## Scope & caveats
 
+- **Corrected (see round-3 MAJOR above):** `dict`/`list` subclasses are walked
+  transparently (matching orjson's own transparent handling of them), but **tuple
+  subclasses (e.g. `namedtuple`) are deliberately *not* walked** -- orjson rejects any
+  tuple subclass outright as an unsupported type, so a body containing one fails with
+  orjson's own `TypeError`, not this guard's `SerializationError`. The round-2 phrase
+  "this now explicitly includes `dict`/`list`/`tuple` (and subclasses)" was imprecise
+  on this point and is superseded by this bullet.
 - **Corrected (see MAJOR above):** no known observable NaN/Infinity/UUID
   serialization-semantics divergence remains between the two backends for **any type
   either backend will actually serialize** -- this now explicitly includes `dict`/
-  `list`/`tuple` (and subclasses), `dataclasses.dataclass` instances, and `enum.Enum`
-  members, not just plain JSON containers. This is *not* the same claim as "the two
-  backends serialize the same set of input types" -- see the next bullet.
+  `list` (and subclasses), plain `tuple` (exact type only), `dataclasses.dataclass`
+  instances, and `enum.Enum` members, not just plain JSON containers. This is *not*
+  the same claim as "the two backends serialize the same set of input types" -- see
+  the next bullet.
 - **Backends still differ on *which types they'll serialize at all*, and that is
   intentional and out of scope for #79:** stdlib's `JSONSerializer._default` has no
   case for dataclasses or `Enum` (or `set`, or a plain custom class) -- it raises

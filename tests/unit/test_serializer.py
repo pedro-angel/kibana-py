@@ -4,8 +4,9 @@ import dataclasses
 import enum
 import importlib.util
 import json
+import signal
 import uuid
-from collections import OrderedDict
+from collections import OrderedDict, namedtuple
 from datetime import UTC, datetime
 
 import pytest
@@ -584,8 +585,11 @@ class TestDataclassAndEnumNonFiniteFloatParity:
             pytest.skip("orjson not installed")
         from kibana.serializer import OrjsonSerializer
 
-        with pytest.raises(SerializationError):
+        with pytest.raises(SerializationError) as exc_info:
             OrjsonSerializer().dumps({"p": _PointForTests(x=1.0, y=float("nan"))})
+        # [round-3 minor] message-content pin, not just the exception type --
+        # a dataclass field is exactly the case the BLOCKER added coverage for.
+        assert str(exc_info.value) == "Out of range float values are not JSON compliant"
 
     def test_orjson_rejects_nan_inside_nested_dataclass_field(self):
         """NaN two dataclass levels deep, not just the outer one."""
@@ -620,8 +624,11 @@ class TestDataclassAndEnumNonFiniteFloatParity:
             pytest.skip("orjson not installed")
         from kibana.serializer import OrjsonSerializer
 
-        with pytest.raises(SerializationError):
+        with pytest.raises(SerializationError) as exc_info:
             OrjsonSerializer().dumps({"c": _ColorForTests.BAD})
+        # [round-3 minor] message-content pin, not just the exception type --
+        # an Enum value is exactly the case the BLOCKER added coverage for.
+        assert str(exc_info.value) == "Out of range float values are not JSON compliant"
 
     def test_orjson_accepts_enum_with_finite_value(self):
         """Guard against a too-broad fix rejecting ordinary Enum members."""
@@ -642,3 +649,202 @@ class TestDataclassAndEnumNonFiniteFloatParity:
     def test_stdlib_raises_typeerror_for_enum_regardless_of_value(self):
         with pytest.raises(TypeError):
             JSONSerializer().dumps({"c": _ColorForTests.OK})
+
+
+# --- #79 round 3 (code-quality review): cycles, error honesty, tuple subclasses ---
+#
+# [BLOCKER 1] ``_reject_non_finite_floats`` had no cycle tracking -- a
+# self-referential dict/list hung the thread forever (pre-fix, orjson's own
+# cycle detection -- ``TypeError: Recursion limit reached``, confirmed live
+# -- fired instantly; the guard now runs *first* and never returned to let
+# it). Fixed with a permanent (add, never remove) id()-based visited set for
+# containers -- see ``_reject_non_finite_floats``'s docstring for why this is
+# correct (not just an optimization) and why id() is safe to key on here.
+#
+# [BLOCKER 2] stdlib's blanket ``except ValueError`` mislabeled ANY
+# ``ValueError`` as the non-finite-float message -- including
+# ``ValueError: Circular reference detected`` (stdlib's own, pre-existing
+# cycle detection, confirmed live -- unrelated to floats) and
+# ``UnicodeEncodeError`` (a ``ValueError`` subclass) from the ``.encode
+# ("utf-8")`` that used to run *inside* the try (a lone surrogate character
+# becomes "out of range float"). Fixed: ``.encode`` moved outside the try;
+# inside, only a `ValueError` whose message actually matches the real
+# out-of-range-float text gets the float message -- anything else is
+# wrapped honestly with its own message, chained via ``from e``.
+#
+# [MAJOR] The guard walked into tuple *subclasses* via ``isinstance``, but
+# orjson rejects any tuple subclass outright (confirmed live:
+# ``TypeError: Type is not JSON serializable: Point`` for a namedtuple) --
+# so a namedtuple with a NaN field got a misleading "bad float" instead of
+# the correct unsupported-type error. Fixed: ``type(value) is tuple``
+# identity for the tuple branch (plain tuples still walked); ``isinstance``
+# stays for ``dict``/``list`` only, where orjson genuinely treats subclasses
+# transparently (confirmed live in round 1/round 2's fix-round section).
+
+
+def _run_with_alarm_timeout(seconds: int, fn, *args, **kwargs):
+    """Run ``fn(*args, **kwargs)``, but fail fast instead of hanging if it
+    doesn't return within *seconds*.
+
+    Used to prove a cycle guard actually terminates rather than looping
+    forever -- per the code-quality review's own instruction ("use a
+    timeout guard in the test"), not an actual multi-minute hang in the
+    suite. POSIX-only (``SIGALRM``); skips on a platform without it (this
+    project's CI matrix doesn't include Windows -- see .github/workflows).
+    """
+    if not hasattr(signal, "alarm"):
+        pytest.skip("signal.alarm not available on this platform")
+
+    class _HangTimeout(Exception):
+        pass
+
+    def _handler(signum, frame):
+        raise _HangTimeout(f"did not return within {seconds}s -- suspected hang")
+
+    old_handler = signal.signal(signal.SIGALRM, _handler)
+    signal.alarm(seconds)
+    try:
+        return fn(*args, **kwargs)
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, old_handler)
+
+
+class TestCycleSafety:
+    """[BLOCKER 1] A self-referential dict/list must not hang the guard."""
+
+    def test_self_referential_dict_does_not_hang_orjson(self):
+        if not _orjson_installed():
+            pytest.skip("orjson not installed")
+        from kibana.serializer import OrjsonSerializer
+
+        d: dict = {}
+        d["self"] = d
+
+        with pytest.raises(Exception) as exc_info:
+            _run_with_alarm_timeout(5, OrjsonSerializer().dumps, d)
+        # A prompt, real error -- never a hang, and never our own
+        # SerializationError misrepresenting an unrelated cycle as a bad float.
+        assert "suspected hang" not in str(exc_info.value)
+        assert not isinstance(exc_info.value, SerializationError)
+
+    def test_self_referential_list_does_not_hang_orjson(self):
+        if not _orjson_installed():
+            pytest.skip("orjson not installed")
+        from kibana.serializer import OrjsonSerializer
+
+        lst: list = []
+        lst.append(lst)
+
+        with pytest.raises(Exception) as exc_info:
+            _run_with_alarm_timeout(5, OrjsonSerializer().dumps, {"l": lst})
+        assert "suspected hang" not in str(exc_info.value)
+        assert not isinstance(exc_info.value, SerializationError)
+
+    def test_self_referential_dict_does_not_hang_stdlib(self):
+        """stdlib's own ``json.dumps`` already detects cycles
+        (``check_circular``, on by default) -- this was never actually
+        broken on the stdlib side, but pins it as a parity regression test
+        alongside the orjson fix, and exercises the BLOCKER 2 error-honesty
+        fix at the same time (see ``TestStdlibErrorHonesty`` below for the
+        message-content assertion)."""
+        d: dict = {}
+        d["self"] = d
+
+        with pytest.raises(Exception) as exc_info:
+            _run_with_alarm_timeout(5, JSONSerializer().dumps, d)
+        assert "suspected hang" not in str(exc_info.value)
+
+    def test_diamond_shaped_dag_is_not_exponential(self):
+        """Not a cycle -- the same sub-object reachable via multiple paths
+        (a DAG). The permanent visited-set makes this linear in the number
+        of distinct objects instead of exponential in the number of paths
+        to reach them. Empirically calibrated (see docs/evidence/serializer-parity-79.md):
+        24 levels of doubling fan-out times out (>5s) against a
+        push-without-memoization walk, and completes in a fraction of a
+        second with the visited set -- so this genuinely fails pre-fix
+        rather than merely asserting a shape that happens to stay cheap at
+        a smaller depth."""
+        if not _orjson_installed():
+            pytest.skip("orjson not installed")
+        from kibana.serializer import OrjsonSerializer
+
+        shared: dict = {"v": 1.0}
+        # 24 levels of doubling fan-out through the *same* shared object --
+        # 2**24 (~16.7M) paths to `shared` without memoization, 1 distinct
+        # object with it.
+        level = shared
+        for _ in range(24):
+            level = {"a": level, "b": level}
+
+        # Must complete quickly -- proves the memoization, not just correctness.
+        _run_with_alarm_timeout(5, OrjsonSerializer().dumps, level)
+
+
+class TestStdlibErrorHonesty:
+    """[BLOCKER 2] stdlib's ``except ValueError`` must not mislabel an
+    unrelated ``ValueError`` as the non-finite-float message.
+    """
+
+    def test_circular_dict_does_not_get_the_float_message(self):
+        d: dict = {}
+        d["self"] = d
+
+        with pytest.raises(SerializationError) as exc_info:
+            JSONSerializer().dumps(d)
+
+        assert str(exc_info.value) != "Out of range float values are not JSON compliant"
+        assert "circular" in str(exc_info.value).lower()
+
+    def test_lone_surrogate_does_not_get_the_float_message(self):
+        """A lone (unpaired) UTF-16 surrogate is a valid Python str code
+        point but cannot be UTF-8 encoded -- ``json.dumps`` itself succeeds
+        (the value passes straight through with ``ensure_ascii=False``);
+        ``.encode("utf-8")`` on the result is what fails
+        (``UnicodeEncodeError``, a ``ValueError`` subclass)."""
+        with pytest.raises(Exception) as exc_info:
+            JSONSerializer().dumps({"v": "\ud800"})
+
+        # Whatever surfaces, it must not be mislabeled as the float message.
+        assert str(exc_info.value) != "Out of range float values are not JSON compliant"
+        if isinstance(exc_info.value, SerializationError):
+            assert "Out of range float" not in str(exc_info.value)
+
+    def test_normal_finite_nan_message_is_unaffected(self):
+        """Regression pin: the real non-finite-float case must still get
+        its own message, unchanged, after narrowing the except-ValueError
+        branch to match on it specifically."""
+        with pytest.raises(SerializationError) as exc_info:
+            JSONSerializer().dumps({"v": float("nan")})
+        assert str(exc_info.value) == "Out of range float values are not JSON compliant"
+
+
+class TestTupleSubclassNotWalked:
+    """[MAJOR] The guard must not walk into tuple *subclasses*
+    (``namedtuple``) -- orjson rejects any tuple subclass outright as an
+    unsupported type, so walking into one and finding a NaN must not
+    produce a misleading "bad float" instead of the correct
+    unsupported-type error. Plain tuples (exact type) are still walked.
+    """
+
+    def test_namedtuple_with_nan_raises_orjsons_own_type_error_not_serialization_error(
+        self,
+    ):
+        if not _orjson_installed():
+            pytest.skip("orjson not installed")
+        from kibana.serializer import OrjsonSerializer
+
+        Point = namedtuple("Point", ["x", "y"])
+        with pytest.raises(TypeError) as exc_info:
+            OrjsonSerializer().dumps({"p": Point(x=1.0, y=float("nan"))})
+        assert not isinstance(exc_info.value, SerializationError)
+
+    def test_plain_tuple_with_nan_still_raises_serialization_error(self):
+        """Regression pin: plain tuples (not subclasses) must still be
+        walked and still reject a non-finite float."""
+        if not _orjson_installed():
+            pytest.skip("orjson not installed")
+        from kibana.serializer import OrjsonSerializer
+
+        with pytest.raises(SerializationError):
+            OrjsonSerializer().dumps({"t": (1.0, float("nan"))})
