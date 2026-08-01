@@ -66,6 +66,8 @@ This installs:
 - `opentelemetry-api` (>=1.20.0) - OpenTelemetry API
 - `opentelemetry-sdk` (>=1.20.0) - OpenTelemetry SDK
 - `opentelemetry-exporter-otlp-proto-grpc` (>=1.20.0) - OTLP gRPC exporter
+- `opentelemetry-exporter-otlp-proto-http` (>=1.20.0) - OTLP HTTP/protobuf exporter
+- `opentelemetry-instrumentation` (>=0.40b0) - Base instrumentation API used by `KibanaInstrumentor`
 
 Use this for production monitoring and distributed tracing. See the {doc}`user-guide/observability` guide for configuration details.
 

@@ -632,6 +632,27 @@ For detailed style guidelines, see:
 - [ ] Docstring coverage meets 90% threshold
 - [ ] CHANGELOG.md is updated with user-facing changes
 
+### Changelog Policy
+
+Not every merged PR needs a `CHANGELOG.md` entry. The line is what the change affects,
+not who authored it or how much work it was:
+
+- **Log it** — anything that changes behavior a caller of the package can observe
+  (a bug fix, a new/changed public API, a documented exception, a performance change),
+  *or* a dev-facing tool a contributor runs locally (a `make` target's behavior, a
+  script under `scripts/`, a DoD criterion). These get an entry even when the package
+  itself (`kibana/`) is untouched — e.g. the `make audit` self-heal fix
+  ([#80](https://github.com/pedro-angel/kibana-py/issues/80)) changed no shipped code
+  but changed what a contributor's local gate does.
+- **Don't log it** — plumbing that only CI touches and no contributor invokes directly:
+  a GitHub Actions workflow tweak, a pinned action SHA bump, a CI-only script with no
+  local entry point. These land as plain commits (e.g. the shared pip+setuptools
+  upgrade script wired into `test.yml` — no `CHANGELOG.md` entry, since it changed no
+  command a contributor runs).
+
+When a change is a mix (it changes both a shipped behavior and unrelated CI wiring in
+the same PR), log the shipped part and let the CI part pass silently within that entry.
+
 ## Release Process
 
 Releases are maintainer-managed and cut from protected `main` using tags in `vX.Y.Z` format.

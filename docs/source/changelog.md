@@ -8,6 +8,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 (unreleased)=
 ## Unreleased
 
+(v0.4.2)=
+## [0.4.2] - 2026-07-15
+
+### Fixed
+
+- The async `TimelineClient` now validates space existence like the sync client. Its 19 space-scoped operations built the space path but never called `_maybe_validate_space`, so an async caller targeting a nonexistent space silently proceeded instead of raising `SpaceNotFoundError`. Each operation now awaits the space-existence check before building the path, matching the sync twin and every other async namespace.
+
+See the [root CHANGELOG](https://github.com/pedro-angel/kibana-py/blob/main/CHANGELOG.md) for full detail.
+
+(v0.4.1)=
+## [0.4.1] - 2026-07-12
+
+### Fixed
+
+- Connection, timeout, TLS, and transport errors are now catchable through the public API. The client documented `except ConnectionError / ConnectionTimeout / SSLError / TransportError`, but `elastic_transport` raised its own same-named-but-distinct classes that slipped past those handlers. Transport-layer errors are now translated to the matching `kibana.exceptions` types, and `KibanaException` gained a uniform `.message` attribute across all exception types.
+- Space-existence checks no longer misfire or mis-cache. Detecting a missing space by string-matching error text under a broad `except Exception` mislabeled unrelated 400/403/500 errors as `SpaceNotFoundError` and negatively cached transient auth/network errors as "missing" for the whole cache TTL. They now catch the real `NotFoundError`; other errors propagate unchanged and are not cached.
+
+See the [root CHANGELOG](https://github.com/pedro-angel/kibana-py/blob/main/CHANGELOG.md) for full detail.
+
 (v0.4.0)=
 ## [0.4.0] - 2026-07-11
 
@@ -398,7 +417,9 @@ When version 1.0 is released, this section will contain upgrade instructions.
 - [PyPI Package](https://pypi.org/project/kibana-py/)
 - [Documentation](https://kibana-py.readthedocs.io/)
 
-[Unreleased]: https://github.com/pedro-angel/kibana-py/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/pedro-angel/kibana-py/compare/v0.4.2...HEAD
+[0.4.2]: https://github.com/pedro-angel/kibana-py/releases/tag/v0.4.2
+[0.4.1]: https://github.com/pedro-angel/kibana-py/releases/tag/v0.4.1
 [0.4.0]: https://github.com/pedro-angel/kibana-py/releases/tag/v0.4.0
 [0.3.1]: https://github.com/pedro-angel/kibana-py/releases/tag/v0.3.1
 [0.3.0]: https://github.com/pedro-angel/kibana-py/releases/tag/v0.3.0
