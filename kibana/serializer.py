@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import uuid
 from datetime import datetime
 from typing import Any
@@ -16,6 +17,43 @@ from kibana.exceptions import SerializationError
 # wording itself when ``allow_nan=False``; kept as one constant so a future
 # change to either backend can't let the two drift apart silently.
 _NON_FINITE_FLOAT_MESSAGE = "Out of range float values are not JSON compliant"
+
+
+def _reject_non_finite_floats(data: Any) -> None:
+    """Raise ``SerializationError`` if any float anywhere in *data* is
+    non-finite (NaN/Infinity/-Infinity).
+
+    Used by :class:`OrjsonSerializer` -- orjson has no native option to
+    reject these; it always silently serializes them as JSON ``null`` (see
+    #79 and docs/evidence/serializer-parity-79.md for the measured overhead
+    that led to shipping this walk rather than leaving the divergence).
+    Walks the structure with an explicit stack rather than recursion (cheaper
+    per docs/evidence/serializer-parity-79.md's measurements).
+
+    Container checks use ``isinstance`` rather than ``type(x) is dict``:
+    orjson natively serializes ``dict``/``list``/``tuple`` **subclasses**
+    too (confirmed empirically -- ``OrderedDict`` and a custom ``dict``/
+    ``list`` subclass all serialize the same as the plain type), so a
+    stricter identity check would silently skip recursing into one of those
+    and let a non-finite float hidden inside slip past this guard
+    undetected -- reintroducing the exact bug this guard exists to close,
+    just scoped to container subclasses. The float leaf check stays
+    ``type(value) is float`` (not ``isinstance``): the opposite risk doesn't
+    exist there, because orjson *rejects* real float subclasses outright as
+    an unsupported type (``TypeError``) -- skipping one here just means
+    that already-obscure case raises orjson's own exception instead of
+    this one, never a silent success.
+    """
+    stack: list[Any] = [data]
+    while stack:
+        value = stack.pop()
+        if type(value) is float:
+            if not math.isfinite(value):
+                raise SerializationError(_NON_FINITE_FLOAT_MESSAGE)
+        elif isinstance(value, dict):
+            stack.extend(value.values())
+        elif isinstance(value, (list, tuple)):
+            stack.extend(value)
 
 
 class Serializer:
@@ -151,22 +189,30 @@ try:
             string form) objects the same way :class:`JSONSerializer`'s
             ``_default`` hook now does -- see #79.
 
-            Known divergence from :class:`JSONSerializer` (tracked, not
-            fixed here): orjson has no option to reject non-finite floats --
-            it silently serializes NaN/Infinity/-Infinity as JSON ``null``
+            orjson has no option to reject non-finite floats -- it always
+            silently serializes NaN/Infinity/-Infinity as JSON ``null``
             (confirmed against the installed orjson 3.11.9; upstream feature
-            request ijl/orjson#170 is open, unresolved). A pre-serialization
-            Python-level walk that would catch this was prototyped and
-            measured at ~215-310% CPU overhead on a representative ~9KB
-            body (vs. stdlib's ``allow_nan=False``, which is ~free) --
-            over the accepted 10% budget, so it was not wired in here.
-            See docs/evidence/serializer-parity-79.md for the measurements
-            and options considered.
+            request ijl/orjson#170 is open, unresolved). ``_reject_non_finite_floats``
+            walks the body first and raises
+            :class:`~kibana.exceptions.SerializationError` -- the same
+            exception type and message :class:`JSONSerializer` raises via
+            ``allow_nan=False`` -- instead of letting orjson silently
+            substitute ``null``. This does cost real CPU (measured at ~4x
+            orjson's own raw serialization time on a representative ~9KB
+            body -- see docs/evidence/serializer-parity-79.md): accepted
+            as the right trade because (a) the absolute added cost is a few
+            microseconds, negligible against any real network round trip,
+            (b) orjson with this guard remains faster than the stdlib
+            fallback this project already ships automatically when orjson
+            isn't installed, and (c) silently discarding a caller's NaN/Inf
+            value is exactly the defect #79 exists to remove -- on the
+            backend most installs actually use.
             """
             if isinstance(data, bytes):
                 return data
             if isinstance(data, str):
                 return data.encode("utf-8")
+            _reject_non_finite_floats(data)
             return orjson.dumps(data)  # type: ignore[no-any-return]
 
         def loads(self, data: bytes) -> Any:

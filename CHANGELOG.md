@@ -12,25 +12,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   backends** ([#79](https://github.com/pedro-angel/kibana-py/issues/79)). `kibana/serializer.py`
   picks one of the two at import time depending on whether `orjson` is installed, and,
   pre-fix, they disagreed on two things: NaN/Infinity/-Infinity floats, and `uuid.UUID`
-  values. **NaN/Infinity (stdlib):** `JSONSerializer.dumps` now passes `allow_nan=False`,
-  so a non-finite float raises `kibana.exceptions.SerializationError` (the package's
-  existing serialization exception type) instead of silently emitting the invalid-JSON
-  tokens `NaN`/`Infinity`/`-Infinity` that a live Kibana rejects with an opaque 400 —
-  confirmed live before and after the fix, including the exact pre-fix 400 message.
-  **UUID (both backends):** `JSONSerializer._default` gained a `uuid.UUID` case
-  (serializing to the canonical string form, `str(obj)`), matching orjson's pre-existing
-  native handling — a UUID value anywhere in a body now serializes identically
-  regardless of which backend is active, pinned by a cross-backend equality test and
-  confirmed live (a real space create with a UUID-valued field, accepted by Kibana on
-  both backends, fetched back byte-identical). **Known, deliberately unfixed gap:**
-  orjson has no native option to reject non-finite floats — it always serializes them as
-  JSON `null` (confirmed against orjson 3.11.9; open upstream request `ijl/orjson#170`).
-  A correctness-preserving Python-level pre-serialization guard was prototyped in three
-  variants and measured at 215%-594% CPU overhead on a representative ~9KB body — over
-  the accepted 10% budget — so it was not wired into `OrjsonSerializer.dumps`; this
-  divergence remains, tracked via a `strict=True` `xfail` in the unit test matrix, a
-  docstring on `OrjsonSerializer.dumps`, and full measurements in
-  `docs/evidence/serializer-parity-79.md`.
+  values. **NaN/Infinity (both backends):** a non-finite float anywhere in a body now
+  raises the identical `kibana.exceptions.SerializationError` (the package's existing
+  serialization exception type), with the identical message, on both backends, instead
+  of stdlib's invalid-JSON tokens `NaN`/`Infinity`/`-Infinity` (a live Kibana 400s on
+  those) or orjson's silent `null` substitution (undetectable data loss). Stdlib:
+  `JSONSerializer.dumps` now passes `allow_nan=False`. orjson has no native option for
+  this (confirmed against orjson 3.11.9; open upstream request `ijl/orjson#170`), so a
+  new `_reject_non_finite_floats` walk runs before `orjson.dumps` and raises the same
+  exception; measured at ~300% CPU overhead / ~18µs absolute on a representative ~9KB
+  body — accepted because the absolute cost is noise against real request latency,
+  guarded orjson (~24.6µs) still beats the stdlib fallback this project already ships
+  when orjson isn't installed (~39.7µs), and silently losing a caller's NaN/Infinity
+  value on the majority backend is exactly the defect this issue exists to remove (full
+  measurements, the walk's container-subclass-safety design, and the decision record are
+  in `docs/evidence/serializer-parity-79.md`). **UUID (both backends):**
+  `JSONSerializer._default` gained a `uuid.UUID` case (serializing to the canonical
+  string form, `str(obj)`), matching orjson's pre-existing native handling — a UUID
+  value anywhere in a body now serializes identically regardless of which backend is
+  active, pinned by a cross-backend equality test and confirmed live (a real space
+  create with a UUID-valued field, accepted by Kibana on both backends, fetched back
+  byte-identical).
 - **Credentials nested inside a list-valued request-body field reached DEBUG
   logs in cleartext** ([#78](https://github.com/pedro-angel/kibana-py/issues/78)).
   `_redact_body_secrets` (`kibana/_sync/client/_base.py`, shared by the async

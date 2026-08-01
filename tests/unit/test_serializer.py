@@ -3,6 +3,7 @@
 import importlib.util
 import json
 import uuid
+from collections import OrderedDict
 from datetime import UTC, datetime
 
 import pytest
@@ -354,6 +355,13 @@ class TestDefaultSerializers:
 # above needs one for testing *selection* logic. This matrix tests *behavior*,
 # so it instantiates each serializer class directly -- the same seam
 # TestJSONSerializer/TestOrjsonSerializer already use.
+#
+# Both NaN/Infinity and UUID are now fixed identically on both backends (see
+# ``_reject_non_finite_floats`` and ``OrjsonSerializer.dumps`` in
+# kibana/serializer.py, and docs/evidence/serializer-parity-79.md for the
+# overhead measurements and the decision to ship the guard rather than leave
+# the divergence). No xfail/skip is needed for the non-finite-float cases
+# below any more -- both backends are asserted to raise identically.
 
 
 def _orjson_installed() -> bool:
@@ -369,44 +377,15 @@ def _make_serializer(backend: str):
     return OrjsonSerializer()
 
 
-# Known, tracked gap (see docs/evidence/serializer-parity-79.md and the
-# docstring on OrjsonSerializer.dumps): orjson has no native option to reject
-# non-finite floats. A correctness-preserving Python-level pre-serialization
-# guard was prototyped and measured at 215-310% CPU overhead on a
-# representative ~9KB body -- over the accepted 10% budget -- so it was not
-# wired in. These cases are marked ``xfail(strict=True)`` rather than passed
-# or silently skipped: this documents the gap in the test run itself, and
-# ``strict=True`` means the day orjson gains this natively (or a cheap enough
-# guard is found), the marker itself starts failing the suite, forcing
-# whoever lands that fix to remove it instead of leaving a stale marker.
-_ORJSON_NON_FINITE_XFAIL_REASON = (
-    "Tracked gap (#79): orjson has no native option to reject non-finite "
-    "floats; a Python-level guard measured 215-310% overhead on a "
-    "representative ~9KB body, over the accepted 10% budget. See "
-    "docs/evidence/serializer-parity-79.md."
-)
-
-
-def _backend_param(backend: str, *, non_finite: bool = False) -> "pytest.param":
+def _backend_param(backend: str) -> "pytest.param":
     if backend == "orjson" and not _orjson_installed():
         return pytest.param(
             backend, marks=pytest.mark.skip(reason="orjson not installed"), id=backend
         )
-    if backend == "orjson" and non_finite:
-        return pytest.param(
-            backend,
-            marks=pytest.mark.xfail(
-                reason=_ORJSON_NON_FINITE_XFAIL_REASON, strict=True
-            ),
-            id=backend,
-        )
     return pytest.param(backend, id=backend)
 
 
-NON_FINITE_BACKENDS = [
-    _backend_param("stdlib", non_finite=True),
-    _backend_param("orjson", non_finite=True),
-]
+NON_FINITE_BACKENDS = [_backend_param("stdlib"), _backend_param("orjson")]
 PARITY_BACKENDS = [_backend_param("stdlib"), _backend_param("orjson")]
 
 
@@ -414,8 +393,7 @@ class TestNonFiniteFloatParity:
     """#79 requirement 1: NaN/Infinity/-Infinity anywhere in a body raises a
     clear, catchable ``SerializationError`` -- not a silent ``null``
     (orjson, pre-fix) or an invalid-JSON token Kibana 400s on (stdlib,
-    pre-fix). See ``NON_FINITE_BACKENDS`` above for why the orjson cases are
-    ``xfail(strict=True)`` rather than green.
+    pre-fix) -- identically on both backends.
     """
 
     @pytest.mark.parametrize("backend", NON_FINITE_BACKENDS)
@@ -447,17 +425,47 @@ class TestNonFiniteFloatParity:
         with pytest.raises(SerializationError):
             serializer.dumps({"values": [1.0, 2.0, float("-inf")]})
 
-    def test_stdlib_error_message_shape(self):
-        """Pin the exact message stdlib raises so a refactor can't silently
-        change the wording without a test catching it."""
-        serializer = JSONSerializer()
+    @pytest.mark.parametrize("backend", NON_FINITE_BACKENDS)
+    def test_non_finite_float_inside_dict_subclass_still_raises(self, backend):
+        """Regression pin: a guard using ``type(x) is dict`` would silently
+        skip recursing into a dict *subclass* (confirmed empirically that
+        orjson itself serializes ``OrderedDict``/custom dict subclasses
+        natively, same as plain ``dict``) -- reintroducing the exact silent
+        data-loss bug this fix closes, just scoped to container subclasses.
+        """
+        serializer = _make_serializer(backend)
+        with pytest.raises(SerializationError):
+            serializer.dumps(OrderedDict({"a": 1, "b": float("nan")}))
+
+    def test_error_type_and_message_identical_across_backends(self):
+        """#79 requirement 3: the *same* exception type and *same* message
+        shape on both backends -- not just "both raise something"."""
+        if not _orjson_installed():
+            pytest.skip("orjson not installed")
+        from kibana.serializer import OrjsonSerializer
+
+        with pytest.raises(SerializationError) as stdlib_exc:
+            JSONSerializer().dumps({"v": float("nan")})
+        with pytest.raises(SerializationError) as orjson_exc:
+            OrjsonSerializer().dumps({"v": float("nan")})
+
+        assert type(stdlib_exc.value) is type(orjson_exc.value) is SerializationError
+        assert str(stdlib_exc.value) == str(orjson_exc.value)
+
+    @pytest.mark.parametrize("backend", NON_FINITE_BACKENDS)
+    def test_error_message_shape(self, backend):
+        """Pin the exact message both backends raise so a refactor can't
+        silently change the wording (or let the two drift apart) without a
+        test catching it."""
+        serializer = _make_serializer(backend)
         with pytest.raises(SerializationError) as exc_info:
             serializer.dumps({"v": float("nan")})
         assert str(exc_info.value) == "Out of range float values are not JSON compliant"
 
-    def test_stdlib_normal_floats_still_serialize(self):
+    @pytest.mark.parametrize("backend", NON_FINITE_BACKENDS)
+    def test_normal_floats_still_serialize(self, backend):
         """Guard against a too-broad fix rejecting ordinary finite floats."""
-        serializer = JSONSerializer()
+        serializer = _make_serializer(backend)
         result = serializer.dumps({"v": 3.14, "neg": -2.5, "zero": 0.0})
         assert json.loads(result) == {"v": 3.14, "neg": -2.5, "zero": 0.0}
 
