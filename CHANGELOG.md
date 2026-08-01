@@ -8,6 +8,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Request-body JSON semantics diverged between the stdlib and orjson serializer
+  backends** ([#79](https://github.com/pedro-angel/kibana-py/issues/79)). `kibana/serializer.py`
+  picks one of the two at import time depending on whether `orjson` is installed, and,
+  pre-fix, they disagreed on two things: NaN/Infinity/-Infinity floats, and `uuid.UUID`
+  values. **NaN/Infinity (both backends):** a non-finite float anywhere in a body now
+  raises the identical `kibana.exceptions.SerializationError` (the package's existing
+  serialization exception type), with the identical message, on both backends, instead
+  of stdlib's invalid-JSON tokens `NaN`/`Infinity`/`-Infinity` (a live Kibana 400s on
+  those) or orjson's silent `null` substitution (undetectable data loss). Stdlib:
+  `JSONSerializer.dumps` now passes `allow_nan=False`. orjson has no native option for
+  this (confirmed against orjson 3.11.9; open upstream request `ijl/orjson#170`), so a
+  new `_reject_non_finite_floats` walk runs before `orjson.dumps` and raises the same
+  exception — walking not just `dict`/`list` (including subclasses, which orjson
+  serializes transparently) but also plain `tuple` (exact type only — a `tuple`
+  *subclass* like `namedtuple` is deliberately left unwalked, since orjson rejects any
+  tuple subclass outright as an unsupported type; walking into one would have produced
+  a misleading "bad float" instead of that correct error), `dataclasses.dataclass`
+  instances, and `enum.Enum` members, both of which orjson serializes natively with
+  zero opt-in and would otherwise still silently null a non-finite value inside; stdlib
+  has no such native support for dataclasses/Enum and keeps raising its own `TypeError`
+  for them, which is unrelated, pre-existing, and out of scope. The walk uses a
+  permanent, `id()`-keyed visited set for every container it starts expanding — a
+  self-referential body used to hang the walk forever (orjson's own cycle detection
+  never got the chance to fire, since this walk runs first and previously had no cycle
+  protection of its own); the same visited set also makes a DAG (shared sub-object
+  reachable via multiple paths) linear instead of exponential. Stdlib's own
+  `except ValueError` used to mislabel any `ValueError` — including its own circular-
+  reference detection and a `UnicodeEncodeError` from encoding a lone surrogate
+  character — as the non-finite-float message; it now only does that for the actual
+  out-of-range-float error (matched by **prefix**, not exact equality — CPython 3.12+
+  appends the offending value's `repr` to this specific stdlib message, e.g.
+  `"...compliant: nan"`, which an exact-equality check missed; confirmed across
+  3.11/3.12/3.13/3.14 via `make test-python-matrix`) and wraps anything else honestly
+  with its own message. The message this project raises is always the canonical
+  constant regardless of which CPython version's wording triggered the match, so the
+  cross-backend message-identity guarantee holds across supported Python versions too.
+  Measured at ~262% CPU overhead / ~16.4µs absolute on a representative ~9KB body —
+  accepted because the absolute cost is noise against real request latency, guarded
+  orjson (~22.8µs) is ~1.7x faster than the stdlib fallback this project already ships
+  when orjson isn't installed (~39.5µs), and silently losing a caller's NaN/Infinity
+  value on the majority backend is exactly the defect this issue exists to remove (full
+  measurements, two unplanned regressions found and fixed along the way — a
+  dataclass/Enum performance regression and this round's cycle/error-honesty/tuple-
+  subclass fixes — a numpy probe, and the decision record are all in
+  `docs/evidence/serializer-parity-79.md`). **UUID (both backends):**
+  `JSONSerializer._default` gained a `uuid.UUID` case (serializing to the canonical
+  string form, `str(obj)`), matching orjson's pre-existing native handling — a UUID
+  value anywhere in a body now serializes identically regardless of which backend is
+  active, pinned by a cross-backend equality test and confirmed live (a real space
+  create with a UUID-valued field, accepted by Kibana on both backends, fetched back
+  byte-identical).
 - **Credentials nested inside a list-valued request-body field reached DEBUG
   logs in cleartext** ([#78](https://github.com/pedro-angel/kibana-py/issues/78)).
   `_redact_body_secrets` (`kibana/_sync/client/_base.py`, shared by the async
