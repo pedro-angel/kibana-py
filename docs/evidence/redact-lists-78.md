@@ -11,10 +11,10 @@ to both trees without a separate async edit (see "One implementation, not two" b
 ## Why
 
 `_redact_body_secrets` recursed into `dict` values but not into `list`/`tuple` values.
-A request body shaped like `{"connectors": [{"secrets": {"p": "hunter2"}}]}` — the
-exact reproduction in the issue — was logged at DEBUG level with the secret intact,
-because the loop's `elif isinstance(value, dict)` branch never fired for the list
-sitting between the outer dict and the inner one.
+A request body shaped like `{"connectors": [{"secrets": {"p": "<fake-secret [redacted
+in evidence]>"}}]}` — the exact reproduction shape in the issue — was logged at DEBUG
+level with the secret intact, because the loop's `elif isinstance(value, dict)` branch
+never fired for the list sitting between the outer dict and the inner one.
 
 ## Scope
 
@@ -109,11 +109,13 @@ FAILED test_async_base_client.py::TestAsyncLogging::test_debug_logging_redacts_s
 Sample failure (async integration test, showing the cleartext leak the fix removes):
 
 ```
-AssertionError: assert 'hunter2' not in "Making async POST request ... Request body:
-{'connectors': [{'name': 'my-webhook', 'secrets': {'password': 'hunter2'}}]} ..."
- +  where 'hunter2' is contained here:
+AssertionError: assert '<fake-secret [redacted in evidence]>' not in "Making async POST
+request ... Request body: {'connectors': [{'name': 'my-webhook', 'secrets':
+{'password': '<fake-secret [redacted in evidence]>'}}]} ..."
+ +  where '<fake-secret [redacted in evidence]>' is contained here:
    Making async POST request to /api/actions/connector with headers: {...} Request
-   body: {'connectors': [{'name': 'my-webhook', 'secrets': {'password': 'hunter2'}}]}
+   body: {'connectors': [{'name': 'my-webhook', 'secrets': {'password': '<fake-secret
+   [redacted in evidence]>'}}]}
    Async request completed successfully with status 200 Response body: {'result':
    'success'}
 ```
@@ -211,7 +213,10 @@ regardless of the server's response. This exercises: (a) real auth headers, (b) 
 socket connection to the live Kibana, (c) the real, unmodified `_redact_body_secrets`
 code path, and (d) an exact real semantic rejection rather than a fabricated one — the
 same "assert the server's exact rejection" allowance used when a happy path isn't
-reachable. The secret value used throughout is the fake marker `fake-secret-for-evidence`.
+reachable. The secret value used throughout was an obviously-fake marker string, shown
+in this file only as `<fake-secret [redacted in evidence]>` — never the literal
+string — per the requirement that evidence files never carry a secret-looking value in
+the clear, even a fake one.
 
 ### (a) Pre-fix baseline: the secret leaks in cleartext
 
@@ -230,7 +235,7 @@ from utils import create_test_kibana_client
 logging.basicConfig(level=logging.DEBUG)
 logging.getLogger('kibana').setLevel(logging.DEBUG)
 client = create_test_kibana_client()
-body = {'connectors': [{'secrets': {'p': 'fake-secret-for-evidence'}}]}
+body = {'connectors': [{'secrets': {'p': '<fake-secret [redacted in evidence]>'}}]}
 try:
     client.perform_request('POST', '/api/actions/connector', body=body)
 except Exception as e:
@@ -238,19 +243,21 @@ except Exception as e:
 "
 ```
 
-Captured DEBUG log (verbatim, secret redacted to the evidence-file marker per the
-brief — the live run itself used the literal `fake-secret-for-evidence` value, shown
-below exactly as captured):
+Captured DEBUG log (the fake secret value is replaced below with `<fake-secret
+[redacted in evidence]>` in place of the literal string the live run actually used —
+this evidence file never carries the secret-looking value in the clear, even though it
+was never a real credential):
 
 ```
 DEBUG:kibana:Making POST request to /api/actions/connector with headers: {'content-type': 'application/json', 'kbn-xsrf': 'true', 'authorization': 'Basic [REDACTED]'}
-DEBUG:kibana:Request body: {'connectors': [{'secrets': {'p': 'fake-secret-for-evidence'}}]}
+DEBUG:kibana:Request body: {'connectors': [{'secrets': {'p': '<fake-secret [redacted in evidence]>'}}]}
 DEBUG:kibana:Request failed with status 400: [request body.name]: expected value of type [string] but got [undefined]
 ```
 
-Assertions recorded: `secret_in_log: true` — **the fake secret marker
-`fake-secret-for-evidence` appears in cleartext in the DEBUG log**, confirming the leak
-live, against the real client, before the fix.
+Assertions recorded: `secret_in_log: true` — **the fake secret marker appeared in
+cleartext in the DEBUG log** (shown above with the placeholder substituted in), which
+is exactly the leak this fix closes, confirmed live against the real client before the
+fix.
 
 ### (b) Post-fix: the secret is redacted
 
@@ -263,7 +270,7 @@ from utils import create_test_kibana_client
 logging.basicConfig(level=logging.DEBUG)
 logging.getLogger('kibana').setLevel(logging.DEBUG)
 client = create_test_kibana_client()
-body = {'connectors': [{'secrets': {'p': 'fake-secret-for-evidence'}}]}
+body = {'connectors': [{'secrets': {'p': '<fake-secret [redacted in evidence]>'}}]}
 try:
     client.perform_request('POST', '/api/actions/connector', body=body)
 except Exception as e:
@@ -304,7 +311,7 @@ created = client.connectors.create(
     config={'apiProvider': 'OpenAI',
             'apiUrl': 'https://example.invalid/v1/chat/completions',
             'defaultModel': 'placeholder-model'},
-    secrets={'apiKey': 'fake-secret-for-evidence'},
+    secrets={'apiKey': '<fake-secret [redacted in evidence]>'},
 )
 connector_id = created.body['id']
 client.connectors.delete(id=connector_id)
