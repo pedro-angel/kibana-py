@@ -205,10 +205,33 @@ $ .venv/bin/pytest tests/unit/test_sync_async_parity.py -q --no-cov
 144 passed in 0.64s
 ```
 
-No allowlist entry needed. Unlike #78, this fix *does* touch a per-tree `Client` method
-body (`perform_request` in both `BaseClient` and `AsyncBaseClient`) rather than only a
-shared helper — but the edit is identical in both trees (same `elif` branch, same
-helper call), so the whole-tree name/signature/body diff guard has nothing to flag.
+**This green run does not, by itself, prove the two new `elif` branches mirror each
+other.** `("Kibana", "perform_request")` and `("BaseClient", "perform_request")` are
+pre-existing entries in `_BODY_DRIFT_ALLOWLIST` (`tests/unit/test_sync_async_parity.py:402-403`)
+— `perform_request` is documented there as *the* sync/async I/O boundary (sync
+transport call vs. `await`ed, plus two intentional string-literal differences), so
+`test_public_method_bodies_match` skips comparing this method's body in both trees
+entirely, before and after this change. The 144-passed run confirms names/signatures
+still match and every *other* method pair's body still matches; it says nothing about
+whether the new `elif isinstance(body, (list, tuple))` branch is identical in both
+trees.
+
+That mirror was instead verified by direct diff/inspection: both branches, read
+side by side, are byte-identical modulo surrounding line numbers —
+`kibana/_sync/client/_base.py:585-590` and `kibana/_async/client/_base.py:197-202`:
+
+```python
+            if isinstance(body, dict):
+                logger.debug("Request body: %s", _redact_body_secrets(body))
+            elif isinstance(body, (list, tuple)):
+                logger.debug("Request body: %s", _redact_body_secrets_sequence(body))
+            elif body is not None:
+                logger.debug("Request body: <%d raw bytes>", len(body))
+```
+
+No allowlist change was made or needed: the exemption already covered this method
+before this fix, and remains scoped to the same, pre-existing reason (the sync/await
+boundary), not to this new branch specifically.
 
 ## Full unit suite + lint + hooks (Makefile targets)
 
