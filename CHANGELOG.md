@@ -10,6 +10,47 @@ see [CONTRIBUTING.md § Changelog Policy](CONTRIBUTING.md#changelog-policy).
 ## [Unreleased]
 
 ### Fixed
+- **`release.yml` hardening: direct integration dependency, PyPI-before-GitHub-release
+  ordering, immutable pin comment**
+  ([#82](https://github.com/pedro-angel/kibana-py/issues/82), found by the 2026-07-31
+  adversarial deep review, release-hygiene lens). Logged under the
+  [changelog policy](CONTRIBUTING.md#changelog-policy)'s release-pipeline-behavior
+  carve-out: this changes release-pipeline **behavior** — job ordering and gating
+  semantics, specifically what a *failed* release leaves behind — not a routine
+  workflow tweak or pin bump, which is the carve-out's own dividing line. Three changes:
+  1. `publish-pypi` and `publish-github-release` both now list `integration` directly in
+     `needs:`, not only transitively through each other — a future edit to either job
+     can no longer silently drop the release gate.
+  2. **Publish order flipped: PyPI now publishes before the GitHub Release.**
+     `publish-pypi` needs `[build, integration]`; `publish-github-release` needs
+     `[build, integration, publish-pypi]`. Under the old order, a `publish-pypi` failure
+     left a public tag + GitHub Release with no installable package — not hypothetical:
+     CI runs for tags `v0.1.3` through `v0.1.8` (April 2026) each show
+     `publish-github-release` succeeding while `publish-pypi` failed in the same run;
+     those five releases were later deleted once `v0.1.9` shipped clean. PyPI-first makes
+     that failure mode structurally impossible (`publish-github-release` no longer runs
+     at all if `publish-pypi` fails); the inverse failure — PyPI succeeds, the GitHub
+     Release step then fails — is cheap to recover from by simply re-running
+     `publish-github-release`, since PyPI refuses a second upload of the same version but
+     the GitHub Release step is idempotent. Verified before reordering: neither job
+     consumes the other's outputs (both independently download the same `build`-uploaded
+     `dist` artifact), so no coupling blocked the swap.
+  3. The `pypa/gh-action-pypi-publish` pin's trailing comment was `# release/v1` — a
+     moving branch the repo's `check-pin-comments-match` control explicitly cannot verify
+     strictly (branch comments are noted, not failed). Resolved the pinned SHA
+     (`ba38be9e461d3875417946c167d0b5f3d385a247`) against the GitHub API directly (not
+     trusted from Dependabot metadata): it peels to tag `v1.14.1` exactly, so the comment
+     is now `# v1.14.1` and the hook verifies it strictly instead of skipping it.
+
+  `docs/source/development/release-process.md` and `PUBLISHING_GUIDE.md` (both mermaid
+  diagrams, both jobs tables, and the recovery-guidance prose) updated to the new graph in
+  the same commit. Gate: `actionlint` clean, `check-pin-comments-match` passes strictly
+  (no more skipped pin), full pre-commit suite clean, `needs:` edges verified by direct
+  YAML parse. Honest residual: the reordered pipeline cannot be fully battle-tested
+  without a real tag push — first live validation is the next release; the lint and
+  job-graph checks bound the risk in the meantime. Evidence:
+  `docs/evidence/release-hardening-82.md`.
+
 - **Docs: six drift items found by the 2026-07-31 release review**
   ([#81](https://github.com/pedro-angel/kibana-py/issues/81)). `docs/source/changelog.md`
   was missing the 0.4.1 and 0.4.2 entries entirely (it topped out at 0.4.0) — added,

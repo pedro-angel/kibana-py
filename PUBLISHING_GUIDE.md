@@ -135,11 +135,17 @@ Go to **Actions** → **Release** in the GitHub repository. The workflow will:
    - the tag matches `kibana/_version.py`
    - `CHANGELOG.md` has an entry for this version
 2. **Build** — runs `python -m build`, `twine check`, verifies wheel contents (`kibana/py.typed` present and no `tests/`, `docs/`, or `examples/` paths), and generates an SBOM
-3. **Integration gate** — provisions a live Elasticsearch + Kibana + APM stack and runs `pytest tests/integration/ -m "not flaky"`. It runs in parallel with **Build**, and **the GitHub Release and PyPI publish both require it to pass** — a failing integration test blocks the release.
-4. **GitHub Release** — creates a GitHub Release with auto-generated notes and attaches the wheel, sdist, and SBOM
-5. **Publish to PyPI** — uploads to PyPI via trusted publishing
+3. **Integration gate** — provisions a live Elasticsearch + Kibana + APM stack and runs `pytest tests/integration/ -m "not flaky"`. It runs in parallel with **Build**, and **both `publish-pypi` and `publish-github-release` list it directly in `needs:`** (not just transitively) — a failing integration test blocks the release.
+4. **Publish to PyPI** — uploads to PyPI via trusted publishing. Runs *before* the GitHub Release: `publish-pypi` needs `[build, integration]`.
+5. **GitHub Release** — creates a GitHub Release with auto-generated notes and attaches the wheel, sdist, and SBOM. Needs `[build, integration, publish-pypi]`, so it only runs once PyPI has already published successfully.
 
-If any step fails, the release is aborted (nothing is published). Fix the issue and re-tag.
+If any step fails, the release is aborted (nothing published by that step or after it).
+Fix the issue and re-tag. PyPI publishes first specifically so a `publish-pypi` failure
+can never leave a public tag + GitHub Release with no installable package — the state
+the 0.1.x line hit repeatedly in April 2026 (CI runs for tags `v0.1.3`–`v0.1.8` each show
+`publish-github-release` succeeding while `publish-pypi` failed in the same run; those
+releases were later deleted). The reverse failure (PyPI publishes, GitHub Release then
+fails) is cheap to recover from: re-run `publish-github-release` from the Actions tab.
 
 ### Step 9: Verify the release
 

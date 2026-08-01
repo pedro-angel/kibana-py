@@ -2,9 +2,9 @@
 
 kibana-py releases are **automated**. Pushing a version tag (`vX.Y.Z`) to GitHub runs
 the release workflow, which validates the tag, builds the distribution, runs the
-integration test suite against a live Elastic Stack as a release gate, creates the
-GitHub Release, and publishes to PyPI. You do **not** run `twine upload` or create the
-GitHub Release by hand — doing so collides with the workflow.
+integration test suite against a live Elastic Stack as a release gate, publishes to
+PyPI, and then creates the GitHub Release. You do **not** run `twine upload` or create
+the GitHub Release by hand — doing so collides with the workflow.
 
 The canonical definition of the pipeline is
 [`.github/workflows/release.yml`](https://github.com/pedro-angel/kibana-py/blob/main/.github/workflows/release.yml);
@@ -22,10 +22,11 @@ flowchart TD
     validate -- "any check fails" --> halt(["release stops — nothing published"])
     validate -- "all pass" --> build["<b>build</b><br/>python -m build → twine check<br/>wheel-content guard → SBOM<br/>upload dist artifact"]
     validate -- "all pass" --> integration["<b>integration</b><br/>provision ES+Kibana+APM<br/>pytest -m \"not flaky\" (release gate)"]
+    build --> pypi["<b>publish-pypi</b><br/>OIDC trusted publishing — no token"]
+    integration --> pypi
     build --> ghrel["<b>publish-github-release</b><br/>generated notes + dist/* attached"]
     integration --> ghrel
-    build --> pypi["<b>publish-pypi</b><br/>OIDC trusted publishing — no token"]
-    ghrel --> pypi
+    pypi --> ghrel
 ```
 
 Jobs, in order (source of truth: `release.yml`):
@@ -35,8 +36,24 @@ Jobs, in order (source of truth: `release.yml`):
 | `validate-release` | tag push | `contents: read` | Fails the release unless: the tagged commit is reachable from `origin/main`; the tag equals `v` + `__versionstr__` in `kibana/_version.py`; and `CHANGELOG.md` has a `## [X.Y.Z]` heading. |
 | `build` | `validate-release` | `contents: read` | Installs `.[build]`, runs `python -m build`, `twine check`, a wheel-content guard (must contain `kibana/py.typed`; must **not** contain `tests/`, `docs/`, `examples/`), generates a CycloneDX SBOM, and uploads the `dist` artifact. |
 | `integration` | `validate-release` | `contents: read` | Installs `.[dev,all,probe]`, provisions a live Elasticsearch + Kibana + APM stack (`scripts/ci-stack-up.sh`), and runs the integration suite (`make test-integration-ci`, i.e. `pytest -m "not flaky"`) as a **required release gate** — runs in parallel with `build`; a failing test here blocks publish. |
-| `publish-github-release` | `build` + `integration` | `contents: write` | Downloads `dist`, creates the GitHub Release for the tag with auto-generated notes and attaches every `dist/*` file (wheel, sdist, SBOM). |
-| `publish-pypi` | `build` + `publish-github-release` | `contents: read`, `id-token: write` | Downloads `dist`, removes `*.json` (the SBOM is not a PyPI artifact), and publishes the wheel + sdist to PyPI via **OIDC trusted publishing** — no API token. |
+| `publish-pypi` | `build` + `integration` (both explicit) | `contents: read`, `id-token: write` | Downloads `dist`, removes `*.json` (the SBOM is not a PyPI artifact), and publishes the wheel + sdist to PyPI via **OIDC trusted publishing** — no API token. Runs **before** the GitHub Release (see below). |
+| `publish-github-release` | `build` + `integration` + `publish-pypi` | `contents: write` | Downloads `dist`, creates the GitHub Release for the tag with auto-generated notes and attaches every `dist/*` file (wheel, sdist, SBOM). |
+
+**Why PyPI publishes first.** Earlier releases (the 0.1.x line, April 2026) hit this
+exact ordering hazard: CI runs for tags `v0.1.3` through `v0.1.8` each show
+`publish-github-release` succeeding — creating a public tag *and* a GitHub Release with
+attached artifacts — while `publish-pypi` failed in the same run, leaving a public
+release with no installable package on PyPI (those five releases were later deleted once
+`v0.1.9` shipped cleanly). Publishing PyPI first makes that failure mode structurally
+impossible: if `publish-pypi` fails, `publish-github-release` never runs (it now
+depends on `publish-pypi`), so the tag stands alone with no dangling public release. The
+inverse failure — PyPI publishes, the GitHub Release step then fails — is recoverable by
+simply re-running `publish-github-release` from the Actions tab (it is safe to re-run;
+see [If a job fails](#if-a-job-fails)), whereas a duplicate PyPI upload of the same
+version is refused by PyPI (no recovery path). Both `publish-pypi` and
+`publish-github-release` now also list `integration` directly in their `needs:`, not
+just transitively through each other, so an edit to either job in the future can't
+silently drop the release gate.
 
 ## One-time setup
 
@@ -200,15 +217,18 @@ gh run watch "$(gh run list --workflow release.yml --limit 1 --json databaseId -
 | `validate-release`: changelog grep fails | No `## [X.Y.Z]` heading | Add the changelog entry, re-tag. |
 | `build`: wheel-content guard fails | sdist/wheel packaging changed | Check `[tool.hatch.build.targets.*]` include/exclude in `pyproject.toml` (this project uses hatchling — there is no `MANIFEST.in`). |
 | `publish-pypi`: auth / "not a trusted publisher" | Trusted publisher not registered | Complete the [PyPI trusted publisher setup](#pypi-trusted-publishing-oidc). |
-
-**Recovering a failed run.** If a job fails *before* the PyPI upload, fix the cause and
-re-run the failed jobs from the **Actions** tab — or delete and re-push the tag
-(`git push --delete origin "v$VERSION"` then re-tag `main`), which re-runs the pipeline
-from `validate-release`. Re-running `publish-github-release` is safe: it updates the
-existing release for the tag rather than erroring. Re-running `publish-pypi` succeeds
-only if that version was never uploaded — PyPI refuses to replace an existing version, so
-if it already published you must bump to a new version.
 | `publish-pypi`: "File already exists" | This version was already uploaded (e.g. a manual `twine upload`) | You cannot re-publish a version. Bump to a new version; never manually upload a version you intend to release via the workflow. |
+
+**Recovering a failed run.** `publish-pypi` runs *before* `publish-github-release`, so a
+`publish-pypi` failure means nothing was published at all yet (no GitHub Release, no PyPI
+package) — just fix the cause and re-run the failed job from the **Actions** tab, or
+delete and re-push the tag (`git push --delete origin "v$VERSION"` then re-tag `main`),
+which re-runs the pipeline from `validate-release`. If `publish-pypi` succeeds and
+`publish-github-release` then fails, the package is already on PyPI but the tag has no
+GitHub Release yet — re-running `publish-github-release` from the **Actions** tab is safe
+(it updates the existing release for the tag rather than erroring). Re-running
+`publish-pypi` itself succeeds only if that version was never uploaded — PyPI refuses to
+replace an existing version, so if it already published you must bump to a new version.
 
 ## Optional: local dry-run to TestPyPI
 
