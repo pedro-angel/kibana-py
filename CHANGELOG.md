@@ -10,6 +10,41 @@ see [CONTRIBUTING.md § Changelog Policy](CONTRIBUTING.md#changelog-policy).
 ## [Unreleased]
 
 ### Fixed
+- **`tests/unit/test_observability.py::TestLogForwardingSetup::test_setup_log_forwarding_success`
+  no longer risks permanently corrupting every other test's logging under
+  `pytest-randomly`** ([#91](https://github.com/pedro-angel/kibana-py/issues/91),
+  tracked further by [#100](https://github.com/pedro-angel/kibana-py/issues/100)). Dev-facing
+  only — no shipped code changed. The test patched `logging.getLogger` as a
+  *decorator*, which `unittest.mock` starts before the test body runs and, for stacked
+  decorators, starts bottom-up (confirmed empirically, not assumed) — so it activated
+  before any of the test's six other `@patch("kibana.observability.*")` decorators
+  resolved their own targets. If this test happened to land first in the whole pytest
+  session (empirically ~1-3% of seeds — see the evidence doc for the derivation), one
+  of those six decorators' target resolution — not the test's own `from
+  kibana.observability import _setup_log_forwarding` line, confirmed by probing
+  `sys.modules` at body-entry: already imported by then — triggered the real,
+  one-time `import kibana.observability`, and with it every OTel/grpc submodule
+  `kibana/observability/_imports.py` conditionally pulls in binding its own
+  module-level `logger = logging.getLogger(__name__)`, while `logging.getLogger` was
+  mocked. Every one of those loggers rebound permanently to a `Mock` (including
+  kibana-py's own `kibana.observability` logger). Python never re-runs a cached
+  module's top-level code, so every later test in the same run that asserted on real
+  logging/caplog output from any of those loggers then failed — 20 unrelated-looking
+  failures across five other test classes, deterministically reproducible with
+  `--randomly-seed=33` (also `=66`/`=68`/`=105`) pre-fix, and the same mechanism behind
+  PR #90's disclosed one-off "20 failures that never recurred" anomaly. Fixed by
+  removing `logging.getLogger` from the decorator stack and scoping it to a `with`
+  block around just the call under test — so it is never mocked during any of the
+  seven import-triggering events, regardless of run order — matching the pattern
+  already used by the neighboring `test_cleanup_log_handlers` /
+  `test_cleanup_survives_a_logger_created_during_the_sweep` in the same file.
+  `TestImportGuardMatrix` itself (the class issue #91 originally named) did not
+  reproduce a failure in a 210-configuration hunt (seeds 1–150 on 3.11 + seeds 1–40 on
+  3.14 + 20 rounds of adversarial ordering, all green both before and after this fix)
+  — its subprocess-isolated design has no path back into this parent-process
+  mechanism; the platform-specific gRPC-fork-safety hypothesis for that class's
+  originally reported symptom is carried forward, untested on Linux, by #100. Evidence,
+  full hunt log, and the seed-loop verification: `docs/evidence/import-guard-flake-91.md`.
 - **`close()` on both clients now translates and re-raises transport-layer close
   failures instead of swallowing them** ([#84](https://github.com/pedro-angel/kibana-py/issues/84),
   found by the 2026-07-31 adversarial deep review, code-quality lens). **Behavior

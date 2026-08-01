@@ -2831,19 +2831,58 @@ class TestLogForwardingSetup:
     @patch("kibana.observability._create_otlp_log_exporter_with_error_handling")
     @patch("kibana.observability.BatchLogRecordProcessor")
     @patch("kibana.observability.OTelLogHandler")
-    @patch("logging.getLogger")
     def test_setup_log_forwarding_success(
         self,
-        mock_get_logger,
         mock_handler_class,
         mock_processor_class,
         mock_create_exporter,
         mock_set_provider,
         mock_provider_class,
     ):
-        """Test successful log forwarding setup."""
+        """Test successful log forwarding setup.
+
+        Regression test for issue #91 / the order-dependent flakiness behind
+        PR #90's disclosed 20-failure anomaly (`--randomly-seed=33`, and
+        equally `=66`/`=68`/`=105`, reproduce it deterministically pre-fix):
+        this used to patch ``logging.getLogger`` as a *decorator*, which
+        starts before this function's body runs (`unittest.mock` starts
+        stacked decorators bottom-up -- confirmed empirically, not assumed --
+        so the decorator closest to ``def`` activates first). If this test
+        happened to land first in the whole pytest session (empirically
+        ~1-3% of seeds -- see the evidence doc for the derivation and why an
+        autouse fixture makes only *this exact* test's position-1 scheduling
+        matter), its `@patch("logging.getLogger")` -- closest to ``def`` --
+        started before any of the six `@patch("kibana.observability.*")`
+        decorators above resolved their own targets. One of *those* six is
+        what actually triggers the real, one-time `import
+        kibana.observability` (confirmed via a traceback probe: `unittest.
+        mock`'s own target-resolution call chain, through
+        `kibana/__init__.py`, imports it) -- not the `from kibana.observability
+        import _setup_log_forwarding` line below, which by the time it runs
+        is always a cache hit (confirmed via a `sys.modules` probe at the
+        first line of this function body, both pre- and post-fix). Either
+        way, every OTel/grpc submodule `_imports.py` conditionally pulls in
+        binds its own module-level `logger = logging.getLogger(__name__)`
+        during that one-time import; if it happens while `logging.getLogger`
+        is mocked, every one of those loggers -- including kibana-py's own
+        `kibana.observability` logger -- binds permanently to the mock's
+        `Mock()` return value. Python never re-runs a cached module's
+        top-level code, so nothing later in the session can undo it,
+        cascading into exactly the 20 unrelated-looking failures PR #90 saw
+        once and this fix's evidence reproduces at will.
+
+        The fix removes `@patch("logging.getLogger")` from the decorator
+        stack entirely and scopes it to a `with` block around only the
+        `_setup_log_forwarding` call this test actually exercises -- so
+        `logging.getLogger` is never mocked during any of the seven events
+        above (the six decorators' target resolution, plus this function's
+        own import line), regardless of run order.
+        """
         from unittest.mock import Mock
 
+        # Import BEFORE mocking `logging.getLogger` below -- see the
+        # docstring above for why this ordering is load-bearing, not
+        # incidental.
         from kibana.observability import _setup_log_forwarding
 
         # Mock objects
@@ -2857,18 +2896,18 @@ class TestLogForwardingSetup:
         mock_handler_class.return_value = mock_handler
         mock_logger = Mock()
         mock_logger.level = logging.NOTSET
-        mock_get_logger.return_value = mock_logger
 
-        handlers = _setup_log_forwarding(
-            logs_enabled=True,
-            logs_level="WARNING",
-            logs_loggers=["kibana", "test"],
-            exporter="otlp",
-            endpoint="http://localhost:4317",
-            headers={"auth": "token"},
-            protocol="grpc",
-            resource=Mock(),
-        )
+        with patch("logging.getLogger", return_value=mock_logger) as mock_get_logger:
+            handlers = _setup_log_forwarding(
+                logs_enabled=True,
+                logs_level="WARNING",
+                logs_loggers=["kibana", "test"],
+                exporter="otlp",
+                endpoint="http://localhost:4317",
+                headers={"auth": "token"},
+                protocol="grpc",
+                resource=Mock(),
+            )
 
         # Verify setup calls
         mock_provider_class.assert_called_once()
