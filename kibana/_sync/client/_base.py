@@ -73,8 +73,17 @@ def _redact_sensitive_headers(headers: dict[str, str]) -> dict[str, str]:
 
 _SENSITIVE_BODY_KEYS = {"secrets", "secret", "password", "token", "api_key", "apikey"}
 
+# Shared by both recursion axes below (dict values and list/tuple elements).
+# Without a cap, a pathologically deep body raises RecursionError out of
+# perform_request the moment DEBUG logging is enabled -- a caller's oversized
+# or adversarial payload must not be able to abort the request just because
+# it was being logged. Past this many levels, recursion stops and the
+# placeholder below takes the nested value's place instead.
+_MAX_REDACTION_DEPTH = 20
+_REDACTION_DEPTH_LIMIT_PLACEHOLDER = "<redaction depth limit>"
 
-def _redact_body_secrets(body: dict[str, Any]) -> dict[str, Any]:
+
+def _redact_body_secrets(body: dict[str, Any], _depth: int = 0) -> dict[str, Any]:
     """
     Redact sensitive fields from a request body for safe logging.
 
@@ -84,26 +93,29 @@ def _redact_body_secrets(body: dict[str, Any]) -> dict[str, Any]:
     produces a deep copy with those fields replaced by ``[REDACTED]``, never
     mutating the caller's original body.
 
+    Fidelity policy (shared with :func:`_redact_body_secrets_sequence`): the
+    redacted copy exists only for safe logging, never to round-trip the
+    caller's exact type back to them, so a nested dict -- ``OrderedDict`` or
+    any other mapping subclass included -- always redacts to a plain
+    ``dict``, regardless of the original's type. See that function's
+    docstring for why the list/tuple axis makes the equivalent choice.
+
     :param body: Original request body dictionary
+    :param _depth: Internal recursion-depth counter (do not pass explicitly);
+        see ``_MAX_REDACTION_DEPTH``.
     :return: Copy of the body with sensitive values redacted
     """
     redacted: dict[str, Any] = {}
     for key, value in body.items():
         if key.lower() in _SENSITIVE_BODY_KEYS:
             redacted[key] = "[REDACTED]"
-        elif isinstance(value, dict):
-            # One level of nesting (e.g. {"config": {"password": "x"}})
-            redacted[key] = _redact_body_secrets(value)
-        elif isinstance(value, (list, tuple)):
-            # Nesting through a list/tuple (e.g. {"connectors": [{"secrets": {...}}]})
-            redacted[key] = _redact_body_secrets_sequence(value)
         else:
-            redacted[key] = value
+            redacted[key] = _redact_nested_body_value(value, _depth)
     return redacted
 
 
 def _redact_body_secrets_sequence(
-    values: list[Any] | tuple[Any, ...],
+    values: list[Any] | tuple[Any, ...], _depth: int = 0
 ) -> list[Any] | tuple[Any, ...]:
     """
     Redact sensitive fields from the elements of a list or tuple.
@@ -111,21 +123,58 @@ def _redact_body_secrets_sequence(
     List/tuple elements have no key of their own to check against
     ``_SENSITIVE_BODY_KEYS``, so only container elements recurse (dicts via
     :func:`_redact_body_secrets`, nested lists/tuples via this function);
-    scalar elements pass through unchanged. The result keeps the same
-    container type as ``values``.
+    scalar elements pass through unchanged.
+
+    Fidelity policy (shared with :func:`_redact_body_secrets`): the redacted
+    copy exists only for safe logging, so it always normalizes to a **plain**
+    ``list`` or ``tuple`` -- never the caller's exact subclass. A namedtuple
+    or other tuple subclass is deliberately not reconstructed: calling
+    ``type(values)(redacted_elements)`` positionally crashes for any
+    namedtuple with more than one field (``TypeError: missing N required
+    positional arguments``) and silently corrupts a single-field one (the
+    whole element list is accepted as that one field's value, wrapping a
+    scalar in a list). Preserving the exact container type is out of scope
+    for a log-only copy; only ``list`` vs. ``tuple`` (never mutated in
+    place either way) is kept.
 
     :param values: Original list or tuple of body values
-    :return: Copy of ``values`` with any nested sensitive values redacted
+    :param _depth: Internal recursion-depth counter (do not pass explicitly);
+        see ``_MAX_REDACTION_DEPTH``.
+    :return: Plain ``list``/``tuple`` copy of ``values`` with any nested
+        sensitive values redacted
     """
-    redacted_elements = [
-        (
-            _redact_body_secrets(v)
-            if isinstance(v, dict)
-            else _redact_body_secrets_sequence(v) if isinstance(v, (list, tuple)) else v
-        )
-        for v in values
-    ]
-    return type(values)(redacted_elements)
+    redacted_elements = [_redact_nested_body_value(v, _depth) for v in values]
+    return tuple(redacted_elements) if isinstance(values, tuple) else redacted_elements
+
+
+def _redact_nested_body_value(value: Any, depth: int) -> Any:
+    """
+    Redact a value nested one level inside a dict or list/tuple.
+
+    Dispatches to :func:`_redact_body_secrets` for a dict, to
+    :func:`_redact_body_secrets_sequence` for a list/tuple, and passes any
+    scalar through unchanged -- scalars never recurse, so the depth cap does
+    not apply to them. Enforces ``_MAX_REDACTION_DEPTH`` for both container
+    branches: once ``depth`` reaches the cap, the container is replaced with
+    ``_REDACTION_DEPTH_LIMIT_PLACEHOLDER`` instead of being recursed into
+    further, so a pathologically deep body fails closed (a placeholder in
+    the log) rather than raising ``RecursionError``.
+
+    :param value: A single dict value or list/tuple element to redact
+    :param depth: Current recursion depth (the depth of ``value`` itself,
+        i.e. how many dict/list/tuple levels were already unwrapped to
+        reach it)
+    :return: The redacted value, unchanged for a scalar
+    """
+    if isinstance(value, dict):
+        if depth >= _MAX_REDACTION_DEPTH:
+            return _REDACTION_DEPTH_LIMIT_PLACEHOLDER
+        return _redact_body_secrets(value, depth + 1)
+    if isinstance(value, (list, tuple)):
+        if depth >= _MAX_REDACTION_DEPTH:
+            return _REDACTION_DEPTH_LIMIT_PLACEHOLDER
+        return _redact_body_secrets_sequence(value, depth + 1)
+    return value
 
 
 def encode_query_params(params: Mapping[str, Any]) -> str:

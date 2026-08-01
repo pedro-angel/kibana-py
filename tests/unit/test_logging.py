@@ -1,6 +1,7 @@
 """Unit tests for logging functionality."""
 
 import logging
+from collections import OrderedDict, namedtuple
 from unittest.mock import MagicMock
 
 import pytest
@@ -143,6 +144,7 @@ class TestBodySecretRedaction:
             ]
         }
         redacted = _redact_body_secrets(body)
+        assert isinstance(redacted["outer"][0], tuple)  # mid-structure tuple preserved
         inner = redacted["outer"][0][0]["inner"][0]
         assert inner["api_key"] == "[REDACTED]"
         assert inner["keep"] == "me"
@@ -182,6 +184,94 @@ class TestBodySecretRedaction:
         redacted = _redact_body_secrets(body)
         assert redacted is not body
         assert redacted["connectors"] is not body["connectors"]
+
+    def test_multi_field_namedtuple_is_redacted_without_raising(self):
+        """A multi-field namedtuple element must not crash the redacted copy.
+
+        Regression (code-quality review, fix round): constructing the
+        original namedtuple type from a single positional list argument
+        (``type(values)(redacted_elements)``) raised ``TypeError: missing 1
+        required positional argument`` for any namedtuple with more than one
+        field, propagating out of ``perform_request`` and aborting the
+        request just because DEBUG logging was enabled. The redacted copy
+        exists only for logging, never to round-trip the caller's exact
+        type, so tuple-ish values (including namedtuples) now always
+        normalize to a plain ``tuple``.
+        """
+        Point = namedtuple("Point", ["x", "y"])
+        body = {
+            "connectors": Point(x={"secrets": {"password": "hunter2"}}, y="keep-me")
+        }
+        redacted = _redact_body_secrets(body)  # must not raise
+        assert redacted["connectors"] == ({"secrets": "[REDACTED]"}, "keep-me")
+        assert type(redacted["connectors"]) is tuple
+
+    def test_single_field_namedtuple_does_not_wrap_scalar_in_list(self):
+        """A single-field namedtuple element must not silently corrupt its value.
+
+        Regression: ``type(values)(redacted_elements)`` for a single-field
+        namedtuple accepted the whole ``redacted_elements`` list as that
+        one field's value, silently wrapping a scalar in a list
+        (``Single(["keep-me"])`` instead of the real value ``"keep-me"``).
+        """
+        Single = namedtuple("Single", ["value"])
+        body = {"data": Single(value="keep-me")}
+        redacted = _redact_body_secrets(body)
+        assert redacted["data"] == ("keep-me",)
+        assert redacted["data"][0] == "keep-me"  # not ["keep-me"]
+
+    def test_ordereddict_value_normalizes_to_plain_dict(self):
+        """A dict-valued field that happens to be an ``OrderedDict`` still
+        redacts to a plain ``dict`` -- pinning the dict branch's existing,
+        unchanged policy alongside the new list/tuple plain-container
+        policy (both branches share one fidelity rule: plain containers
+        only, never the caller's exact subclass)."""
+        body = {"config": OrderedDict([("password", "hunter2"), ("keep", "me")])}
+        redacted = _redact_body_secrets(body)
+        assert redacted["config"] == {"password": "[REDACTED]", "keep": "me"}
+        assert type(redacted["config"]) is dict
+
+    def test_dict_deeper_than_cap_uses_placeholder_instead_of_raising(self):
+        """A pathologically deep dict body must fail closed, not raise
+        ``RecursionError``, when DEBUG logging is on.
+
+        Regression: neither the dict nor the list/tuple recursion axis had a
+        depth bound, so a ~1000-deep body raised ``RecursionError`` out of
+        ``perform_request`` whenever DEBUG logging was enabled.
+        """
+        body: dict = {"leaf": "value"}
+        for _ in range(1000):
+            body = {"nested": body}
+
+        redacted = _redact_body_secrets(body)  # must not raise RecursionError
+
+        node = redacted
+        for _ in range(1005):
+            if node == "<redaction depth limit>":
+                break
+            node = node["nested"]
+        else:
+            pytest.fail("depth-limit placeholder was never reached")
+        assert node == "<redaction depth limit>"
+
+    def test_list_deeper_than_cap_uses_placeholder_instead_of_raising(self):
+        """A pathologically deep list body must fail closed too (same cap,
+        same shared constant, other recursion axis)."""
+        items: list = ["leaf"]
+        for _ in range(1000):
+            items = [items]
+        body = {"items": items}
+
+        redacted = _redact_body_secrets(body)  # must not raise RecursionError
+
+        node = redacted["items"]
+        for _ in range(1005):
+            if node == "<redaction depth limit>":
+                break
+            node = node[0]
+        else:
+            pytest.fail("depth-limit placeholder was never reached")
+        assert node == "<redaction depth limit>"
 
 
 class TestRequestResponseLogging:

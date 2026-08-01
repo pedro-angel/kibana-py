@@ -20,9 +20,13 @@ never fired for the list sitting between the outer dict and the inner one.
 
 Only the traversal: recurse into list/tuple elements (dicts and nested lists/tuples
 recurse further; scalars pass through unchanged), preserving non-mutating semantics
-(a full copy, never touching the caller's original body) and the existing container
-type (list stays list, tuple stays tuple). The redacted-key set
-(`_SENSITIVE_BODY_KEYS`) and the existing dict-recursion logic are unchanged.
+(a full copy, never touching the caller's original body). **Superseded by the fix
+round below:** the redacted copy normalizes list/tuple-shaped values to a **plain**
+`list`/`tuple` — not the caller's exact subclass — and both recursion axes (dict and
+list/tuple) are capped at a shared max depth. See "Fix round — code-quality review
+response" for why and the RED/GREEN evidence. The redacted-key set
+(`_SENSITIVE_BODY_KEYS`) and the existing dict-recursion logic (which key) are
+unchanged throughout.
 
 ## One implementation, not two
 
@@ -50,10 +54,14 @@ elif isinstance(value, (list, tuple)):
 
 `_redact_body_secrets_sequence(values)` recurses into each element: a `dict` element
 goes through `_redact_body_secrets` (dict-recursion, unchanged); a `list`/`tuple`
-element recurses into itself; anything else (a scalar) passes through unchanged. The
-result is built as a new list, then cast to `type(values)(...)` so a tuple input
-returns a tuple and a list input returns a list — no mutation of the input container or
-any of its nested dicts/lists at any depth.
+element recurses into itself; anything else (a scalar) passes through unchanged — no
+mutation of the input container or any of its nested dicts/lists at any depth.
+
+**Original round-1 result cast the container back with `type(values)(...)`** so a tuple
+input returned a tuple and a list input returned a list; a code-quality review caught
+that this crashes (multi-field namedtuple) or silently corrupts (single-field
+namedtuple) any tuple *subclass* — see "Fix round" below for the corrected, permanent
+policy (plain `list`/`tuple` only, never the caller's exact subclass).
 
 ## Run (properties, not runner)
 
@@ -338,11 +346,257 @@ delete raised `NotFoundError` (404), confirming zero residue left on the stack.
   objects, not bytes — instead of calling `_redact_body_secrets` at all) is a related but
   distinct defect from #78 and is out of scope for this surgical fix; noted here for a
   future issue rather than folded into this diff.
-- Container-type preservation (list stays list, tuple stays tuple) is a deliberate,
-  low-cost choice beyond the letter of the issue, to avoid a redacted log copy silently
-  reporting a different Python type than what was actually sent — pinned by
-  `test_tuple_elements_are_redacted`.
+- List-vs-tuple distinction (a tuple input redacts to a plain `tuple`, a list input to a
+  plain `list`) is kept — pinned by `test_tuple_elements_are_redacted` — but **exact
+  subclass preservation is deliberately not attempted** as of the fix round below: see
+  that section for why (`type(values)(...)` crashes on multi-field namedtuples and
+  silently corrupts single-field ones).
 - Point-in-time result: Kibana's connector-creation schema (strict, rejects unknown
   top-level keys) is current as of 2026-08-01; a future Kibana release could change what
   the malformed reproduction body returns, though the DEBUG-log assertion itself does not
   depend on the exact rejection reason.
+
+## Fix round — code-quality review response
+
+A code-quality review of the round-1 fix (commit `98ae2f8`) found 1 BLOCKER + 1 MAJOR +
+4 minors, all addressed in the fix-round commit that follows this one on the same
+branch (see `git log`).
+
+### [BLOCKER] `type(values)(redacted_elements)` crashes multi-field namedtuples, silently corrupts single-field ones
+
+`_redact_body_secrets_sequence` rebuilt the redacted copy by casting back to the
+input's exact type: `type(values)(redacted_elements)`. For a plain `list`/`tuple` this
+works (`list(...)`/`tuple(...)` both accept a single iterable argument), but a
+namedtuple's `__new__` takes one positional argument **per field**, not one iterable —
+so:
+
+- A **multi-field** namedtuple element (e.g. `Point(x=..., y=...)`) raised
+  `TypeError: Point.__new__() missing 1 required positional argument: 'y'` — the whole
+  list of redacted elements was passed as if it were the first field only, and every
+  other field's argument was missing. This propagated all the way out of
+  `perform_request`, aborting a real request for no reason other than DEBUG logging
+  being enabled.
+- A **single-field** namedtuple element (e.g. `Single(value=...)`) did not raise, but
+  silently corrupted the value: the entire one-element list was accepted as that one
+  field's value, so `Single(value="keep-me")` became `Single(value=["keep-me"])` — a
+  scalar silently wrapped in a list, with no exception to signal it.
+
+**Decided fidelity policy (binding, not reopened):** the redacted copy exists only for
+safe logging, never to round-trip the caller's exact type back to them. Both
+recursion branches now always rebuild a **plain** container:
+
+- The dict branch already did this — `redacted: dict[str, Any] = {}` builds a fresh
+  plain `dict` regardless of whether the input was a `dict`, an `OrderedDict`, or any
+  other mapping subclass. Unchanged; pinned as a regression test below.
+- The list/tuple branch now matches: `type(values)(...)` is gone. A tuple-ish input
+  (including any tuple subclass, namedtuples included) normalizes to a plain `tuple`;
+  a list input normalizes to a plain `list`.
+
+```python
+redacted_elements = [_redact_nested_body_value(v, _depth) for v in values]
+return tuple(redacted_elements) if isinstance(values, tuple) else redacted_elements
+```
+
+A short comment stating this one fidelity policy now lives in both `_redact_body_secrets`'s
+and `_redact_body_secrets_sequence`'s docstrings (cross-referencing each other), so a
+future reader touching either branch sees the shared rule and the crash/corruption
+history that motivated it.
+
+RED (new namedtuple tests, run against the round-1 code as committed at `98ae2f8`, with
+only the fix-round tests added):
+
+```
+$ .venv/bin/pytest tests/unit/test_logging.py::TestBodySecretRedaction -k "namedtuple" -v --no-cov
+...
+FAILED test_multi_field_namedtuple_is_redacted_without_raising
+  TypeError: Point.__new__() missing 1 required positional argument: 'y'
+FAILED test_single_field_namedtuple_does_not_wrap_scalar_in_list
+  AssertionError: assert Single(value=['keep-me']) == ('keep-me',)
+    At index 0 diff: ['keep-me'] != 'keep-me'
+2 failed, 12 deselected in 0.08s
+```
+
+GREEN (after the fix):
+
+```
+$ .venv/bin/pytest tests/unit/test_logging.py::TestBodySecretRedaction -k "namedtuple or ordereddict" -v --no-cov
+...
+3 passed, 11 deselected in 0.06s
+```
+
+(`test_ordereddict_value_normalizes_to_plain_dict`, the regression pin for the
+already-correct dict-branch policy, passed both before and after — it isn't new
+behavior, it documents the existing one the sequence branch now matches.)
+
+### [MAJOR] No recursion-depth bound on either axis — `RecursionError` out of `perform_request`
+
+Neither `_redact_body_secrets` (dict values) nor `_redact_body_secrets_sequence`
+(list/tuple elements) had a depth bound. A ~1000-level-deep request body — plausible
+from a deeply nested config blob, not necessarily adversarial — raised
+`RecursionError: maximum recursion depth exceeded` out of `perform_request` the moment
+DEBUG logging was enabled, aborting the request. This is the same class of defect as
+the BLOCKER above (a caller's DEBUG flag causing a real request to fail) but on the
+*depth* axis instead of the *type* axis, and it predates this issue entirely — both the
+pre-existing dict-only recursion and the new list/tuple recursion added in round 1
+shared the same missing bound.
+
+**Fix:** one shared constant, `_MAX_REDACTION_DEPTH = 20`, and a new
+`_redact_nested_body_value(value, depth)` helper used by both `_redact_body_secrets`'s
+loop and `_redact_body_secrets_sequence`'s comprehension — the single place that
+decides, per nested value, whether to recurse (dict → `_redact_body_secrets`,
+list/tuple → `_redact_body_secrets_sequence`, either capped) or pass a scalar through
+unchanged. Past the cap, a container value is replaced with
+`_REDACTION_DEPTH_LIMIT_PLACEHOLDER = "<redaction depth limit>"` instead of being
+recursed into further — failing closed (a placeholder in the log) rather than raising.
+Extracting one shared helper also means the depth check exists in exactly one place
+for both axes, rather than being duplicated (and potentially drifting) across two
+loops.
+
+RED (new depth-cap tests, run against the round-1 code):
+
+```
+$ .venv/bin/pytest tests/unit/test_logging.py::TestBodySecretRedaction -k "deeper_than_cap" -v --no-cov
+...
+FAILED test_list_deeper_than_cap_uses_placeholder_instead_of_raising
+  RecursionError: maximum recursion depth exceeded while calling a Python object
+FAILED test_dict_deeper_than_cap_uses_placeholder_instead_of_raising
+  RecursionError: maximum recursion depth exceeded while calling a Python object
+2 failed, 12 deselected in 0.11s
+
+$ .venv/bin/pytest tests/unit/test_base_client.py::TestLogging -k "pathologically_deep" -v --no-cov
+...
+FAILED test_debug_logging_pathologically_deep_list_body_does_not_raise
+  RecursionError: maximum recursion depth exceeded while calling a Python object
+FAILED test_debug_logging_pathologically_deep_dict_body_does_not_raise
+  RecursionError: maximum recursion depth exceeded while calling a Python object
+    (raised from inside perform_request's own DEBUG-logging block --
+    kibana/_sync/client/_base.py:538, logger.debug("Request body: %s", _redact_body_secrets(body)) --
+    confirming the crash happens on the real request path, not just the pure helper)
+2 failed, 3 deselected in 0.12s
+```
+
+GREEN (after the fix):
+
+```
+$ .venv/bin/pytest tests/unit/test_logging.py::TestBodySecretRedaction -k "deeper_than_cap" -v --no-cov
+2 passed, 12 deselected in 0.06s
+
+$ .venv/bin/pytest tests/unit/test_base_client.py::TestLogging -k "pathologically_deep" -v --no-cov
+2 passed, 3 deselected in 0.06s
+```
+
+The `perform_request`-level tests use a mock transport (per the review's own allowance
+— "unit-level with a mock transport is fine") and additionally assert
+`mock_transport.perform_request.assert_called_once()`: proof that the request actually
+reached the transport instead of aborting during the DEBUG-logging block, which is the
+concrete symptom this fixes.
+
+### Minors (same round)
+
+1. **Evidence doc's type-preservation claim requalified.** The "Scope", "Fix summary",
+   and "Scope & caveats" sections above were updated in place (not left stale) to state
+   the plain-container policy and point here, instead of the round-1 "list stays list,
+   tuple stays tuple" phrasing that implied full subclass fidelity.
+2. **Mixed-nesting test now asserts the mid-structure tuple stays a tuple.**
+   `test_deeply_nested_mixed_containers` gained
+   `assert isinstance(redacted["outer"][0], tuple)` — previously it only asserted the
+   redacted value was reachable at the right path, not that the container type at that
+   level was preserved.
+3. **Test-gap minor closed by the BLOCKER's own regression tests** — the namedtuple and
+   `OrderedDict` cases above are exactly the missing coverage.
+4. **Asymmetry minor closed by the fidelity-policy comment** — both
+   `_redact_body_secrets` and `_redact_body_secrets_sequence` now carry a docstring
+   paragraph naming the one shared policy (plain containers only) and cross-referencing
+   each other, instead of the policy being implicit in one branch's code shape only.
+
+### Full verification after the fix round
+
+```
+$ .venv/bin/pytest tests/unit/test_logging.py::TestBodySecretRedaction tests/unit/test_base_client.py::TestLogging -v --no-cov
+19 passed in 0.07s
+
+$ make test
+3337 passed
+Required test coverage of 90% reached. Total coverage: 94.29%
+
+$ .venv/bin/pytest tests/unit/test_sync_async_parity.py -q --no-cov
+144 passed in 0.67s
+
+$ make lint
+.venv/bin/mypy kibana/
+Success: no issues found in 103 source files
+
+$ make hooks
+.venv/bin/pre-commit run --all-files
+... (all hooks) Passed
+.venv/bin/pre-commit run check-pin-comments-match --hook-stage manual --all-files
+every pin's # comment still dereferences to its SHA (network; run at CI/manual stage). Passed
+```
+
+No allowlist entry needed in the parity suite (same reasoning as round 1: this is a
+shared, imported helper function, not a per-tree `Client` method body).
+
+### Live re-check: namedtuple-bearing body no longer crashes at the wire
+
+Per the review's required addition. Kibana reachability re-confirmed
+(`curl -s -o /dev/null -w "%{http_code}\n" http://localhost:5601/api/status` → `200`)
+before running.
+
+**Pre-fix** (`_base.py` stashed back to the round-1 commit `98ae2f8`, same isolation
+technique as round 1's baseline capture):
+
+```
+$ .venv/bin/python -c "
+import logging, sys
+from collections import namedtuple
+sys.path.insert(0, 'tests/integration')
+from utils import create_test_kibana_client
+logging.basicConfig(level=logging.DEBUG)
+logging.getLogger('kibana').setLevel(logging.DEBUG)
+client = create_test_kibana_client()
+Point = namedtuple('Point', ['x', 'y'])
+body = {'connectors': Point(x={'secrets': {'p': '<fake-secret [redacted in evidence]>'}}, y='keep-me')}
+try:
+    client.perform_request('POST', '/api/actions/connector', body=body)
+except Exception as e:
+    print('response:', type(e).__name__, e)
+"
+```
+
+```
+INFO:kibana:Kibana client initialized with 1 node(s)
+DEBUG:kibana:Making POST request to /api/actions/connector with headers: {'content-type': 'application/json', 'kbn-xsrf': 'true', 'authorization': 'Basic [REDACTED]'}
+response: TypeError Point.__new__() missing 1 required positional argument: 'y'
+```
+
+Confirms the BLOCKER live: the `"Making POST request..."` header line printed, but the
+`"Request body:"` line never did — the `TypeError` was raised *while evaluating the
+logging call's own argument* (`_redact_body_secrets(body)`, inside
+`logger.debug("Request body: %s", ...)`), aborting `perform_request` before any request
+was attempted.
+
+**Post-fix** (fix restored):
+
+```
+INFO:kibana:Kibana client initialized with 1 node(s)
+DEBUG:kibana:Making POST request to /api/actions/connector with headers: {'content-type': 'application/json', 'kbn-xsrf': 'true', 'authorization': 'Basic [REDACTED]'}
+DEBUG:kibana:Request body: {'connectors': ({'secrets': '[REDACTED]'}, 'keep-me')}
+response: TypeError Type is not JSON serializable: Point
+```
+
+The `"Request body:"` line now prints cleanly — `{'connectors': ({'secrets':
+'[REDACTED]'}, 'keep-me')}` — proving the DEBUG-logging path no longer crashes on a
+namedtuple-bearing body: the secret is redacted, the plain-tuple normalization is
+visible (`(...)`, not `Point(...)`), and the sibling scalar `'keep-me'` is untouched.
+
+The **second** `TypeError` (`Type is not JSON serializable: Point`) is a distinct,
+pre-existing, and out-of-scope limitation: `elastic_transport`'s request serializer
+does not accept a raw namedtuple as a body value (independent of this fix — a plain
+`tuple` in the same position serializes to a JSON array without issue, as every other
+live capture in this file demonstrates). It fires *after* the DEBUG log line has
+already completed successfully, from a completely different code path
+(`_transport.perform_request`'s own body serialization, not `_redact_body_secrets`), so
+it does not undermine what this probe set out to prove. Noted here for the record, not
+folded into this fix: nobody is expected to pass a raw namedtuple as an actual request
+body (the fix only needs to stop the *logging* path from crashing on one, which it
+now does).

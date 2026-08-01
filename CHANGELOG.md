@@ -19,10 +19,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reproduction from the issue, sent as a real request body) before the fix
   and the redaction after it. A new `_redact_body_secrets_sequence` helper
   now recurses into list/tuple elements — dicts and nested lists/tuples
-  recurse, scalars pass through unchanged — mirroring the existing dict
-  recursion and preserving the container type (list stays list, tuple stays
-  tuple). The function still returns a full copy and never mutates the
-  caller's body; the redacted-key set and dict-recursion logic are unchanged.
+  recurse, scalars pass through unchanged. The function still returns a full
+  copy and never mutates the caller's body; the redacted-key set and
+  dict-recursion logic are unchanged.
+  A code-quality review of the initial fix found two further defects, both
+  fixed in the same PR: (1) the first version rebuilt a redacted list/tuple by
+  casting back to the caller's exact type (`type(values)(...)`), which raised
+  `TypeError: ...__new__() missing N required positional arguments` for a
+  multi-field namedtuple and silently corrupted a single-field one (the whole
+  element list accepted as that one field's value, wrapping a scalar in a
+  list) — both crashing or corrupting a real request just because DEBUG
+  logging was on. The redacted copy exists only for safe logging, never to
+  round-trip the caller's exact type, so list/tuple values (namedtuples
+  included) now always normalize to a plain `list`/`tuple`, matching the dict
+  branch's pre-existing plain-`dict` rebuild (which already ignored `dict`
+  subclasses like `OrderedDict`). (2) **neither recursion axis had a depth
+  bound** — a request body nested roughly 1000 levels deep raised
+  `RecursionError` out of `perform_request` whenever DEBUG logging was
+  enabled, a pre-existing gap on the dict axis that predates this issue,
+  now closed for both axes together. Both branches share one
+  `_MAX_REDACTION_DEPTH` (20) via a new `_redact_nested_body_value` helper;
+  past the cap a container is replaced with a `"<redaction depth limit>"`
+  placeholder instead of being recursed into further, so a pathologically
+  deep or adversarial body fails closed (a placeholder in the log) rather
+  than aborting the request.
 - **`configure_opentelemetry()` is now idempotent: repeat calls no longer stack
   log handlers, and reconfiguring actually takes effect instead of silently
   doing nothing** ([#76](https://github.com/pedro-angel/kibana-py/issues/76)).

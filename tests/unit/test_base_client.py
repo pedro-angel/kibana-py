@@ -443,6 +443,58 @@ class TestLogging:
         assert "[REDACTED]" in log_messages
         assert "my-webhook" in log_messages
 
+    def test_debug_logging_pathologically_deep_dict_body_does_not_raise(
+        self, mock_transport, mock_response, caplog
+    ):
+        """A ~1000-deep dict body must not raise ``RecursionError`` out of
+        ``perform_request`` when DEBUG logging is enabled -- the request
+        must still reach the transport instead of aborting.
+
+        Regression (code-quality review, fix round for #78): neither
+        recursion axis had a depth bound.
+        """
+        from kibana._sync.client._base import BaseClient
+
+        mock_transport.perform_request.return_value = mock_response(
+            body={"result": "success"}, status=200
+        )
+
+        client = BaseClient(_transport=mock_transport)
+        body: dict = {"leaf": "value"}
+        for _ in range(1000):
+            body = {"nested": body}
+
+        with caplog.at_level(logging.DEBUG, logger="kibana"):
+            client.perform_request("POST", "/api/actions/connector", body=body)
+
+        mock_transport.perform_request.assert_called_once()
+        log_messages = " ".join(record.message for record in caplog.records)
+        assert "<redaction depth limit>" in log_messages
+
+    def test_debug_logging_pathologically_deep_list_body_does_not_raise(
+        self, mock_transport, mock_response, caplog
+    ):
+        """Same fail-closed guarantee for a ~1000-deep list body (the other
+        recursion axis, same shared depth cap)."""
+        from kibana._sync.client._base import BaseClient
+
+        mock_transport.perform_request.return_value = mock_response(
+            body={"result": "success"}, status=200
+        )
+
+        client = BaseClient(_transport=mock_transport)
+        items: list = ["leaf"]
+        for _ in range(1000):
+            items = [items]
+        body = {"items": items}
+
+        with caplog.at_level(logging.DEBUG, logger="kibana"):
+            client.perform_request("POST", "/api/actions/connector", body=body)
+
+        mock_transport.perform_request.assert_called_once()
+        log_messages = " ".join(record.message for record in caplog.records)
+        assert "<redaction depth limit>" in log_messages
+
 
 class TestExtractErrorMessage:
     """Tests for BaseClient._extract_error_message()."""
