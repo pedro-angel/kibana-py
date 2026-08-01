@@ -14,6 +14,8 @@ This installs:
 - `opentelemetry-api` - OpenTelemetry API
 - `opentelemetry-sdk` - OpenTelemetry SDK
 - `opentelemetry-exporter-otlp-proto-grpc` - OTLP gRPC exporter for traces and logs
+- `opentelemetry-exporter-otlp-proto-http` - OTLP HTTP/protobuf exporter for traces and logs
+- `opentelemetry-instrumentation` - Base instrumentation API used by `KibanaInstrumentor`
 
 ## Quick Start
 
@@ -739,12 +741,13 @@ The system supports multiple authentication methods:
 The system automatically validates APM server connectivity:
 
 ```python
-from kibana.observability import validate_apm_connection
+from kibana.observability import validate_apm_server_availability
 
 # Check if APM server is available
-is_available = validate_apm_connection(
+is_available = validate_apm_server_availability(
     endpoint="http://localhost:8200",
-    headers={"authorization": "Bearer your_token"}
+    headers={"authorization": "Bearer your_token"},
+    protocol="http/protobuf",  # or "grpc" (default)
 )
 
 if is_available:

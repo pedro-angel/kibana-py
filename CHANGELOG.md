@@ -4,10 +4,39 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+User-facing and dev-facing tooling changes get an entry; CI-only plumbing does not —
+see [CONTRIBUTING.md § Changelog Policy](CONTRIBUTING.md#changelog-policy).
 
 ## [Unreleased]
 
 ### Fixed
+- **Docs: six drift items found by the 2026-07-31 release review**
+  ([#81](https://github.com/pedro-angel/kibana-py/issues/81)). `docs/source/changelog.md`
+  was missing the 0.4.1 and 0.4.2 entries entirely (it topped out at 0.4.0) — added,
+  mirroring this file, and `docs/source/development/release-process.md` now also tells
+  a releaser to update it (it is not generated from this file and drifts silently
+  otherwise). `release-process.md` documented only 4 release-workflow jobs and claimed
+  "CI does not run \[the integration suite\] (needs a Docker Elastic Stack)"; `release.yml`
+  has had a 5th `integration` job gating publish via `needs: [build, integration]` since
+  before this issue was filed, and `PUBLISHING_GUIDE.md` already documented it correctly
+  — `release-process.md`'s mermaid diagram, jobs table, and pre-release checklist now
+  match. `docs/source/user-guide/observability.md` documented a nonexistent
+  `validate_apm_connection`; the real public function is
+  `validate_apm_server_availability` (with a `protocol` parameter) — both call sites
+  fixed. `installation.md` and `observability.md` claimed the `observability` extra
+  installs 3 packages; `pyproject.toml` installs 5 (`opentelemetry-exporter-otlp-proto-http`
+  and `opentelemetry-instrumentation` were undocumented) — both pages now list all 5.
+  The `flaky` pytest marker's docstring implied an active quarantine and cited closed
+  [#53](https://github.com/pedro-angel/kibana-py/issues/53); reworded to state the
+  quarantine is currently empty (confirmed: no test in the tree carries
+  `@pytest.mark.flaky`). Finally, this file gained an explicit changelog policy
+  (also spelled out in `CONTRIBUTING.md`): user-facing and dev-facing tooling changes
+  get an entry, pure CI-only plumbing does not — codifying the practice already visible
+  in recent entries (e.g. the `make audit` self-heal fix above is logged even though
+  it ships no package code, while the CI-only pip+setuptools-upgrade-sharing commit it
+  builds on was not). Evidence, disposition, and the verification script output for
+  each item: `docs/evidence/docs-drift-81.md`.
+
 - **`make audit` never refreshed base build tools on an existing venv**
   ([#80](https://github.com/pedro-angel/kibana-py/issues/80)), a residual of
   [#67](https://github.com/pedro-angel/kibana-py/pull/67): that fix upgraded pip+setuptools

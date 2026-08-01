@@ -1,7 +1,8 @@
 # Release Process
 
 kibana-py releases are **automated**. Pushing a version tag (`vX.Y.Z`) to GitHub runs
-the release workflow, which validates the tag, builds the distribution, creates the
+the release workflow, which validates the tag, builds the distribution, runs the
+integration test suite against a live Elastic Stack as a release gate, creates the
 GitHub Release, and publishes to PyPI. You do **not** run `twine upload` or create the
 GitHub Release by hand — doing so collides with the workflow.
 
@@ -20,7 +21,9 @@ flowchart TD
     validate["<b>validate-release</b><br/>tag reachable from main?<br/>tag == kibana/_version.py?<br/>CHANGELOG entry exists?"]
     validate -- "any check fails" --> halt(["release stops — nothing published"])
     validate -- "all pass" --> build["<b>build</b><br/>python -m build → twine check<br/>wheel-content guard → SBOM<br/>upload dist artifact"]
+    validate -- "all pass" --> integration["<b>integration</b><br/>provision ES+Kibana+APM<br/>pytest -m \"not flaky\" (release gate)"]
     build --> ghrel["<b>publish-github-release</b><br/>generated notes + dist/* attached"]
+    integration --> ghrel
     build --> pypi["<b>publish-pypi</b><br/>OIDC trusted publishing — no token"]
     ghrel --> pypi
 ```
@@ -31,7 +34,8 @@ Jobs, in order (source of truth: `release.yml`):
 |-----|-----------|-------------|--------------|
 | `validate-release` | tag push | `contents: read` | Fails the release unless: the tagged commit is reachable from `origin/main`; the tag equals `v` + `__versionstr__` in `kibana/_version.py`; and `CHANGELOG.md` has a `## [X.Y.Z]` heading. |
 | `build` | `validate-release` | `contents: read` | Installs `.[build]`, runs `python -m build`, `twine check`, a wheel-content guard (must contain `kibana/py.typed`; must **not** contain `tests/`, `docs/`, `examples/`), generates a CycloneDX SBOM, and uploads the `dist` artifact. |
-| `publish-github-release` | `build` | `contents: write` | Downloads `dist`, creates the GitHub Release for the tag with auto-generated notes and attaches every `dist/*` file (wheel, sdist, SBOM). |
+| `integration` | `validate-release` | `contents: read` | Installs `.[dev,all,probe]`, provisions a live Elasticsearch + Kibana + APM stack (`scripts/ci-stack-up.sh`), and runs the integration suite (`make test-integration-ci`, i.e. `pytest -m "not flaky"`) as a **required release gate** — runs in parallel with `build`; a failing test here blocks publish. |
+| `publish-github-release` | `build` + `integration` | `contents: write` | Downloads `dist`, creates the GitHub Release for the tag with auto-generated notes and attaches every `dist/*` file (wheel, sdist, SBOM). |
 | `publish-pypi` | `build` + `publish-github-release` | `contents: read`, `id-token: write` | Downloads `dist`, removes `*.json` (the SBOM is not a PyPI artifact), and publishes the wheel + sdist to PyPI via **OIDC trusted publishing** — no API token. |
 
 ## One-time setup
@@ -92,10 +96,11 @@ A PyPI/TestPyPI **API token** is needed *only* for the optional manual dry-run
 
 - [ ] `make check` passes (hooks, lint, dependency audit, SAST, unit tests, docs)
 - [ ] `make test-python-matrix` passes (multi-Python unit matrix via nox; fails closed if any supported interpreter is missing — install them via pyenv)
-- [ ] `make test-integration` passes locally against a live stack — **required**; CI does not run it (needs a Docker Elastic Stack)
+- [ ] `make test-integration` passes locally against a live stack — recommended for fast feedback before tagging; the tagged release also runs it as a **required gate** in CI (the `integration` job — see [How a release runs](#how-a-release-runs)), so a failure there blocks publish even if this local step is skipped
 - [ ] Documentation builds clean: `make docs` (already covered by `make check`) (HTML with `-W` + linkcheck, matching RTD's `fail_on_warning`)
 - [ ] Version bumped in `kibana/_version.py`
 - [ ] `CHANGELOG.md` updated (entry **and** reference links)
+- [ ] `docs/source/changelog.md` updated with a matching entry for the version (this file ships with the built docs and is not auto-generated from the root `CHANGELOG.md` — see [Step 2](#2-update-the-changelog))
 
 ## Step by step
 
@@ -135,6 +140,13 @@ Add a dated entry (the workflow checks the `## [X.Y.Z]` heading exists):
 
 Also update the reference-link footer at the bottom of `CHANGELOG.md`: add the
 `[X.Y.Z]` compare/tag link and re-base the `[Unreleased]` compare range on `vX.Y.Z`.
+
+Also mirror a (typically shorter) entry into
+[`docs/source/changelog.md`](https://github.com/pedro-angel/kibana-py/blob/main/docs/source/changelog.md)
+— it ships with the built docs (Read the Docs, PyPI project links) and is **not**
+generated from the root `CHANGELOG.md`, so it drifts silently if a release skips it.
+Add the same `## [X.Y.Z] - YYYY-MM-DD` heading (with a `(vX.Y.Z)=` MyST anchor above
+it) and update its own reference-link footer the same way.
 
 ### 3. Land the release commit on `main`
 
