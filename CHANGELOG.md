@@ -8,6 +8,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Request-body JSON semantics diverged between the stdlib and orjson serializer
+  backends** ([#79](https://github.com/pedro-angel/kibana-py/issues/79)). `kibana/serializer.py`
+  picks one of the two at import time depending on whether `orjson` is installed, and,
+  pre-fix, they disagreed on two things: NaN/Infinity/-Infinity floats, and `uuid.UUID`
+  values. **NaN/Infinity (stdlib):** `JSONSerializer.dumps` now passes `allow_nan=False`,
+  so a non-finite float raises `kibana.exceptions.SerializationError` (the package's
+  existing serialization exception type) instead of silently emitting the invalid-JSON
+  tokens `NaN`/`Infinity`/`-Infinity` that a live Kibana rejects with an opaque 400 —
+  confirmed live before and after the fix, including the exact pre-fix 400 message.
+  **UUID (both backends):** `JSONSerializer._default` gained a `uuid.UUID` case
+  (serializing to the canonical string form, `str(obj)`), matching orjson's pre-existing
+  native handling — a UUID value anywhere in a body now serializes identically
+  regardless of which backend is active, pinned by a cross-backend equality test and
+  confirmed live (a real space create with a UUID-valued field, accepted by Kibana on
+  both backends, fetched back byte-identical). **Known, deliberately unfixed gap:**
+  orjson has no native option to reject non-finite floats — it always serializes them as
+  JSON `null` (confirmed against orjson 3.11.9; open upstream request `ijl/orjson#170`).
+  A correctness-preserving Python-level pre-serialization guard was prototyped in three
+  variants and measured at 215%-594% CPU overhead on a representative ~9KB body — over
+  the accepted 10% budget — so it was not wired into `OrjsonSerializer.dumps`; this
+  divergence remains, tracked via a `strict=True` `xfail` in the unit test matrix, a
+  docstring on `OrjsonSerializer.dumps`, and full measurements in
+  `docs/evidence/serializer-parity-79.md`.
 - **Credentials nested inside a list-valued request-body field reached DEBUG
   logs in cleartext** ([#78](https://github.com/pedro-angel/kibana-py/issues/78)).
   `_redact_body_secrets` (`kibana/_sync/client/_base.py`, shared by the async

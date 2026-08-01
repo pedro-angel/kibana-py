@@ -1,10 +1,13 @@
 """Unit tests for serializer classes."""
 
+import importlib.util
 import json
+import uuid
 from datetime import UTC, datetime
 
 import pytest
 
+from kibana.exceptions import SerializationError
 from kibana.serializer import DEFAULT_SERIALIZERS, JSONSerializer, Serializer
 
 
@@ -333,3 +336,195 @@ class TestDefaultSerializers:
             # instead of reloading, which would create fresh identities.
             kibana.serializer.__dict__.clear()
             kibana.serializer.__dict__.update(original_attrs)
+
+
+# --- #79: stdlib/orjson request-body JSON semantics parity -----------------
+#
+# The bug: request-body JSON semantics diverged by backend.
+#   - NaN/Infinity/-Infinity: stdlib (pre-fix) emitted the invalid-JSON
+#     tokens ``NaN``/``Infinity``/``-Infinity`` (Kibana 400s on those);
+#     orjson silently serialized them as JSON ``null`` (silent data loss).
+#   - UUID: stdlib raised bare ``TypeError`` (no ``_default`` support);
+#     orjson already serialized it natively to its canonical string form.
+#
+# "Forcing the stdlib path" for this matrix means instantiating
+# ``JSONSerializer`` directly -- it is unconditionally defined regardless of
+# whether orjson is installed (see kibana/serializer.py), so no module-reload
+# seam is needed the way ``test_fallback_to_json_serializer_when_orjson_unavailable``
+# above needs one for testing *selection* logic. This matrix tests *behavior*,
+# so it instantiates each serializer class directly -- the same seam
+# TestJSONSerializer/TestOrjsonSerializer already use.
+
+
+def _orjson_installed() -> bool:
+    return importlib.util.find_spec("orjson") is not None
+
+
+def _make_serializer(backend: str):
+    """Build a fresh serializer instance for *backend* ("stdlib"/"orjson")."""
+    if backend == "stdlib":
+        return JSONSerializer()
+    from kibana.serializer import OrjsonSerializer
+
+    return OrjsonSerializer()
+
+
+# Known, tracked gap (see docs/evidence/serializer-parity-79.md and the
+# docstring on OrjsonSerializer.dumps): orjson has no native option to reject
+# non-finite floats. A correctness-preserving Python-level pre-serialization
+# guard was prototyped and measured at 215-310% CPU overhead on a
+# representative ~9KB body -- over the accepted 10% budget -- so it was not
+# wired in. These cases are marked ``xfail(strict=True)`` rather than passed
+# or silently skipped: this documents the gap in the test run itself, and
+# ``strict=True`` means the day orjson gains this natively (or a cheap enough
+# guard is found), the marker itself starts failing the suite, forcing
+# whoever lands that fix to remove it instead of leaving a stale marker.
+_ORJSON_NON_FINITE_XFAIL_REASON = (
+    "Tracked gap (#79): orjson has no native option to reject non-finite "
+    "floats; a Python-level guard measured 215-310% overhead on a "
+    "representative ~9KB body, over the accepted 10% budget. See "
+    "docs/evidence/serializer-parity-79.md."
+)
+
+
+def _backend_param(backend: str, *, non_finite: bool = False) -> "pytest.param":
+    if backend == "orjson" and not _orjson_installed():
+        return pytest.param(
+            backend, marks=pytest.mark.skip(reason="orjson not installed"), id=backend
+        )
+    if backend == "orjson" and non_finite:
+        return pytest.param(
+            backend,
+            marks=pytest.mark.xfail(
+                reason=_ORJSON_NON_FINITE_XFAIL_REASON, strict=True
+            ),
+            id=backend,
+        )
+    return pytest.param(backend, id=backend)
+
+
+NON_FINITE_BACKENDS = [
+    _backend_param("stdlib", non_finite=True),
+    _backend_param("orjson", non_finite=True),
+]
+PARITY_BACKENDS = [_backend_param("stdlib"), _backend_param("orjson")]
+
+
+class TestNonFiniteFloatParity:
+    """#79 requirement 1: NaN/Infinity/-Infinity anywhere in a body raises a
+    clear, catchable ``SerializationError`` -- not a silent ``null``
+    (orjson, pre-fix) or an invalid-JSON token Kibana 400s on (stdlib,
+    pre-fix). See ``NON_FINITE_BACKENDS`` above for why the orjson cases are
+    ``xfail(strict=True)`` rather than green.
+    """
+
+    @pytest.mark.parametrize("backend", NON_FINITE_BACKENDS)
+    @pytest.mark.parametrize(
+        "value",
+        [
+            pytest.param(float("nan"), id="nan"),
+            pytest.param(float("inf"), id="inf"),
+            pytest.param(float("-inf"), id="neg-inf"),
+        ],
+    )
+    def test_top_level_non_finite_float_raises_serialization_error(
+        self, backend, value
+    ):
+        serializer = _make_serializer(backend)
+        with pytest.raises(SerializationError):
+            serializer.dumps({"v": value})
+
+    @pytest.mark.parametrize("backend", NON_FINITE_BACKENDS)
+    def test_nested_non_finite_float_raises_serialization_error(self, backend):
+        """NaN two levels deep, inside a list -- not just a top-level value."""
+        serializer = _make_serializer(backend)
+        with pytest.raises(SerializationError):
+            serializer.dumps({"outer": {"inner": [1, 2, float("nan")]}})
+
+    @pytest.mark.parametrize("backend", NON_FINITE_BACKENDS)
+    def test_non_finite_float_in_list_raises_serialization_error(self, backend):
+        serializer = _make_serializer(backend)
+        with pytest.raises(SerializationError):
+            serializer.dumps({"values": [1.0, 2.0, float("-inf")]})
+
+    def test_stdlib_error_message_shape(self):
+        """Pin the exact message stdlib raises so a refactor can't silently
+        change the wording without a test catching it."""
+        serializer = JSONSerializer()
+        with pytest.raises(SerializationError) as exc_info:
+            serializer.dumps({"v": float("nan")})
+        assert str(exc_info.value) == "Out of range float values are not JSON compliant"
+
+    def test_stdlib_normal_floats_still_serialize(self):
+        """Guard against a too-broad fix rejecting ordinary finite floats."""
+        serializer = JSONSerializer()
+        result = serializer.dumps({"v": 3.14, "neg": -2.5, "zero": 0.0})
+        assert json.loads(result) == {"v": 3.14, "neg": -2.5, "zero": 0.0}
+
+
+class TestUUIDSerializationParity:
+    """#79 requirement 2: UUID values serialize identically (to their string
+    form) on both backends."""
+
+    @pytest.mark.parametrize("backend", PARITY_BACKENDS)
+    def test_uuid_serializes_to_canonical_string(self, backend):
+        serializer = _make_serializer(backend)
+        u = uuid.UUID("5284d425-7649-4ae6-baec-dfeaf0419cf7")
+        result = serializer.dumps({"id": u})
+        assert json.loads(result) == {"id": "5284d425-7649-4ae6-baec-dfeaf0419cf7"}
+
+    @pytest.mark.parametrize("backend", PARITY_BACKENDS)
+    def test_uuid_in_list_serializes_to_canonical_strings(self, backend):
+        serializer = _make_serializer(backend)
+        ids = [uuid.UUID(int=1), uuid.UUID(int=2)]
+        result = serializer.dumps({"ids": ids})
+        assert json.loads(result) == {"ids": [str(ids[0]), str(ids[1])]}
+
+    @pytest.mark.parametrize("backend", PARITY_BACKENDS)
+    def test_nested_uuid_serializes_to_canonical_string(self, backend):
+        serializer = _make_serializer(backend)
+        u = uuid.UUID(int=42)
+        result = serializer.dumps({"outer": {"inner": {"id": u}}})
+        assert json.loads(result) == {"outer": {"inner": {"id": str(u)}}}
+
+    def test_cross_backend_uuid_output_is_value_identical(self):
+        """Same input, same decoded JSON value on both backends -- not just
+        'both happen to round-trip', which a message-shape regression on one
+        backend could still pass."""
+        if not _orjson_installed():
+            pytest.skip("orjson not installed")
+        from kibana.serializer import OrjsonSerializer
+
+        data = {
+            "id": uuid.UUID("5284d425-7649-4ae6-baec-dfeaf0419cf7"),
+            "nested": {"ids": [uuid.UUID(int=1), uuid.UUID(int=2)]},
+        }
+
+        stdlib_out = JSONSerializer().dumps(data)
+        orjson_out = OrjsonSerializer().dumps(data)
+
+        assert json.loads(stdlib_out) == json.loads(orjson_out)
+
+
+class TestCrossBackendEqualityForNormalBodies:
+    """A normal (no NaN/Infinity, no UUID edge case) body must decode to the
+    same value on both backends -- the #79 fix must not regress ordinary
+    payloads."""
+
+    def test_normal_body_equal_across_backends(self):
+        if not _orjson_installed():
+            pytest.skip("orjson not installed")
+        from kibana.serializer import OrjsonSerializer
+
+        data = {
+            "name": "test",
+            "count": 42,
+            "score": 3.14,
+            "active": True,
+            "tags": ["a", "b", "c"],
+            "nested": {"key": "value", "list": [1, 2, 3]},
+            "nothing": None,
+        }
+        stdlib_out = JSONSerializer().dumps(data)
+        orjson_out = OrjsonSerializer().dumps(data)
+        assert json.loads(stdlib_out) == json.loads(orjson_out) == data
