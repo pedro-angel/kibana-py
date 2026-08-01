@@ -10,6 +10,45 @@ see [CONTRIBUTING.md § Changelog Policy](CONTRIBUTING.md#changelog-policy).
 ## [Unreleased]
 
 ### Fixed
+- **`TestImportGuardMatrix`'s "must stay quiet" assertions could fail on a benign
+  gRPC fork diagnostic, not a real kibana-py warning**
+  ([#100](https://github.com/pedro-angel/kibana-py/issues/100)). Dev-facing only —
+  no shipped code changed. `tests/unit/test_observability.py`'s
+  `TestAPMServerIntegration.test_create_otlp_exporter_grpc_protocol` creates a
+  real, unmocked `grpc.insecure_channel` (via `_create_otlp_exporter`); under
+  `pytest-randomly`, that test can land shortly before `TestImportGuardMatrix`'s
+  strict-empty-stderr cases in the same pytest process. Every later
+  `subprocess.run()` call in that process — exactly what
+  `_run_with_blocked_imports` performs, and which takes the classic POSIX
+  `fork()`+`exec()` path since `close_fds` defaults to `True` — re-enters gRPC's
+  process-wide `pthread_atfork` machinery in the forked child, which occasionally
+  logs an informational diagnostic (`ev_poll_posix.cc:593] FD from fork parent
+  still in poll list: ...`) straight to the inherited stderr fd before the child
+  has even exec'd into the probe script, landing in that subprocess's captured
+  output and failing `result.stderr == ""`. Reproduced deterministically locally
+  (Python 3.12, `--randomly-seed=2442198158` against the full `tests/unit/`
+  suite — a small isolated slice preserving the same relative order did not
+  reproduce it, only the full-scale run did). This is gRPC's POSIX `poll()`
+  backend (`ev_poll_posix.cc`, used because macOS has no epoll), **not** the
+  Linux-specific `epoll1` backend issue #100 originally assumed for this
+  sighting — correcting that specific attribution. Checked directly against
+  the compiled `grpcio` extension: the matched text appears only alongside
+  `ev_poll_posix.cc`, never `ev_epoll1_linux.cc`, so the fix is scoped to the
+  backend actually observed and is not claimed to also cover an unverified,
+  possibly differently-shaped Linux/`epoll1` diagnostic — #100's originally
+  scoped Linux seed-loop gate stands unchanged. Fixed by having
+  `_run_with_blocked_imports` strip only this one, narrowly-anchored benign
+  pattern from captured subprocess stderr before returning — every other stderr
+  assertion in the file (corrupted-install warnings, `-W error` survival, etc.)
+  is unaffected and still sees everything else verbatim. `GRPC_VERBOSITY=ERROR`
+  was probed as an alternative and confirmed to suppress gRPC's own C-core log
+  lines, but only when set in the *parent* process before gRPC initializes —
+  setting it in the subprocess's `env=` (as one might first reach for) cannot
+  work, architecturally: the diagnostic is written by the forked child before
+  `execve()` applies the new environment. Session-wide env is broader in scope
+  than the anchored stderr filter for no added benefit, so it was not adopted.
+  Evidence, the full investigation, and the seed-pinned RED/GREEN transcripts:
+  `docs/evidence/grpc-fork-noise-100.md`.
 - **A TOP-LEVEL LIST request body bypassed DEBUG-log redaction entirely**
   ([#92](https://github.com/pedro-angel/kibana-py/issues/92), sibling of
   [#78](https://github.com/pedro-angel/kibana-py/issues/78)). `perform_request`
