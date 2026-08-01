@@ -144,6 +144,52 @@ class TestOTLPEndpointUnavailable:
         # Should timeout reasonably quickly (with retries)
         assert elapsed_time < 10  # Should be less than 10 seconds total
 
+    def test_apm_connectivity_total_wait_budget_capped_live(self):
+        """issue #83: the probe's total wall-clock time (all attempts +
+        backoff sleeps combined) must be hard-capped at a real network
+        endpoint, regardless of the (default) `timeout`/`max_retries` the
+        caller uses -- see `_PROBE_TOTAL_BUDGET_SECONDS` in
+        `kibana/observability/_validation.py`.
+
+        Lives in the integration tier, not the fast unit tier: this is a
+        genuine, un-mocked network round-trip against a real address that
+        takes multiple seconds to resolve -- moved out of
+        `tests/unit/test_observability.py` (fix-round review finding) since
+        a ~5s un-mocked test doesn't belong in the fast unit tier. Needs no
+        local Elastic stack (Elasticsearch/Kibana/APM) -- only outbound
+        network reachability to the address below, same as its sibling
+        `test_otlp_connectivity_validation_with_timeout` above.
+
+        Targets a real RFC 5737 TEST-NET-1 address (192.0.2.1), reserved
+        for documentation and never routed, so the connection attempt
+        genuinely blocks until timeout instead of failing instantly with a
+        fast "connection refused" -- the same "endpoint hangs instead of
+        refusing" scenario the issue describes for an unreachable/
+        misconfigured APM host, and confirmed in this environment to
+        actually block for the full per-attempt timeout rather than
+        returning early.
+
+        Pre-fix, the default args (`timeout=5`, `max_retries=2`) could
+        block for up to ~18s (3 x 5s timeouts + 1s + 2s backoff); this
+        assertion uses a generous CI-safe cap+margin that the pre-fix code
+        cannot meet, proving the fix actually bounds the wait rather than
+        merely reducing it. The deadline-mechanism-only variant of this
+        same guarantee (a stub that hangs, a small patched budget) is
+        pinned fast in the unit tier as
+        `TestAPMServerIntegration.test_validate_apm_connectivity_hung_attempt_bounded_by_deadline`.
+        """
+        start = time.monotonic()
+        result = _validate_apm_connectivity(
+            endpoint="http://192.0.2.1:8300", headers={}, protocol="grpc"
+        )
+        elapsed = time.monotonic() - start
+
+        assert result is False
+        assert elapsed < 7.5, (
+            f"probe blocked the caller for {elapsed:.2f}s -- the total wait "
+            "budget cap is not being enforced"
+        )
+
     def test_log_forwarding_with_intermittent_connectivity(
         self, test_logger, clean_observability
     ):
