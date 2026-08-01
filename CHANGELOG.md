@@ -37,7 +37,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `except ValueError` used to mislabel any `ValueError` — including its own circular-
   reference detection and a `UnicodeEncodeError` from encoding a lone surrogate
   character — as the non-finite-float message; it now only does that for the actual
-  out-of-range-float error and wraps anything else honestly with its own message.
+  out-of-range-float error (matched by **prefix**, not exact equality — CPython 3.12+
+  appends the offending value's `repr` to this specific stdlib message, e.g.
+  `"...compliant: nan"`, which an exact-equality check missed; confirmed across
+  3.11/3.12/3.13/3.14 via `make test-python-matrix`) and wraps anything else honestly
+  with its own message. The message this project raises is always the canonical
+  constant regardless of which CPython version's wording triggered the match, so the
+  cross-backend message-identity guarantee holds across supported Python versions too.
   Measured at ~262% CPU overhead / ~16.4µs absolute on a representative ~9KB body —
   accepted because the absolute cost is noise against real request latency, guarded
   orjson (~22.8µs) is ~1.7x faster than the stdlib fallback this project already ships

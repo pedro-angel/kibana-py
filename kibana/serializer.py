@@ -224,6 +224,24 @@ class JSONSerializer(Serializer):
         module's other error-wrapping call sites (``str(e)``, chained via
         ``from e``) rather than inventing a misleading one.
 
+        Matched by **prefix**, not exact equality (round 4 fix): CPython
+        3.11's C-accelerated encoder raises exactly
+        ``"Out of range float values are not JSON compliant"``, but 3.12+
+        appends the offending value's ``repr`` -- ``"...: nan"``/``"...:
+        inf"``/``"...: -inf"`` (confirmed live across 3.11.15/3.12.13/
+        3.13.12/3.14.3; see docs/evidence/serializer-parity-79.md's round-4
+        section). An exact-equality check missed this suffix on 3.12+ and
+        fell through to the "wrap honestly" branch instead, which still
+        produced a *technically accurate but non-identical* message
+        (`"...compliant: nan"` instead of the canonical
+        ``_NON_FINITE_FLOAT_MESSAGE``) -- breaking the cross-backend/
+        cross-version message-identity guarantee on every Python newer
+        than 3.11. ``str(e).startswith(_NON_FINITE_FLOAT_MESSAGE)`` matches
+        on every supported version, and the raised message is always the
+        canonical constant regardless of which version's suffix (if any)
+        triggered the match, so the identity guarantee holds across
+        versions as well as across backends.
+
         ``.encode("utf-8")`` runs *after* the try, not inside it: a lone
         (unpaired) UTF-16 surrogate character is a valid Python ``str`` code
         point that ``json.dumps`` happily round-trips as-is with
@@ -242,7 +260,7 @@ class JSONSerializer(Serializer):
                 data, default=self._default, ensure_ascii=False, allow_nan=False
             )
         except ValueError as e:
-            if str(e) == _NON_FINITE_FLOAT_MESSAGE:
+            if str(e).startswith(_NON_FINITE_FLOAT_MESSAGE):
                 raise SerializationError(_NON_FINITE_FLOAT_MESSAGE) from e
             raise SerializationError(str(e)) from e
         return encoded.encode("utf-8")

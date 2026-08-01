@@ -1056,6 +1056,175 @@ existing live battle-test's normal request paths; normal-body cross-backend equa
 is still covered by the existing unit tests (`TestCrossBackendEqualityForNormalBodies`,
 unaffected and still passing).
 
+## Round 4 — CI cross-version message drift (3.12+)
+
+**Environment-research lesson, recorded for the record:** round 3's message-honesty
+fix (`str(e) == _NON_FINITE_FLOAT_MESSAGE`) was verified locally against the
+project's default `.venv` (Python 3.11.15) only, and passed there -- but this project
+supports Python 3.11 through 3.14 (see `noxfile.py`/`test-python-matrix`), and the
+exact-equality check was never verified against 3.12+ before round 3 was committed.
+CI (PR #94) caught it: 3.11 green, 3.12/3.13/3.14 all red. **The lesson: a
+cross-version guarantee needs cross-version verification, not verification on
+whichever interpreter happens to be the local dev default** -- exactly the gap
+`test-python-matrix` exists to close, and exactly why running it locally is called
+out as required-before-release rather than optional.
+
+### Confirmed live, across the actual pyenv-provided interpreters (not assumed)
+
+```
+$ for v in 3.11.15 3.12.13 3.13.12 3.14.3; do
+    ~/.pyenv/versions/$v/bin/python3 -c "
+import json
+try:
+    json.dumps({'v': float('nan')}, allow_nan=False)
+except ValueError as e:
+    print(repr(str(e)))
+"
+  done
+```
+```
+Python 3.11.15: 'Out of range float values are not JSON compliant'
+Python 3.12.13: 'Out of range float values are not JSON compliant: nan'
+Python 3.13.12: 'Out of range float values are not JSON compliant: nan'
+Python 3.14.3:  'Out of range float values are not JSON compliant: nan'
+```
+
+3.12 changed CPython's C-accelerated JSON encoder to append the offending value's
+`repr` to this specific message (confirmed for all three non-finite cases below, not
+just NaN):
+
+```
+Python 3.12.13/3.13.12/3.14.3, allow_nan=False:
+  nan  -> 'Out of range float values are not JSON compliant: nan'
+  inf  -> 'Out of range float values are not JSON compliant: inf'
+  -inf -> 'Out of range float values are not JSON compliant: -inf'
+```
+
+Round 3's exact-equality check (`str(e) == _NON_FINITE_FLOAT_MESSAGE`) missed this
+suffix on 3.12+, fell through to the "wrap honestly" branch, and raised
+`SerializationError("Out of range float values are not JSON compliant: nan")` instead
+of the canonical constant -- technically *accurate* (it is describing the real float
+error), but breaking the cross-backend/cross-version **message-identity** guarantee
+three tests pin exactly: `test_normal_finite_nan_message_is_unaffected`,
+`test_error_message_shape[stdlib]`, `test_error_type_and_message_identical_across_backends`.
+3.11 stayed green because it has no suffix to miss.
+
+### Fix
+
+`str(e).startswith(_NON_FINITE_FLOAT_MESSAGE)` instead of `==`. Matches on every
+version above (3.11's un-suffixed message trivially satisfies its own prefix; 3.12+'s
+suffixed one starts with the same canonical text). The raised message is always
+`SerializationError(_NON_FINITE_FLOAT_MESSAGE)` -- the fixed canonical constant, not
+`str(e)` -- so the identity guarantee holds across versions as well as across
+backends: every version raises the exact same message, not "the same prefix."
+
+### Other message drift checked for, per the follow-up's own instruction
+
+The circular-reference and lone-surrogate honesty tests (`TestStdlibErrorHonesty`)
+were re-checked for the same class of drift, since their assertions also depend on
+stdlib error text:
+
+```
+$ for v in 3.11.15 3.12.13 3.13.12 3.14.3; do
+    ~/.pyenv/versions/$v/bin/python3 -c "
+import json
+d = {}; d['self'] = d
+try:
+    json.dumps(d)
+except ValueError as e:
+    print('circular:', repr(str(e)))
+try:
+    json.dumps({'v': '\ud800'}, ensure_ascii=False).encode('utf-8')
+except Exception as e:
+    print('surrogate:', repr(str(e)))
+"
+  done
+```
+```
+All four versions (3.11.15, 3.12.13, 3.13.12, 3.14.3), identical, no drift:
+  circular:  'Circular reference detected'
+  surrogate: "'utf-8' codec can't encode character '\ud800' in position 7: surrogates not allowed"
+```
+
+No drift on either -- both tests already assert on stable substrings/inequality
+(`"circular" in str(exc_info.value).lower()`, `str(exc_info.value) !=
+"Out of range float values are not JSON compliant"`), not brittle exact-equality on
+the full message, so no test change was needed for these two. Only the float-message
+narrowing check (item 2's grep below) was exact-equality on version-dependent text.
+
+### grep audit: no other test or code path asserts stdlib's exact ValueError text
+
+```
+$ grep -rn "Out of range float" kibana/ tests/ --include="*.py"
+kibana/serializer.py:_NON_FINITE_FLOAT_MESSAGE = "Out of range float values are not JSON compliant"
+tests/unit/test_serializer.py: assert str(exc_info.value) == "Out of range float values are not JSON compliant"  (x4)
+tests/unit/test_serializer.py: assert str(exc_info.value) != "Out of range float values are not JSON compliant"  (x2)
+tests/unit/test_serializer.py: assert "Out of range float" not in str(exc_info.value)  (x1)
+```
+
+Every one of these asserts against the **final, normalized `SerializationError`
+message** (which the fixed code always sets to the canonical constant), never against
+stdlib's raw pre-wrap `ValueError` text directly -- so all of them hold on every
+supported version once the prefix-match fix is in place, confirmed by the per-version
+matrix run below.
+
+### Version coverage: `make test-python-matrix` (nox, pyenv-provided 3.11/3.12/3.13/3.14)
+
+Run against pyenv-provided interpreters (`pyenv versions`: 3.11.15, 3.12.13, 3.13.12,
+3.14.3 all present locally), each in its own fresh nox-managed venv with `.[dev,all]`
+installed -- the full unit suite (`tests/unit/`), not just the four previously-failing
+tests, per the release-readiness gate this target exists for:
+
+```
+$ make test-python-matrix
+```
+
+| Python | Full unit suite result | `test_serializer.py` | The 3 previously-failing tests | `TestStdlibErrorHonesty` |
+|---|---|---|---|---|
+| 3.11.15 | 3382 passed in 17.44s | 69 passed (no `F` markers) | pass | 3 passed |
+| 3.12.13 | 3382 passed in 17.71s | 69 passed (no `F` markers) | pass | 3 passed |
+| 3.13.12 | 3382 passed in 17.50s | 69 passed (no `F` markers) | pass | 3 passed |
+| 3.14.3  | **3376 passed, 6 failed** in 13.92s -- see note below | 69 passed (no `F` markers) | pass | 3 passed |
+
+```
+$ .venv/bin/nox --error-on-missing-interpreters -s test
+nox > Session test-3.11 was successful in 33 seconds.
+nox > Session test-3.12 was successful in 33 seconds.
+nox > Session test-3.13 was successful in 30 seconds.
+nox > Session test-3.14 failed.
+```
+
+**All four versions: green for everything this follow-up is about.** All 69
+`tests/unit/test_serializer.py` cases -- including the 3 previously-failing
+message-identity tests and all 3 `TestStdlibErrorHonesty` cases -- passed with zero
+`F` markers on every one of the four interpreters, 3.14 included. The round-4 fix is
+confirmed cross-version.
+
+**3.14's 6 unrelated failures, investigated and ruled out of scope:** the overall
+3.14 nox session still exit-failed, but every one of its 6 failures is in
+`tests/unit/test_observability.py::TestImportGuardMatrix` -- a real-subprocess-isolated
+suite for `kibana/observability/_imports.py`'s conditional-import degradation
+(issues #68/#70), completely unrelated to `kibana/serializer.py`. The actual assertion
+failure in each case:
+
+```
+AssertionError: a missing optional package must stay quiet:
+  I0801 12:57:09.333038 13368829 ev_poll_posix.cc:593] FD from fork parent still in poll list: fd(17, generation: 1)
+assert 'I0801 12:57:...eration: 1)\n' == ''
+```
+
+This is a gRPC/c-ares native-library fork-safety log line leaking onto stderr from
+the test's subprocess (`ev_poll_posix.cc` is gRPC's own C++ event-loop source, not
+anything in this project) -- an environment/dependency-version artifact of forking a
+process with an active gRPC poll loop on this Python 3.14 build, not a regression
+introduced by this branch. Confirmed unrelated by inspection, not assumed: `git diff
+2e8a654..HEAD --stat` shows zero changes to `kibana/observability/` or
+`tests/unit/test_observability.py` anywhere in this branch's four commits, and the
+failing test spawns a fully isolated subprocess per case (the `PROBE` script), so
+nothing in this branch's in-process test state (including `TestCycleSafety`'s
+`signal.alarm` usage, checked specifically since it's the one round-3 addition that
+touches process-wide state) can reach it. Out of scope for #79; not fixed here.
+
 ## Scope & caveats
 
 - **Corrected (see round-3 MAJOR above):** `dict`/`list` subclasses are walked
