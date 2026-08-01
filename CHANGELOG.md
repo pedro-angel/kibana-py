@@ -10,6 +10,27 @@ see [CONTRIBUTING.md § Changelog Policy](CONTRIBUTING.md#changelog-policy).
 ## [Unreleased]
 
 ### Fixed
+- **A TOP-LEVEL LIST request body bypassed DEBUG-log redaction entirely**
+  ([#92](https://github.com/pedro-angel/kibana-py/issues/92), sibling of
+  [#78](https://github.com/pedro-angel/kibana-py/issues/78)). `perform_request`
+  (both `kibana/_sync/client/_base.py` and `kibana/_async/client/_base.py`) only
+  called `_redact_body_secrets` when `isinstance(body, dict)`; a body shaped as a
+  bare list — `saved_objects.bulk_create`/`bulk_get`/`bulk_resolve`/`bulk_update`/
+  `bulk_delete` and `synthetics.bulk_create_params` all send one — fell through to
+  the `elif body is not None` branch and was logged as `<%d raw bytes>` (actually
+  counting top-level elements, not bytes) instead of being redacted at all, so a
+  `secrets`/`password`/`token`/`api_key`/`apikey` key inside any element skipped
+  redaction outright rather than being caught by the existing dict/list-recursion
+  logic #78 shipped. Fixed by adding an `elif isinstance(body, (list, tuple))`
+  branch to both trees' `perform_request` that reuses the existing
+  `_redact_body_secrets_sequence` machinery unchanged — same shared recursion
+  depth cap, same plain-`list`/`tuple`-only fidelity policy, no new traversal
+  logic. A live probe against a running Kibana (`saved_objects.bulk_create` with a
+  `password`-keyed attribute on a `dynamic:false`-mapped `url`-type object, so the
+  create genuinely succeeds instead of being rejected by strict-mapping
+  validation) confirmed the pre-fix DEBUG log showed only `<1 raw bytes>` and the
+  post-fix log shows the full list with `'password': '[REDACTED]'` alongside the
+  untouched non-sensitive fields, on both the sync and async client.
 - **`tests/unit/test_observability.py::TestLogForwardingSetup::test_setup_log_forwarding_success`
   no longer risks permanently corrupting every other test's logging under
   `pytest-randomly`** ([#91](https://github.com/pedro-angel/kibana-py/issues/91),

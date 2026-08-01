@@ -501,3 +501,134 @@ class TestAsyncLogging:
         assert "hunter2" not in log_messages
         assert "[REDACTED]" in log_messages
         assert "keep-me" in log_messages
+
+    @pytest.mark.asyncio
+    async def test_debug_logging_redacts_secrets_in_top_level_list_body(
+        self, mock_async_transport, mock_response, caplog
+    ):
+        """A sensitive key inside an element of a TOP-LEVEL LIST body is
+        redacted, not just one nested inside a dict.
+
+        Async twin of the sync regression test for GitHub #92
+        (``saved_objects.bulk_create`` and the other bulk endpoints send a
+        bare list body, which bypassed ``_redact_body_secrets`` entirely).
+        """
+        from kibana._async.client._base import AsyncBaseClient
+
+        mock_async_transport.perform_request = AsyncMock(
+            return_value=mock_response(body={"saved_objects": []}, status=200)
+        )
+
+        client = AsyncBaseClient(_transport=mock_async_transport)
+        body = [
+            {"type": "tag", "attributes": {"name": "one"}},
+            {"type": "connector", "attributes": {"secrets": {"password": "hunter2"}}},
+        ]
+
+        with caplog.at_level(logging.DEBUG, logger="kibana"):
+            await client.perform_request(
+                "POST", "/api/saved_objects/_bulk_create", body=body
+            )
+
+        log_messages = " ".join(record.message for record in caplog.records)
+        assert "hunter2" not in log_messages
+        assert "[REDACTED]" in log_messages
+        assert "raw bytes" not in log_messages
+
+    @pytest.mark.asyncio
+    async def test_debug_logging_redacts_secrets_in_top_level_tuple_body(
+        self, mock_async_transport, mock_response, caplog
+    ):
+        """Tuple variant of the top-level-list case: a bare tuple body is
+        redacted element-wise too. Async twin of the sync test."""
+        from kibana._async.client._base import AsyncBaseClient
+
+        mock_async_transport.perform_request = AsyncMock(
+            return_value=mock_response(body={"saved_objects": []}, status=200)
+        )
+
+        client = AsyncBaseClient(_transport=mock_async_transport)
+        body = ({"type": "connector", "secrets": {"token": "abc123"}},)
+
+        with caplog.at_level(logging.DEBUG, logger="kibana"):
+            await client.perform_request(
+                "POST", "/api/saved_objects/_bulk_create", body=body
+            )
+
+        log_messages = " ".join(record.message for record in caplog.records)
+        assert "abc123" not in log_messages
+        assert "[REDACTED]" in log_messages
+        assert "raw bytes" not in log_messages
+
+    @pytest.mark.asyncio
+    async def test_debug_logging_top_level_empty_list_body_does_not_raise(
+        self, mock_async_transport, mock_response, caplog
+    ):
+        """An empty top-level list body is logged without error. Async twin
+        of the sync test."""
+        from kibana._async.client._base import AsyncBaseClient
+
+        mock_async_transport.perform_request = AsyncMock(
+            return_value=mock_response(body={"saved_objects": []}, status=200)
+        )
+
+        client = AsyncBaseClient(_transport=mock_async_transport)
+
+        with caplog.at_level(logging.DEBUG, logger="kibana"):
+            await client.perform_request(
+                "POST", "/api/saved_objects/_bulk_get", body=[]
+            )
+
+        mock_async_transport.perform_request.assert_called_once()
+        log_messages = " ".join(record.message for record in caplog.records)
+        assert "Request body: []" in log_messages
+
+    @pytest.mark.asyncio
+    async def test_debug_logging_top_level_list_of_scalars_untouched(
+        self, mock_async_transport, mock_response, caplog
+    ):
+        """A top-level list of plain scalars passes through unredacted and
+        unchanged. Async twin of the sync test."""
+        from kibana._async.client._base import AsyncBaseClient
+
+        mock_async_transport.perform_request = AsyncMock(
+            return_value=mock_response(body={"statuses": []}, status=200)
+        )
+
+        client = AsyncBaseClient(_transport=mock_async_transport)
+
+        with caplog.at_level(logging.DEBUG, logger="kibana"):
+            await client.perform_request(
+                "POST", "/api/saved_objects/_bulk_delete", body=["tag-1", "tag-2"]
+            )
+
+        log_messages = " ".join(record.message for record in caplog.records)
+        assert "tag-1" in log_messages
+        assert "tag-2" in log_messages
+
+    @pytest.mark.asyncio
+    async def test_debug_logging_top_level_list_body_is_not_mutated(
+        self, mock_async_transport, mock_response, caplog
+    ):
+        """The caller's original top-level list body is never modified in
+        place by DEBUG-log redaction. Async twin of the sync test."""
+        from kibana._async.client._base import AsyncBaseClient
+
+        mock_async_transport.perform_request = AsyncMock(
+            return_value=mock_response(body={"saved_objects": []}, status=200)
+        )
+
+        client = AsyncBaseClient(_transport=mock_async_transport)
+        secrets_dict = {"password": "hunter2"}
+        obj = {"type": "connector", "attributes": {"secrets": secrets_dict}}
+        body = [obj]
+
+        with caplog.at_level(logging.DEBUG, logger="kibana"):
+            await client.perform_request(
+                "POST", "/api/saved_objects/_bulk_create", body=body
+            )
+
+        assert body == [obj]
+        assert body[0] is obj
+        assert body[0]["attributes"]["secrets"] is secrets_dict
+        assert body[0]["attributes"]["secrets"]["password"] == "hunter2"

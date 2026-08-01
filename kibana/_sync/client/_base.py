@@ -584,6 +584,8 @@ class BaseClient:
             )
             if isinstance(body, dict):
                 logger.debug("Request body: %s", _redact_body_secrets(body))
+            elif isinstance(body, (list, tuple)):
+                logger.debug("Request body: %s", _redact_body_secrets_sequence(body))
             elif body is not None:
                 logger.debug("Request body: <%d raw bytes>", len(body))
 
