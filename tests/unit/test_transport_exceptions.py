@@ -1,6 +1,7 @@
 """Transport-layer exceptions from elastic_transport are translated to the
 kibana.exceptions equivalents, so users can catch the documented kibana types."""
 
+import contextlib
 from unittest.mock import AsyncMock, Mock
 
 import pytest
@@ -141,4 +142,54 @@ async def test_async_client_close_propagates_non_transport_error():
     client._transport.close = AsyncMock(side_effect=RuntimeError("disk full"))
 
     with pytest.raises(RuntimeError, match="disk full"):
+        await client.close()
+
+
+# The exact best-effort-close recipe documented on Kibana.close()'s /
+# AsyncKibana.close()'s docstrings, CHANGELOG.md, and
+# docs/evidence/close-translation-84.md. Keep this tuple in lockstep with what's
+# documented in those three places -- this test exists specifically because a
+# spec review caught `contextlib.suppress(TransportError)` alone documented as
+# the recipe, which does NOT cover `SerializationError` (it subclasses
+# `KibanaException` directly, not `TransportError` -- see the MRO assertion
+# below). A pre-fix-round run of this test with only `(TransportError,)` here
+# fails exactly one of the five parametrized cases (SerializationError) --
+# that failure is what should have caught the doc bug before it shipped.
+DOCUMENTED_CLOSE_SUPPRESS_RECIPE = (TransportError, SerializationError)
+
+
+def test_serialization_error_does_not_subclass_transport_error():
+    """Ground the recipe's premise: SerializationError is NOT a TransportError,
+    so a suppress recipe naming only TransportError silently misses it."""
+    assert not issubclass(SerializationError, TransportError)
+
+
+@pytest.mark.parametrize("et_exc, kbn_exc", CASES)
+def test_documented_close_suppress_recipe_covers_every_mapped_type_sync(
+    et_exc, kbn_exc
+):
+    """Pins that the exact documented recipe suppresses all 5 mapped types a
+    transport-layer close failure can now raise -- not just some of them."""
+    from kibana import Kibana
+
+    client = Kibana(hosts="http://localhost:5601")
+    client._transport.close = Mock(side_effect=et_exc("boom"))
+
+    with contextlib.suppress(*DOCUMENTED_CLOSE_SUPPRESS_RECIPE):
+        client.close()
+    # If the recipe didn't cover kbn_exc, it would have escaped the `with`
+    # block above and failed this test with an unhandled exception.
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("et_exc, kbn_exc", CASES)
+async def test_documented_close_suppress_recipe_covers_every_mapped_type_async(
+    et_exc, kbn_exc
+):
+    from kibana import AsyncKibana
+
+    client = AsyncKibana(hosts="http://localhost:5601")
+    client._transport.close = AsyncMock(side_effect=et_exc("boom"))
+
+    with contextlib.suppress(*DOCUMENTED_CLOSE_SUPPRESS_RECIPE):
         await client.close()

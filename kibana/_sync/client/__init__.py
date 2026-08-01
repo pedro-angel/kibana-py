@@ -355,18 +355,31 @@ class Kibana(BaseClient):
         and re-raised rather than swallowed, so a leaked connection/socket is
         visible to the caller instead of only a WARNING log line. Callers that
         want a best-effort close can wrap the call in
-        ``contextlib.suppress(kibana.exceptions.TransportError)``.
+        ``contextlib.suppress(kibana.exceptions.TransportError,
+        kibana.exceptions.SerializationError)`` -- both are needed because
+        ``SerializationError`` subclasses ``KibanaException`` directly, not
+        ``TransportError``, so ``TransportError`` alone misses it.
         """
         with translate_transport_errors():
             self._transport.close()
         logger.debug("Kibana client closed")
 
     def __enter__(self) -> Kibana:
-        """Enter context manager."""
+        """Enter context manager.
+
+        Exiting the ``with`` block calls :meth:`close`, which raises a
+        translated ``kibana.exceptions`` error on a transport-layer close
+        failure instead of swallowing it.
+        """
         return self
 
     def __exit__(self, *args: Any) -> None:
-        """Exit context manager and close client."""
+        """Exit context manager and close client.
+
+        Delegates to :meth:`close`; a transport-layer close failure raises
+        the translated ``kibana.exceptions`` error out of the ``with`` block
+        rather than being swallowed.
+        """
         self.close()
 
     def __repr__(self) -> str:
@@ -708,16 +721,27 @@ class SpaceScopedKibana:
         """
         Close the underlying client and release resources.
 
-        This delegates to the main Kibana client's close() method.
+        This delegates to the main Kibana client's close() method, including
+        its translated-raise behavior on a transport-layer close failure.
         """
         self._client.close()
 
     def __enter__(self) -> SpaceScopedKibana:
-        """Enter context manager."""
+        """Enter context manager.
+
+        Exiting the ``with`` block calls :meth:`close`, which raises a
+        translated ``kibana.exceptions`` error on a transport-layer close
+        failure instead of swallowing it.
+        """
         return self
 
     def __exit__(self, *args: Any) -> None:
-        """Exit context manager and close client."""
+        """Exit context manager and close client.
+
+        Delegates to :meth:`close`; a transport-layer close failure raises
+        the translated ``kibana.exceptions`` error out of the ``with`` block
+        rather than being swallowed.
+        """
         self.close()
 
     def __repr__(self) -> str:

@@ -355,18 +355,31 @@ class AsyncKibana(AsyncBaseClient):
         and re-raised rather than swallowed, so a leaked connection/socket is
         visible to the caller instead of only a WARNING log line. Callers that
         want a best-effort close can wrap the call in
-        ``contextlib.suppress(kibana.exceptions.TransportError)``.
+        ``contextlib.suppress(kibana.exceptions.TransportError,
+        kibana.exceptions.SerializationError)`` -- both are needed because
+        ``SerializationError`` subclasses ``KibanaException`` directly, not
+        ``TransportError``, so ``TransportError`` alone misses it.
         """
         with translate_transport_errors():
             await self._transport.close()
         logger.debug("AsyncKibana client closed")
 
     async def __aenter__(self) -> AsyncKibana:
-        """Enter async context manager."""
+        """Enter async context manager.
+
+        Exiting the ``async with`` block calls :meth:`close`, which raises a
+        translated ``kibana.exceptions`` error on a transport-layer close
+        failure instead of swallowing it.
+        """
         return self
 
     async def __aexit__(self, *args: Any) -> None:
-        """Exit async context manager and close client."""
+        """Exit async context manager and close client.
+
+        Delegates to :meth:`close`; a transport-layer close failure raises
+        the translated ``kibana.exceptions`` error out of the ``async with``
+        block rather than being swallowed.
+        """
         await self.close()
 
     async def space(
@@ -597,16 +610,28 @@ class AsyncSpaceScopedKibana:
         """
         Close the underlying client and release resources.
 
-        This delegates to the main AsyncKibana client's close() method.
+        This delegates to the main AsyncKibana client's close() method,
+        including its translated-raise behavior on a transport-layer close
+        failure.
         """
         await self._client.close()
 
     async def __aenter__(self) -> AsyncSpaceScopedKibana:
-        """Enter async context manager."""
+        """Enter async context manager.
+
+        Exiting the ``async with`` block calls :meth:`close`, which raises a
+        translated ``kibana.exceptions`` error on a transport-layer close
+        failure instead of swallowing it.
+        """
         return self
 
     async def __aexit__(self, *args: Any) -> None:
-        """Exit async context manager and close client."""
+        """Exit async context manager and close client.
+
+        Delegates to :meth:`close`; a transport-layer close failure raises
+        the translated ``kibana.exceptions`` error out of the ``async with``
+        block rather than being swallowed.
+        """
         await self.close()
 
     def __repr__(self) -> str:

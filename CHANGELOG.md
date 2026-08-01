@@ -27,7 +27,10 @@ see [CONTRIBUTING.md § Changelog Policy](CONTRIBUTING.md#changelog-policy).
   longer caught at all, so it propagates as-is (same "translate-or-propagate"
   convention the request path already follows). Callers that relied on the old
   best-effort swallow and want that behavior back can wrap the call in
-  `contextlib.suppress(kibana.exceptions.TransportError)`. `__enter__`/`__exit__`
+  `contextlib.suppress(kibana.exceptions.TransportError,
+  kibana.exceptions.SerializationError)` — both are required: `SerializationError`
+  subclasses `KibanaException` directly, not `TransportError`, so `TransportError`
+  alone does not suppress it. `__enter__`/`__exit__`
   and `__aenter__`/`__aexit__` are unchanged — they still just delegate to
   `close()`/`await close()`, matching `elasticsearch-py`'s own `Elasticsearch.__exit__`,
   which has no masking-avoidance of its own either; if the `with`/`async with` body
