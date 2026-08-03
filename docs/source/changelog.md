@@ -8,6 +8,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 (unreleased)=
 ## Unreleased
 
+(v0.5.0)=
+## [0.5.0] - 2026-08-03
+
+### Changed
+
+These are backward-incompatible — caller code that previously succeeded can now raise, and one OTLP default changes destination. That is why this is a minor bump rather than a patch: `~=0.4.2` or `^0.4.2` would have admitted a patch automatically, upgrading a running deployment into a constructor that rejects host strings it used to accept.
+
+- **A scheme-less host string is now rejected instead of silently routing to `localhost`.** `Kibana("myhost:5601")` was parsed by `urlparse` as `scheme='myhost', host='localhost', port=5601`, so every request quietly went to localhost. Such a string now raises `ValueError` telling you to include the scheme.
+- **Non-finite floats in a request body now raise `SerializationError`.** The orjson backend silently wrote `NaN`/`Infinity` as `null` and the request succeeded; the stdlib backend emitted invalid JSON. Both backends now reject them, and both serialize `UUID` consistently.
+- **`close()` now translates and re-raises transport-layer errors** on both clients instead of swallowing them, so a failed close is visible rather than silent.
+- **A malformed `space_id` fails identically in async and sync.** Async previously made a network call and raised `SpaceNotFoundError` (negative-caching the bad key); it now raises `InvalidSpaceIdError` locally, before any request, like sync.
+- **A missing gRPC OTLP exporter raises `ImportError` instead of failing silently.** `configure_opentelemetry(protocol="grpc")` without `opentelemetry-exporter-otlp-proto-grpc` installed used to mask the error and export nothing.
+- **`configure_opentelemetry(protocol="http/protobuf")` now reaches the right endpoint.** The default port changes 4317 → 4318 and `/v1/traces` is appended for explicit HTTP endpoints, so spans stop 404-ing.
+
+### Fixed
+
+- Response bodies logged at DEBUG are now redacted. `saved_objects.bulk_create` returns the objects it just created, attributes included, so a credential sent in a request came straight back out in cleartext. Request bodies had been redacted since 0.4.x; responses now use the same machinery, redacting the object before rendering so truncation cannot emit an unscrubbed prefix. A `bytes` body now logs its length rather than its content.
+- Credentials nested in list-valued and top-level-list request bodies are redacted, closing the last gaps in request-body redaction.
+- `configure_opentelemetry()` is idempotent — repeat calls no longer stack log handlers or duplicate exporters, and reconfiguring with a new endpoint is no longer a silent no-op.
+- Space-validation caching is fixed: `spaces.create()`/`delete()` invalidate the cache (a created space no longer stays "missing" for the TTL), and one cache is shared per client rather than one per namespace.
+- `import kibana` no longer crashes on a partial OpenTelemetry install, and a missing logs SDK no longer breaks log forwarding.
+- The APM connectivity probe supports IPv6 and caps its worst-case wait.
+- Developer tooling: `make audit` self-heals stale base build tools, the release pipeline depends on the integration gate directly, and the make-target vocabulary gate is consumed as a pinned hook rather than a vendored script.
+
+See the [root CHANGELOG](https://github.com/pedro-angel/kibana-py/blob/main/CHANGELOG.md) for full detail.
+
 (v0.4.2)=
 ## [0.4.2] - 2026-07-15
 
@@ -406,7 +432,7 @@ When version 1.0 is released, this section will contain upgrade instructions.
 
 ## Support
 
-- **Current stable**: 0.1.x (when released)
+- **Current stable**: 0.5.x
 - **Python support**: 3.11+
 - **Kibana support**: 9.x
 
@@ -417,7 +443,8 @@ When version 1.0 is released, this section will contain upgrade instructions.
 - [PyPI Package](https://pypi.org/project/kibana-py/)
 - [Documentation](https://kibana-py.readthedocs.io/)
 
-[Unreleased]: https://github.com/pedro-angel/kibana-py/compare/v0.4.2...HEAD
+[Unreleased]: https://github.com/pedro-angel/kibana-py/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/pedro-angel/kibana-py/releases/tag/v0.5.0
 [0.4.2]: https://github.com/pedro-angel/kibana-py/releases/tag/v0.4.2
 [0.4.1]: https://github.com/pedro-angel/kibana-py/releases/tag/v0.4.1
 [0.4.0]: https://github.com/pedro-angel/kibana-py/releases/tag/v0.4.0
