@@ -10,6 +10,30 @@ see [CONTRIBUTING.md § Changelog Policy](CONTRIBUTING.md#changelog-policy).
 ## [Unreleased]
 
 ### Fixed
+- **The `vocabulary_conformant` gate and the `checks` CI job both pointed at a
+  script that no longer exists.** Dev-facing only — no shipped code changed.
+  De-vendoring the methodology pack removed `skills/`, which was correct for the
+  23 skill documents an agent reads from a user-level tier, but that same folder
+  also held `vocabulary-conformance.sh` and its manifest — a program executed by
+  `make dod` and by `.github/workflows/checks.yml`, not a document. Both callers
+  were left invoking a deleted path (`exit 127`), so the local gate NO-GO'd and
+  the CI job would have failed on the first push. The checker is now consumed the
+  same way every other executable control is: as a pinned `git-controls-starter`
+  hook (`vocabulary-conformance`, added there in v1.4.0), with the manifest
+  travelling alongside it rather than being vendored per repo. A new `make
+  vocabulary` leaf gives the DoD gate its own criterion and fails loudly if the
+  hook is ever dropped from `.pre-commit-config.yaml`; the dedicated CI step is
+  gone because `pre-commit run --all-files` now covers it. The starter pin also
+  moves `v1.2.0` → `v1.4.0`, picking up the pending v1.3.0 (layered security
+  scanning; the four sibling control scripts gained one `shellcheck disable`
+  comment each and are otherwise unchanged).
+- **Removed `.github/workflows/methodology-sync.yml`.** Its weekly `rsync
+  --delete` restored `skills/`, `AGENTS.md`, and `CLAUDE.md` from upstream — it
+  would have re-vendored exactly what the de-vendoring removed. It had also been
+  failing every scheduled run since 2026-07-13 (`GitHub Actions is not permitted
+  to create or approve pull requests`), so no sync has landed since 2026-07-10.
+  The same repository setting still blocks `pre-commit-autoupdate.yml`, which is
+  why this change bumps the starter pin by hand.
 - **`TestImportGuardMatrix`'s "must stay quiet" assertions could fail on a benign
   gRPC fork diagnostic, not a real kibana-py warning**
   ([#100](https://github.com/pedro-angel/kibana-py/issues/100)). Dev-facing only —

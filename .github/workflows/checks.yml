@@ -23,6 +23,7 @@ jobs:
       - run: python -m pip install --upgrade pre-commit
       - run: pre-commit run --all-files --show-diff-on-failure
       - run: pre-commit run check-pin-comments-match --hook-stage manual --all-files
-      # Make targets conform to the methodology's shared vocabulary — runs the
-      # vendored reference checker (skills/ syncs weekly from agent-methodology).
-      - run: skills/dev-environment-facade/vocabulary-conformance.sh
+      # No dedicated vocabulary step: `vocabulary-conformance` is a normal-stage hook in
+      # the pinned git-controls-starter block, so `pre-commit run --all-files` above
+      # already runs it. It used to invoke a vendored copy under skills/, which the
+      # methodology de-vendoring deleted out from under this job.
