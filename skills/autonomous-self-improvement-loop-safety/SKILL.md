@@ -19,10 +19,11 @@ Red-flag thoughts — if you catch yourself thinking any of these, STOP and appl
 - "We tested the branch; deploying from the cache is the same bytes."
 - "The prompt tells the worker not to touch the guards, so it won't."
 - "It can open the merge itself — a human reviewing every one is slow."
+- "I can edit the guard or hook that mediates this very cycle." (isolation must be enforcement-scoped, not merely workspace-scoped)
 
 ## The rule
 
-1. **Run each cycle in a disposable, freshly-cloned workspace** with its own isolated, throwaway configuration, and destroy it at the end. Never let the loop edit its own running tree — a bad cycle must cost nothing and touch nothing live.
+1. **Run each cycle in a disposable, freshly-cloned workspace** with its own isolated, throwaway configuration, and destroy that workspace — it alone — at the end. Never let the loop edit its own running tree — a bad cycle must cost nothing and touch nothing live.
 2. **Decide success by mechanism, not by the worker's claim.** The authoritative signal that a change happened is a deterministic check of the workspace (version-control status, a real diff) — never the worker's own "done." A run that wrote nothing is a clean no-go, never an empty or hallucinated result. (→ [grounded-verifiable-gates](../grounded-verifiable-gates/SKILL.md))
 3. **Bind tested == shipped.** The exact artifact that passed the gate — its content digest, or the source revision when you deploy from a fresh checkout with no build cache — must be the one deployed or proposed. A self-modifying loop is especially prone to shipping from a stale cache it never invalidated. (→ [battle-testing-on-real-infra](../battle-testing-on-real-infra/SKILL.md))
 4. **Keep a recurring adversarial self-review that assumes the gate is blind.** For every change that touches a trust boundary, run an independent pass whose job is to *refute* it — to find the identity forge, the fail-open alias, the ordering bug that only appears under real execution. The gate proves the build runs; the adversary raises confidence by trying and failing to break it, surfacing what a green suite structurally cannot see. Run it every time; it earns its keep on the bugs the gate is blind to.
@@ -45,6 +46,7 @@ Picture an autonomous agent that proposes improvements to its own codebase. Each
 - Deploying from a cache the build step never invalidated, so the gate blessed different bytes than ship.
 - Leaning on the green gate alone for trust-boundary changes it structurally cannot see.
 - A generation worker that can merge its own proposal, or that runs with live privilege instead of in a sandbox.
+- Hot-editing the guard, permission mode, or hook that mediates the *current* cycle — isolation must be enforcement-scoped, not merely workspace-scoped: the modifier runs under a pinned, known-good enforcement snapshot while it edits the next version. (→ [structural-security-boundary](../structural-security-boundary/SKILL.md), [currency-and-audit-before-trust](../currency-and-audit-before-trust/SKILL.md))
 
 ## Enforcement
 
@@ -57,3 +59,4 @@ All of it is enforcement, by design. The fresh-clone assertion (the workspace mu
 - [structural-security-boundary](../structural-security-boundary/SKILL.md)
 - [reversible-by-default-confirm-consequential](../reversible-by-default-confirm-consequential/SKILL.md)
 - [honest-reframing-over-overclaiming](../honest-reframing-over-overclaiming/SKILL.md)
+- [currency-and-audit-before-trust](../currency-and-audit-before-trust/SKILL.md)

@@ -23,6 +23,13 @@ Red-flag thoughts — if you catch yourself thinking any of these, STOP and writ
 - "I'll document it later when I clean up." (Later never comes; the rationale is freshest now.)
 - "The old note says X, so X." (Notes go stale — verify before you trust.)
 
+And the mirror-image red flags — these mean STOP and do **not** write (or delete what you wrote):
+
+- "I'll keep this in case it changes." (Speculation is not the trigger; a fact captured for a hypothetical future is noise today.)
+- "Better to have it than not." (Every note taxes every future recall; the store's value is precision, not coverage.)
+- The note restates a document it links to. (Point at the artifact; don't fork its content.)
+- You are appending narrative status to the same note every session. (That's a journal, not memory.)
+
 ## The rule
 
 1. **Capture at the moment of discovery.** When the rationale is fresh, write a note stating the decision *and* its exact remediation or workaround. Don't wait for a cleanup pass.
@@ -32,10 +39,15 @@ Red-flag thoughts — if you catch yourself thinking any of these, STOP and writ
 5. **Cross-link into a graph, not a pile.** When two notes relate, link them to each other and to the durable project doc (README, ops runbook, ADR) — so a future session that lands on one note follows the link to the related rationale and the canonical doc instead of re-deriving the connection. Explicit links beat re-explaining the same context inline in each note.
 6. **Track completion state in the index.** Mark workstreams as queued / in-progress / done so a resuming session knows what's live without re-reading everything.
 7. **Verify stale or surprising claims before acting on them — but only when it matters.** Re-check a note against current reality (run the command, hit the API, read the current config) *before it drives an irreversible or load-bearing action, or when it predates a known change to the system it describes*; a routine read of a fresh note needs no ceremony. If reality changed, update the note *in place* — don't leave a contradicted note standing.
+8. **Capture only what earns its keep.** The trigger is "would otherwise be re-derived" — nothing else qualifies. A fact kept "in case it changes", a restated document, a status narrative: none of these meet it. Memory is a bounded cache read into a limited context, not an archive. When this pulls against rule 1 — you're at the moment of discovery and can't yet tell whether the fact will be re-derived — this rule wins: a note you can't justify now, you won't justify later.
+9. **Pointer over copy.** When the fact already lives in a durable artifact — a spec, a brief, an ADR, the code — the note is one line and a link. A copied fact forks the truth and the two copies rot independently.
+10. **Prune as you write.** Adding a note includes deleting or merging whatever notes in this same store it obsoletes — the store's own entries, never external docs or artifacts a note happens to reference. A store that only grows is not accumulating judgment; it is diluting it, and dragging stale vocabulary into every future task.
 
 ## Why
 
 The expensive part of agent work is not typing code — it's the reasoning that produced a non-obvious choice. That reasoning is path-dependent: it took a failed attempt, a confusing error, or a careful experiment to arrive at. If it evaporates with the chat, the next session repeats the failure, re-reads the same docs, and re-runs the same dead-end experiment. A two-line indexed note converts that one-time cost into a permanent asset. The index and cross-links are what make it *retrievable* — an un-indexed note is nearly as lost as no note. And the verify step is what keeps the memory trustworthy: a stale note that's blindly trusted is worse than no note, because it actively misleads.
+
+The counterweight matters as much as the capture. Recall is not free: every note competes for the next session's limited context, so a hoarded note displaces a load-bearing one and poisons unrelated tasks with stale vocabulary. Over-capture fails silently — the store looks diligent while recall quality degrades — which is why the brake (earn its keep, pointer over copy, prune as you write) is a rule and not a taste.
 
 ## In practice
 
@@ -47,10 +59,11 @@ On the project this was distilled from — a hexagonal, human-in-the-loop AI age
 - Dumping many facts into one sprawling note with no index and no cross-links — unfindable, so effectively unwritten.
 - Trusting an old note without re-checking it against current reality — and acting on a claim that has silently gone false.
 - Leaving a note that new findings have contradicted unedited — letting the memory rot into a trap for the next reader.
+- The archive instinct: capturing "in case", restating documents the note could link, journaling status into the store — growth without a trigger is dilution, not diligence.
 
 ## Enforcement
 
-What a machine can check: that no note can be silently orphaned. An index-completeness check — every note linked from the index, every link resolving (this pack's own check-readme-index and check-crosslinks-resolve are the worked pattern) — and dates on every note so staleness is at least visible. Whether a note still holds is judgment the skill already assigns (verify before trusting); the machine just guarantees you can find what needs verifying.
+What a machine can check: that no note can be silently orphaned, and that the store cannot grow without bound. An index-completeness check — every note linked from the index, every link resolving (this pack's own check-readme-index and check-crosslinks-resolve are the worked pattern) — dates on every note so staleness is at least visible, and a size budget on the index and per-note length (the auto-load-cap pattern: a store read into context earns a byte ceiling). Whether a note still holds, and whether it earns its keep at all, is judgment the skill assigns; the machine guarantees you can find what needs verifying and feel it when the store bloats.
 
 ---
 

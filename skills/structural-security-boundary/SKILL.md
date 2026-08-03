@@ -18,6 +18,7 @@ Red-flag thoughts — if you catch yourself thinking any of these, STOP and appl
 - "It runs as the same user, but we check the path first." (same-privilege code can rewrite the check)
 - "We'll add a deny-list." (deny-lists enumerate the bypasses you thought of; the attacker finds the others)
 - "The isolation is structural." (is the separate UID / mount / namespace actually provisioned, or just planned?)
+- "I'll just hot-edit the guard while it's running." (the edit can disable the very check that would have caught it)
 
 ## The rule
 
@@ -28,6 +29,7 @@ Red-flag thoughts — if you catch yourself thinking any of these, STOP and appl
 5. **When you cannot make it structural yet, say so — and pin it.** Name the residual exactly (what this does NOT contain, and the precise bypass), and encode it as a passing-by-design test so a future change cannot silently erode it. Structure is not resistance until proven. (→ [honest-reframing-over-overclaiming](../honest-reframing-over-overclaiming/SKILL.md))
 6. **Let a machine enforce the seam, not reviewer vigilance.** Encode the boundary where the build or the platform applies it automatically — an import contract the build fails on, a policy the orchestrator applies at spawn, an init system that mounts it read-only — so the isolation survives the next contributor who never read this. This is the build-time/architecture seam that keeps rule 1's runtime boundary in place. (→ [hexagonal-with-enforced-contracts](../hexagonal-with-enforced-contracts/SKILL.md))
 7. **Never self-certify a security change.** A trust-boundary change is reviewed by someone who did not write it; the gate flags it for that owner review rather than blessing it automatically. (→ [reversible-by-default-confirm-consequential](../reversible-by-default-confirm-consequential/SKILL.md))
+8. **Don't run under the guard you are editing; keep the trusted base small and prove isolation empirically.** When the actor modifies the very mechanism that governs it — the hooks, permission mode, launcher, or enforcement code mediating its own session — a same-domain guard is doubly worthless: the edit can disable the check that would have caught it. Modify the *next* version in a disposable checkout under a **pinned, known-good enforcement snapshot**; never hot-edit or hot-reload a guard mediating the editing session itself. Keep the enforcement surface — the trusted computing base — **small and fully enumerated** (identity seam, tool-dispatch guards, hook wiring, permission mode, launcher, the merge gate): tamperproofness can only be claimed on a surface small enough to audit whole. And prove the isolation **empirically, not by assertion** — the modifier runs under an identity that is denied the two writes it must not make — a hard filesystem `EACCES` writing the enforcement code, and a *rejected push* to the protected branch (branch protection, or a credential that structurally cannot merge — an authorization/remote error, not an OS one). Capture each denial as the evidence; a disposable checkout bounds accidents but is not, by itself, containment. (→ [autonomous-self-improvement-loop-safety](../autonomous-self-improvement-loop-safety/SKILL.md))
 
 ## Why
 
@@ -44,10 +46,11 @@ Consider an agent platform that runs a write-capable worker. A command-pattern g
 - A same-privilege check guarding state the guarded process can itself overwrite.
 - Claiming "structural isolation" while the isolating mechanism is only planned, with no labelled residual.
 - Self-certifying a trust-boundary change instead of routing it to an independent owner review.
+- Hot-editing or hot-reloading the guard, permission mode, or hook that mediates the current editing session.
 
 ## Enforcement
 
-What a machine can check: the boundary, by failing through it. Tests where the sandboxed identity attempts the forbidden write or exec and pass only on the permission error; named residuals pinned as passing-by-design tests so a cooperative check can never masquerade as containment; CI running the worker under the restricted identity, not root. A guard you cannot write a failing test against is not a boundary — it's a hope with a comment.
+What a machine can check: the boundary, by failing through it. Tests where the sandboxed identity attempts the forbidden write or exec and pass only on the permission error; named residuals pinned as passing-by-design tests so a cooperative check can never masquerade as containment; CI running the worker under the restricted identity, not root. When the actor edits its own governing mechanism, the enforcement snapshot it runs under is pinned, and each denial is captured as evidence rather than asserted — a filesystem permission error (`EACCES`) writing the enforcement code, and a rejected push to the protected branch (an authorization/remote failure, not an OS error). A guard you cannot write a failing test against is not a boundary — it's a hope with a comment.
 
 ## Related
 
