@@ -176,6 +176,51 @@ def _redact_nested_body_value(value: Any, _depth: int) -> Any:
     return value
 
 
+_RESPONSE_LOG_MAX_CHARS = 500
+_RESPONSE_LOG_TRUNCATION_SUFFIX = "... [truncated]"
+
+
+def _format_response_body_for_log(body: Any) -> str:
+    """
+    Render a response body for DEBUG logging, redacted and length-capped.
+
+    Response bodies were logged as a bare ``str(body)`` until GitHub #102, so
+    every secret a Kibana endpoint echoed back arrived in the log in
+    cleartext -- ``saved_objects.bulk_create`` returns the objects it just
+    created, attributes included, which is exactly the credential the caller
+    had sent. The request side had been redacted since #78/#92; this routes
+    the response side through the same machinery.
+
+    **Redaction happens on the object, before rendering.** Truncating first
+    and scrubbing the resulting string cannot work -- ``_redact_body_secrets``
+    walks structure, not text -- and would emit the first
+    ``_RESPONSE_LOG_MAX_CHARS`` characters verbatim, secrets included.
+
+    Dispatch mirrors the request side: mappings and sequences recurse through
+    the shared traversal (depth cap and fidelity policy included), and an
+    opaque ``bytes`` body reports its length instead of its content, since
+    there is no structure to redact and an export endpoint can return NDJSON
+    carrying credentials. Anything else (notably a ``str`` body from
+    ``TextApiResponse``) renders as before: it has no fields to redact, and
+    the length cap still applies.
+
+    :param body: Parsed response body, as wrapped by :func:`wrap_api_response`
+    :return: Log-safe rendering, truncated past ``_RESPONSE_LOG_MAX_CHARS``
+    """
+    if isinstance(body, dict):
+        rendered = str(_redact_body_secrets(body))
+    elif isinstance(body, (list, tuple)):
+        rendered = str(_redact_body_secrets_sequence(body))
+    elif isinstance(body, (bytes, bytearray)):
+        return f"<{len(body)} raw bytes>"
+    else:
+        rendered = str(body)
+
+    if len(rendered) > _RESPONSE_LOG_MAX_CHARS:
+        rendered = rendered[:_RESPONSE_LOG_MAX_CHARS] + _RESPONSE_LOG_TRUNCATION_SUFFIX
+    return rendered
+
+
 def encode_query_params(params: Mapping[str, Any]) -> str:
     """Encode query parameters the way Kibana expects.
 
@@ -670,11 +715,11 @@ class BaseClient:
                 "Request completed successfully with status %s",
                 status,
             )
-            # Log response body for debugging (truncate if too large)
-            body_str = str(response.body)
-            if len(body_str) > 500:
-                body_str = body_str[:500] + "... [truncated]"
-            logger.debug("Response body: %s", body_str)
+            # Redacted and truncated for debugging -- redaction runs on the
+            # object first, so truncation can never emit an unscrubbed prefix.
+            logger.debug(
+                "Response body: %s", _format_response_body_for_log(response.body)
+            )
 
         return response
 

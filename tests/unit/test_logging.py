@@ -365,6 +365,109 @@ class TestRequestResponseLogging:
         # Check that response was truncated
         assert any("[truncated]" in record.message for record in caplog.records)
 
+    def _respond(self, mock_transport, body):
+        """Point the mock transport at ``body`` as the response payload."""
+        mock_transport.perform_request.return_value = ObjectApiResponse(
+            body=body,
+            meta=ApiResponseMeta(
+                status=200,
+                headers={},
+                http_version="1.1",
+                duration=0.1,
+                node=None,
+            ),
+        )
+
+    def test_debug_logging_redacts_response_body_secrets(
+        self, client, mock_transport, caplog
+    ):
+        """Secrets echoed back in a response body are redacted (GitHub #102).
+
+        ``saved_objects.bulk_create`` returns the objects it created, attributes
+        included -- so a credential sent in the request came straight back out
+        in cleartext even though the request side had been redacted since #78.
+        """
+        self._respond(
+            mock_transport,
+            {
+                "saved_objects": [
+                    {
+                        "id": "conn-1",
+                        "attributes": {"name": "my-webhook", "password": "hunter2"},
+                    }
+                ]
+            },
+        )
+
+        with caplog.at_level(logging.DEBUG, logger="kibana"):
+            client.perform_request("POST", "/api/saved_objects/_bulk_create")
+
+        log_messages = " ".join(record.message for record in caplog.records)
+        assert "hunter2" not in log_messages
+        assert "[REDACTED]" in log_messages
+        assert "my-webhook" in log_messages
+
+    def test_debug_logging_redacts_list_shaped_response_body(
+        self, client, mock_transport, caplog
+    ):
+        """A top-level JSON array response is redacted element by element.
+
+        The request side gained list/tuple traversal in #92; responses wrap a
+        list body as ``ListApiResponse``, so the same shape reaches the log.
+        """
+        self._respond(
+            mock_transport,
+            [{"name": "first", "api_key": "sk-live-abc123"}, {"name": "second"}],
+        )
+
+        with caplog.at_level(logging.DEBUG, logger="kibana"):
+            client.perform_request("GET", "/api/actions/connectors")
+
+        log_messages = " ".join(record.message for record in caplog.records)
+        assert "sk-live-abc123" not in log_messages
+        assert "[REDACTED]" in log_messages
+        assert "second" in log_messages
+
+    def test_debug_logging_redacts_response_before_truncating(
+        self, client, mock_transport, caplog
+    ):
+        """Redaction runs on the object, not on the rendered string.
+
+        Truncating first and redacting after cannot work -- the machinery walks
+        structure, not text -- and would emit the first 500 characters verbatim,
+        secrets included. This body puts the secret well inside that window.
+        """
+        self._respond(
+            mock_transport,
+            {"token": "super-secret-value", "padding": "x" * 1000},
+        )
+
+        with caplog.at_level(logging.DEBUG, logger="kibana"):
+            client.perform_request("GET", "/api/test")
+
+        log_messages = " ".join(record.message for record in caplog.records)
+        assert "super-secret-value" not in log_messages
+        assert "[REDACTED]" in log_messages
+        assert "[truncated]" in log_messages
+
+    def test_debug_logging_binary_response_body_logs_size_not_content(
+        self, client, mock_transport, caplog
+    ):
+        """A bytes response logs its length, never its bytes.
+
+        Redaction cannot traverse an opaque blob, and an export endpoint can
+        return NDJSON carrying credentials. This mirrors what the request side
+        already does for a raw body (``<N raw bytes>``).
+        """
+        self._respond(mock_transport, b'{"password": "hunter2"}')
+
+        with caplog.at_level(logging.DEBUG, logger="kibana"):
+            client.perform_request("GET", "/api/saved_objects/_export")
+
+        log_messages = " ".join(record.message for record in caplog.records)
+        assert "hunter2" not in log_messages
+        assert "23 raw bytes" in log_messages
+
     def test_no_debug_logging_when_disabled(self, client, mock_transport, caplog):
         """Test that DEBUG logs are not generated when logging level is higher."""
         with caplog.at_level(logging.INFO, logger="kibana"):

@@ -10,6 +10,29 @@ see [CONTRIBUTING.md § Changelog Policy](CONTRIBUTING.md#changelog-policy).
 ## [Unreleased]
 
 ### Fixed
+- **Response bodies logged at DEBUG were never redacted, so secrets a Kibana
+  endpoint echoed back appeared in logs in cleartext**
+  ([#102](https://github.com/pedro-angel/kibana-py/issues/102)). `_process_response`
+  rendered the body with a bare `str(response.body)` in both the sync and async
+  clients. Request bodies had been redacted since #78 (dicts) and #92
+  (lists/tuples), so a caller could reasonably read DEBUG logging as safe — while
+  `saved_objects.bulk_create`, which returns the objects it just created with
+  their attributes, handed the caller's own credential straight back into the log.
+  Response bodies now go through the same machinery, with the same depth cap and
+  fidelity policy: mappings and sequences are traversed and their sensitive keys
+  replaced with `[REDACTED]`, while non-secret fields are preserved. Redaction
+  runs on the object **before** rendering, so the 500-character truncation can
+  never emit an unscrubbed prefix; the cap and its `... [truncated]` suffix are
+  otherwise unchanged. **Behavior change:** a `bytes` response body now logs as
+  `<N raw bytes>` instead of its content — there is no structure to redact in an
+  opaque blob, and an export endpoint can return NDJSON carrying credentials.
+  This matches what the request side already does for a raw body. A `str` body
+  (from `TextApiResponse`) logs as before. The error branch (`status >= 400`)
+  logged only the extracted message and is unchanged. Verified live against a
+  real `bulk_create`: the same response that previously rendered
+  `'password': 'hunter2-live-battletest'` now renders `'password': '[REDACTED]'`
+  with the non-secret `title` intact — evidence in
+  `docs/evidence/redact-response-bodies-102.md`.
 - **The `vocabulary_conformant` gate and the `checks` CI job both pointed at a
   script that no longer exists.** Dev-facing only — no shipped code changed.
   De-vendoring the methodology pack removed `skills/`, which was correct for the
