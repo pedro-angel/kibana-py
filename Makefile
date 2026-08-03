@@ -100,6 +100,15 @@ hooks: ## Run pre-commit-stage hooks on all files (plus the manual-stage pin che
 	$(VENV_BIN)/pre-commit run --all-files
 	$(VENV_BIN)/pre-commit run check-pin-comments-match --hook-stage manual --all-files
 
+.PHONY: vocabulary
+vocabulary: ## Check make target names against the shared cross-repo vocabulary
+	@# Delegates to the pinned git-controls-starter hook. `make hooks` already runs
+	@# it as part of `pre-commit run --all-files`; this leaf exists so the DoD gate
+	@# can report vocabulary_conformant as its own criterion, and so dropping the
+	@# hook from .pre-commit-config.yaml fails loudly here (unknown id exits 1)
+	@# rather than silently removing a gate.
+	$(VENV_BIN)/pre-commit run vocabulary-conformance --all-files
+
 .PHONY: lint
 lint: ## Run mypy type checker
 	$(VENV_BIN)/mypy kibana/

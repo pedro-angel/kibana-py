@@ -52,7 +52,7 @@ repos:
   # the weekly autoupdate workflow bumps `rev` via PR, so gate changes arrive as
   # reviewable diffs with provenance instead of vendored copies drifting silently.
   - repo: https://github.com/pedro-angel/git-controls-starter
-    rev: v1.2.0
+    rev: v1.4.0
     hooks:
       - id: check-no-tracked-secrets
       - id: check-one-pin-per-action
@@ -62,3 +62,7 @@ repos:
         # manual stage upstream (needs network); CI invokes it explicitly
       - id: check-diagrams-rendered
         # manual stage upstream (needs built HTML); `make docs` invokes it after the build
+      - id: vocabulary-conformance
+        # normal stage: no network, no prior build, ~0.3s. Replaces the checker that
+        # used to live at skills/dev-environment-facade/ before the methodology was
+        # de-vendored; the manifest now travels with the hook, so nothing is vendored.
