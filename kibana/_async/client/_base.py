@@ -20,6 +20,7 @@ from kibana._space_cache import SpaceValidationCache
 from kibana._sync.client._base import (
     DEFAULT,
     DefaultType,
+    _format_response_body_for_log,
     _redact_body_secrets,
     _redact_body_secrets_sequence,
     _redact_sensitive_headers,
@@ -284,11 +285,11 @@ class AsyncBaseClient:
                 "Async request completed successfully with status %s",
                 status,
             )
-            # Log response body for debugging (truncate if too large)
-            body_str = str(response.body)
-            if len(body_str) > 500:
-                body_str = body_str[:500] + "... [truncated]"
-            logger.debug("Response body: %s", body_str)
+            # Redacted and truncated for debugging -- redaction runs on the
+            # object first, so truncation can never emit an unscrubbed prefix.
+            logger.debug(
+                "Response body: %s", _format_response_body_for_log(response.body)
+            )
 
         return response
 

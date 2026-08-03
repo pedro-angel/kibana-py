@@ -418,6 +418,70 @@ class TestAsyncLogging:
         assert "my-webhook" in log_messages
 
     @pytest.mark.asyncio
+    async def test_debug_logging_redacts_response_body_secrets(
+        self, mock_async_transport, mock_response, caplog
+    ):
+        """Secrets echoed back in a response body are redacted.
+
+        Async twin of the sync regression test for GitHub #102.
+        """
+        from kibana._async.client._base import AsyncBaseClient
+
+        mock_async_transport.perform_request = AsyncMock(
+            return_value=mock_response(
+                body={
+                    "saved_objects": [
+                        {
+                            "id": "conn-1",
+                            "attributes": {"name": "my-webhook", "password": "hunter2"},
+                        }
+                    ]
+                },
+                status=200,
+            )
+        )
+
+        client = AsyncBaseClient(_transport=mock_async_transport)
+
+        with caplog.at_level(logging.DEBUG, logger="kibana"):
+            await client.perform_request("POST", "/api/saved_objects/_bulk_create")
+
+        log_messages = " ".join(record.message for record in caplog.records)
+        assert "hunter2" not in log_messages
+        assert "[REDACTED]" in log_messages
+        assert "my-webhook" in log_messages
+
+    @pytest.mark.asyncio
+    async def test_debug_logging_redacts_list_shaped_response_body(
+        self, mock_async_transport, mock_response, caplog
+    ):
+        """A top-level JSON array response is redacted element by element.
+
+        Async twin of the sync regression test for GitHub #102.
+        """
+        from kibana._async.client._base import AsyncBaseClient
+
+        mock_async_transport.perform_request = AsyncMock(
+            return_value=mock_response(
+                body=[
+                    {"name": "first", "api_key": "sk-live-abc123"},
+                    {"name": "second"},
+                ],
+                status=200,
+            )
+        )
+
+        client = AsyncBaseClient(_transport=mock_async_transport)
+
+        with caplog.at_level(logging.DEBUG, logger="kibana"):
+            await client.perform_request("GET", "/api/actions/connectors")
+
+        log_messages = " ".join(record.message for record in caplog.records)
+        assert "sk-live-abc123" not in log_messages
+        assert "[REDACTED]" in log_messages
+        assert "second" in log_messages
+
+    @pytest.mark.asyncio
     async def test_debug_logging_pathologically_deep_dict_body_does_not_raise(
         self, mock_async_transport, mock_response, caplog
     ):
