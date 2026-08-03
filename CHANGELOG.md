@@ -9,7 +9,180 @@ see [CONTRIBUTING.md § Changelog Policy](CONTRIBUTING.md#changelog-policy).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-08-03
+
+### Changed
+
+These are backward-incompatible: caller code that previously succeeded can now
+raise, and one OTLP default changes destination. This is why the release is a
+minor bump rather than a patch -- `~=0.4.2` or `^0.4.2` would have admitted a
+patch automatically.
+
+- **A scheme-less host string no longer silently routes traffic to
+  `localhost`.** `_build_node_configs` (`kibana/_sync/client/__init__.py`,
+  shared by `AsyncKibana` via import) parsed host strings with `urlparse`,
+  which mis-parses a scheme-less string like `"myhost:5601"` into
+  `scheme='myhost', host='localhost', port=5601` — so `Kibana("myhost:5601")`
+  silently sent every request to `localhost` with a bogus scheme and path
+  prefix instead of failing
+  ([#71](https://github.com/pedro-angel/kibana-py/issues/71)). A string host
+  whose parsed form has no scheme or no hostname (e.g. `"myhost:5601"`,
+  `"myhost"`, `"http://"`, or `"://"`) now raises a `ValueError` naming the
+  offending input and the expected form (`http://host:port` or
+  `https://host:port`) before any transport is built. The check parses first
+  and inspects the result — a plain substring check for `"://"` would still
+  let `"http://"` (empty host) and `"host/path?q=a://b"` (`://` appearing
+  outside the scheme separator) through. The fix rejects rather than guesses
+  a default scheme, since silently assuming `http://` would surprise TLS
+  deployments; valid `http://`/`https://` strings (including odd-but-parsable
+  schemes), dict hosts, and `cloud_id` are unaffected.
+
+- **Request-body JSON semantics diverged between the stdlib and orjson serializer
+  backends** ([#79](https://github.com/pedro-angel/kibana-py/issues/79)). `kibana/serializer.py`
+  picks one of the two at import time depending on whether `orjson` is installed, and,
+  pre-fix, they disagreed on two things: NaN/Infinity/-Infinity floats, and `uuid.UUID`
+  values. **NaN/Infinity (both backends):** a non-finite float anywhere in a body now
+  raises the identical `kibana.exceptions.SerializationError` (the package's existing
+  serialization exception type), with the identical message, on both backends, instead
+  of stdlib's invalid-JSON tokens `NaN`/`Infinity`/`-Infinity` (a live Kibana 400s on
+  those) or orjson's silent `null` substitution (undetectable data loss). Stdlib:
+  `JSONSerializer.dumps` now passes `allow_nan=False`. orjson has no native option for
+  this (confirmed against orjson 3.11.9; open upstream request `ijl/orjson#170`), so a
+  new `_reject_non_finite_floats` walk runs before `orjson.dumps` and raises the same
+  exception — walking not just `dict`/`list` (including subclasses, which orjson
+  serializes transparently) but also plain `tuple` (exact type only — a `tuple`
+  *subclass* like `namedtuple` is deliberately left unwalked, since orjson rejects any
+  tuple subclass outright as an unsupported type; walking into one would have produced
+  a misleading "bad float" instead of that correct error), `dataclasses.dataclass`
+  instances, and `enum.Enum` members, both of which orjson serializes natively with
+  zero opt-in and would otherwise still silently null a non-finite value inside; stdlib
+  has no such native support for dataclasses/Enum and keeps raising its own `TypeError`
+  for them, which is unrelated, pre-existing, and out of scope. The walk uses a
+  permanent, `id()`-keyed visited set for every container it starts expanding — a
+  self-referential body used to hang the walk forever (orjson's own cycle detection
+  never got the chance to fire, since this walk runs first and previously had no cycle
+  protection of its own); the same visited set also makes a DAG (shared sub-object
+  reachable via multiple paths) linear instead of exponential. Stdlib's own
+  `except ValueError` used to mislabel any `ValueError` — including its own circular-
+  reference detection and a `UnicodeEncodeError` from encoding a lone surrogate
+  character — as the non-finite-float message; it now only does that for the actual
+  out-of-range-float error (matched by **prefix**, not exact equality — CPython 3.12+
+  appends the offending value's `repr` to this specific stdlib message, e.g.
+  `"...compliant: nan"`, which an exact-equality check missed; confirmed across
+  3.11/3.12/3.13/3.14 via `make test-python-matrix`) and wraps anything else honestly
+  with its own message. The message this project raises is always the canonical
+  constant regardless of which CPython version's wording triggered the match, so the
+  cross-backend message-identity guarantee holds across supported Python versions too.
+  Measured at ~262% CPU overhead / ~16.4µs absolute on a representative ~9KB body —
+  accepted because the absolute cost is noise against real request latency, guarded
+  orjson (~22.8µs) is ~1.7x faster than the stdlib fallback this project already ships
+  when orjson isn't installed (~39.5µs), and silently losing a caller's NaN/Infinity
+  value on the majority backend is exactly the defect this issue exists to remove (full
+  measurements, two unplanned regressions found and fixed along the way — a
+  dataclass/Enum performance regression and this round's cycle/error-honesty/tuple-
+  subclass fixes — a numpy probe, and the decision record are all in
+  `docs/evidence/serializer-parity-79.md`). **UUID (both backends):**
+  `JSONSerializer._default` gained a `uuid.UUID` case (serializing to the canonical
+  string form, `str(obj)`), matching orjson's pre-existing native handling — a UUID
+  value anywhere in a body now serializes identically regardless of which backend is
+  active, pinned by a cross-backend equality test and confirmed live (a real space
+  create with a UUID-valued field, accepted by Kibana on both backends, fetched back
+  byte-identical).
+
+- **`close()` on both clients now translates and re-raises transport-layer close
+  failures instead of swallowing them** ([#84](https://github.com/pedro-angel/kibana-py/issues/84),
+  found by the 2026-07-31 adversarial deep review, code-quality lens). **Behavior
+  change:** `Kibana.close()` / `AsyncKibana.close()` (and the space-scoped clients,
+  which delegate to them) used to catch bare `Exception` around
+  `self._transport.close()` and only log a WARNING — a close failure (a leaked
+  connection or socket) was invisible to the caller, and unlike the request path
+  (aligned in 0.4.1), it was never translated to a `kibana.exceptions` type. `close()`
+  now wraps the transport close call in the same
+  `kibana.exceptions.translate_transport_errors()` the request path already uses, so
+  a transport-layer close failure surfaces as the matching `kibana.exceptions` type
+  (`ConnectionError`, `ConnectionTimeout`, `SSLError`, `SerializationError`,
+  `TransportError`) with `.message` set and the original `elastic_transport`
+  exception preserved as `__cause__` — and any other, non-transport exception is no
+  longer caught at all, so it propagates as-is (same "translate-or-propagate"
+  convention the request path already follows). Callers that relied on the old
+  best-effort swallow and want that behavior back can wrap the call in
+  `contextlib.suppress(kibana.exceptions.TransportError,
+  kibana.exceptions.SerializationError)` — both are required: `SerializationError`
+  subclasses `KibanaException` directly, not `TransportError`, so `TransportError`
+  alone does not suppress it. `__enter__`/`__exit__`
+  and `__aenter__`/`__aexit__` are unchanged — they still just delegate to
+  `close()`/`await close()`, matching `elasticsearch-py`'s own `Elasticsearch.__exit__`,
+  which has no masking-avoidance of its own either; if the `with`/`async with` body
+  already raised and `close()` now also raises, Python's ordinary implicit exception
+  chaining keeps both (the body exception as `__context__` of the `elastic_transport`
+  source exception, itself the `__context__`/`__cause__` of the translated one) rather
+  than silently dropping either.
+
+- **A malformed `space_id` now fails the same way in async as in sync: locally,
+  with no request and nothing cached.** Sync checks the id's *format* before
+  anything else, so `client.slos.get(slo_id="x", space_id="Bad Space!")` raised
+  `InvalidSpaceIdError` immediately. Async checked the space's *existence*
+  first: the same call issued a real `GET /api/spaces/space/Bad%20Space%21`,
+  raised `SpaceNotFoundError` — the wrong exception for an id that could never
+  name a space — and cached the malformed key as "missing" for the 300 s TTL
+  ([#74](https://github.com/pedro-angel/kibana-py/issues/74)).
+  `_maybe_validate_space` now validates the format first and unconditionally, so
+  every async namespace raises `InvalidSpaceIdError` with zero requests and an
+  untouched cache. Four namespaces (`connectors`, `data_views`, `ml`,
+  `saved_objects` — 42 methods) built the space-scoped path before validating,
+  the opposite order from the other 28; all 580 space-scoped async methods now
+  validate first. `Kibana.space()` / `AsyncKibana.space()` also honor the
+  `InvalidSpaceIdError` their docstrings always promised, raising before any
+  request and regardless of `validate=` — so a bad id can no longer seed the
+  space cache either. Valid space ids, and the exceptions raised for spaces that
+  merely do not exist, are unchanged.
+
+- **A missing gRPC OTLP exporter now fails loudly instead of silently.** With
+  the above fix, "SDK present, gRPC exporter absent" became a newly-reachable
+  state — previously `import kibana` itself crashed first, so this path never
+  ran. `_create_otlp_exporter` gained an explicit `GRPC_EXPORTER_AVAILABLE`
+  check on the gRPC path (mirroring the pre-existing HTTP check), so
+  requesting `protocol="grpc"` in that state now raises a clear `ImportError`
+  naming the missing package, instead of letting `OTLPSpanExporter` be `None`
+  and raising an opaque `TypeError: 'NoneType' object is not callable` that
+  the broad exception handler in `_create_otlp_exporter_with_error_handling`
+  would mask as a generic "APM configuration error". This is what delivers
+  #68's stated outcome — "OTEL simply runs without the gRPC exporter" — as an
+  honest, diagnosable failure for the one signal that needs it, rather than a
+  silent mismatch for callers who explicitly asked for gRPC.
+
+- **`configure_opentelemetry(protocol="http/protobuf")` now actually reaches the
+  APM server instead of 404/405ing on every span.** Two compounding defects:
+  (1) the OTLP/HTTP exporter got the raw configured (or default) endpoint
+  verbatim — no `/v1/traces` resource path — so spans POSTed to the bare root
+  and the APM server rejected them (`405 Method Not Allowed`), while log
+  forwarding's `_get_log_endpoint` already appended `/v1/logs` correctly, so
+  traces silently dropped while logs worked; (2) when no endpoint was
+  configured, the default was always the gRPC port `:4317`, even for
+  `http/protobuf`, which needs `:4318`
+  ([#77](https://github.com/pedro-angel/kibana-py/issues/77)). A new
+  `_get_trace_endpoint` helper (mirroring `_get_log_endpoint`) now appends
+  `/v1/traces` for `http/protobuf` endpoints that don't already have a signal
+  path, and the no-endpoint-configured default is now protocol-aware (`:4318`
+  for `http/protobuf`, `:4317` for `grpc`) for both traces and log forwarding,
+  which shares the same default-endpoint computation. The "does it already
+  have the path" check is anchored to the end of the path (`_get_signal_endpoint`,
+  a shared core now used by both `_get_trace_endpoint` and `_get_log_endpoint`),
+  not a bare substring match, so an endpoint that merely contains `/v1/traces`
+  or `/v1/logs` mid-path (e.g. behind a gateway route) still gets the real
+  signal path appended instead of being wrongly treated as already-correct.
+  `configure_opentelemetry`'s `protocol` argument is now case-normalized, and
+  an unrecognized value logs a warning instead of silently picking a default.
+  The check and append both operate on the URL's *path* component only (via
+  `urllib.parse.urlsplit`/`urlunsplit`), so an endpoint with a query string or
+  fragment (e.g. `http://h:8200?token=x`) still gets the signal path inserted
+  into the path — not appended after the query — and query/fragment are
+  preserved unchanged. gRPC endpoints and already-correct explicit endpoints
+  (with or without a trailing slash, already ending in `/v1/traces`, or
+  carrying a query string/fragment) are unaffected.
+
 ### Fixed
+
 - **Response bodies logged at DEBUG were never redacted, so secrets a Kibana
   endpoint echoed back appeared in logs in cleartext**
   ([#102](https://github.com/pedro-angel/kibana-py/issues/102)). `_process_response`
@@ -33,6 +206,7 @@ see [CONTRIBUTING.md § Changelog Policy](CONTRIBUTING.md#changelog-policy).
   `'password': 'hunter2-live-battletest'` now renders `'password': '[REDACTED]'`
   with the non-secret `title` intact — evidence in
   `docs/evidence/redact-response-bodies-102.md`.
+
 - **The `vocabulary_conformant` gate and the `checks` CI job both pointed at a
   script that no longer exists.** Dev-facing only — no shipped code changed.
   De-vendoring the methodology pack removed `skills/`, which was correct for the
@@ -50,6 +224,7 @@ see [CONTRIBUTING.md § Changelog Policy](CONTRIBUTING.md#changelog-policy).
   moves `v1.2.0` → `v1.4.0`, picking up the pending v1.3.0 (layered security
   scanning; the four sibling control scripts gained one `shellcheck disable`
   comment each and are otherwise unchanged).
+
 - **Removed `.github/workflows/methodology-sync.yml`.** Its weekly `rsync
   --delete` restored `skills/`, `AGENTS.md`, and `CLAUDE.md` from upstream — it
   would have re-vendored exactly what the de-vendoring removed. It had also been
@@ -57,6 +232,7 @@ see [CONTRIBUTING.md § Changelog Policy](CONTRIBUTING.md#changelog-policy).
   to create or approve pull requests`), so no sync has landed since 2026-07-10.
   The same repository setting still blocks `pre-commit-autoupdate.yml`, which is
   why this change bumps the starter pin by hand.
+
 - **`TestImportGuardMatrix`'s "must stay quiet" assertions could fail on a benign
   gRPC fork diagnostic, not a real kibana-py warning**
   ([#100](https://github.com/pedro-angel/kibana-py/issues/100)). Dev-facing only —
@@ -96,6 +272,7 @@ see [CONTRIBUTING.md § Changelog Policy](CONTRIBUTING.md#changelog-policy).
   than the anchored stderr filter for no added benefit, so it was not adopted.
   Evidence, the full investigation, and the seed-pinned RED/GREEN transcripts:
   `docs/evidence/grpc-fork-noise-100.md`.
+
 - **A TOP-LEVEL LIST request body bypassed DEBUG-log redaction entirely**
   ([#92](https://github.com/pedro-angel/kibana-py/issues/92), sibling of
   [#78](https://github.com/pedro-angel/kibana-py/issues/78)). `perform_request`
@@ -117,6 +294,7 @@ see [CONTRIBUTING.md § Changelog Policy](CONTRIBUTING.md#changelog-policy).
   validation) confirmed the pre-fix DEBUG log showed only `<1 raw bytes>` and the
   post-fix log shows the full list with `'password': '[REDACTED]'` alongside the
   untouched non-sensitive fields, on both the sync and async client.
+
 - **`tests/unit/test_observability.py::TestLogForwardingSetup::test_setup_log_forwarding_success`
   no longer risks permanently corrupting every other test's logging under
   `pytest-randomly`** ([#91](https://github.com/pedro-angel/kibana-py/issues/91),
@@ -152,34 +330,7 @@ see [CONTRIBUTING.md § Changelog Policy](CONTRIBUTING.md#changelog-policy).
   mechanism; the platform-specific gRPC-fork-safety hypothesis for that class's
   originally reported symptom is carried forward, untested on Linux, by #100. Evidence,
   full hunt log, and the seed-loop verification: `docs/evidence/import-guard-flake-91.md`.
-- **`close()` on both clients now translates and re-raises transport-layer close
-  failures instead of swallowing them** ([#84](https://github.com/pedro-angel/kibana-py/issues/84),
-  found by the 2026-07-31 adversarial deep review, code-quality lens). **Behavior
-  change:** `Kibana.close()` / `AsyncKibana.close()` (and the space-scoped clients,
-  which delegate to them) used to catch bare `Exception` around
-  `self._transport.close()` and only log a WARNING — a close failure (a leaked
-  connection or socket) was invisible to the caller, and unlike the request path
-  (aligned in 0.4.1), it was never translated to a `kibana.exceptions` type. `close()`
-  now wraps the transport close call in the same
-  `kibana.exceptions.translate_transport_errors()` the request path already uses, so
-  a transport-layer close failure surfaces as the matching `kibana.exceptions` type
-  (`ConnectionError`, `ConnectionTimeout`, `SSLError`, `SerializationError`,
-  `TransportError`) with `.message` set and the original `elastic_transport`
-  exception preserved as `__cause__` — and any other, non-transport exception is no
-  longer caught at all, so it propagates as-is (same "translate-or-propagate"
-  convention the request path already follows). Callers that relied on the old
-  best-effort swallow and want that behavior back can wrap the call in
-  `contextlib.suppress(kibana.exceptions.TransportError,
-  kibana.exceptions.SerializationError)` — both are required: `SerializationError`
-  subclasses `KibanaException` directly, not `TransportError`, so `TransportError`
-  alone does not suppress it. `__enter__`/`__exit__`
-  and `__aenter__`/`__aexit__` are unchanged — they still just delegate to
-  `close()`/`await close()`, matching `elasticsearch-py`'s own `Elasticsearch.__exit__`,
-  which has no masking-avoidance of its own either; if the `with`/`async with` body
-  already raised and `close()` now also raises, Python's ordinary implicit exception
-  chaining keeps both (the body exception as `__context__` of the `elastic_transport`
-  source exception, itself the `__context__`/`__cause__` of the translated one) rather
-  than silently dropping either.
+
 - **APM connectivity probe (`validate_apm_server_availability` /
   `configure_opentelemetry(validate_endpoint=True)`) is now dual-stack and
   time-bounded, including DNS resolution** ([#83](https://github.com/pedro-angel/kibana-py/issues/83),
@@ -201,6 +352,7 @@ see [CONTRIBUTING.md § Changelog Policy](CONTRIBUTING.md#changelog-policy).
   unresponsive DNS resolver is bounded by the cap too, not just a refusing/hanging TCP
   connect. Public function contract unchanged (`validate_apm_server_availability`'s
   signature, return semantics, and `protocol` param are untouched).
+
 - **`release.yml` hardening: direct integration dependency, PyPI-before-GitHub-release
   ordering, immutable pin comment**
   ([#82](https://github.com/pedro-angel/kibana-py/issues/82), found by the 2026-07-31
@@ -282,57 +434,6 @@ see [CONTRIBUTING.md § Changelog Policy](CONTRIBUTING.md#changelog-policy).
   upgrade line, still one source. Dev-tooling only: not shipped in the package, no CI change
   needed (CI never calls `make audit`; see `docs/evidence/audit-self-heal-80.md`).
 
-- **Request-body JSON semantics diverged between the stdlib and orjson serializer
-  backends** ([#79](https://github.com/pedro-angel/kibana-py/issues/79)). `kibana/serializer.py`
-  picks one of the two at import time depending on whether `orjson` is installed, and,
-  pre-fix, they disagreed on two things: NaN/Infinity/-Infinity floats, and `uuid.UUID`
-  values. **NaN/Infinity (both backends):** a non-finite float anywhere in a body now
-  raises the identical `kibana.exceptions.SerializationError` (the package's existing
-  serialization exception type), with the identical message, on both backends, instead
-  of stdlib's invalid-JSON tokens `NaN`/`Infinity`/`-Infinity` (a live Kibana 400s on
-  those) or orjson's silent `null` substitution (undetectable data loss). Stdlib:
-  `JSONSerializer.dumps` now passes `allow_nan=False`. orjson has no native option for
-  this (confirmed against orjson 3.11.9; open upstream request `ijl/orjson#170`), so a
-  new `_reject_non_finite_floats` walk runs before `orjson.dumps` and raises the same
-  exception — walking not just `dict`/`list` (including subclasses, which orjson
-  serializes transparently) but also plain `tuple` (exact type only — a `tuple`
-  *subclass* like `namedtuple` is deliberately left unwalked, since orjson rejects any
-  tuple subclass outright as an unsupported type; walking into one would have produced
-  a misleading "bad float" instead of that correct error), `dataclasses.dataclass`
-  instances, and `enum.Enum` members, both of which orjson serializes natively with
-  zero opt-in and would otherwise still silently null a non-finite value inside; stdlib
-  has no such native support for dataclasses/Enum and keeps raising its own `TypeError`
-  for them, which is unrelated, pre-existing, and out of scope. The walk uses a
-  permanent, `id()`-keyed visited set for every container it starts expanding — a
-  self-referential body used to hang the walk forever (orjson's own cycle detection
-  never got the chance to fire, since this walk runs first and previously had no cycle
-  protection of its own); the same visited set also makes a DAG (shared sub-object
-  reachable via multiple paths) linear instead of exponential. Stdlib's own
-  `except ValueError` used to mislabel any `ValueError` — including its own circular-
-  reference detection and a `UnicodeEncodeError` from encoding a lone surrogate
-  character — as the non-finite-float message; it now only does that for the actual
-  out-of-range-float error (matched by **prefix**, not exact equality — CPython 3.12+
-  appends the offending value's `repr` to this specific stdlib message, e.g.
-  `"...compliant: nan"`, which an exact-equality check missed; confirmed across
-  3.11/3.12/3.13/3.14 via `make test-python-matrix`) and wraps anything else honestly
-  with its own message. The message this project raises is always the canonical
-  constant regardless of which CPython version's wording triggered the match, so the
-  cross-backend message-identity guarantee holds across supported Python versions too.
-  Measured at ~262% CPU overhead / ~16.4µs absolute on a representative ~9KB body —
-  accepted because the absolute cost is noise against real request latency, guarded
-  orjson (~22.8µs) is ~1.7x faster than the stdlib fallback this project already ships
-  when orjson isn't installed (~39.5µs), and silently losing a caller's NaN/Infinity
-  value on the majority backend is exactly the defect this issue exists to remove (full
-  measurements, two unplanned regressions found and fixed along the way — a
-  dataclass/Enum performance regression and this round's cycle/error-honesty/tuple-
-  subclass fixes — a numpy probe, and the decision record are all in
-  `docs/evidence/serializer-parity-79.md`). **UUID (both backends):**
-  `JSONSerializer._default` gained a `uuid.UUID` case (serializing to the canonical
-  string form, `str(obj)`), matching orjson's pre-existing native handling — a UUID
-  value anywhere in a body now serializes identically regardless of which backend is
-  active, pinned by a cross-backend equality test and confirmed live (a real space
-  create with a UUID-valued field, accepted by Kibana on both backends, fetched back
-  byte-identical).
 - **Credentials nested inside a list-valued request-body field reached DEBUG
   logs in cleartext** ([#78](https://github.com/pedro-angel/kibana-py/issues/78)).
   `_redact_body_secrets` (`kibana/_sync/client/_base.py`, shared by the async
@@ -368,6 +469,7 @@ see [CONTRIBUTING.md § Changelog Policy](CONTRIBUTING.md#changelog-policy).
   placeholder instead of being recursed into further, so a pathologically
   deep or adversarial body fails closed (a placeholder in the log) rather
   than aborting the request.
+
 - **`configure_opentelemetry()` is now idempotent: repeat calls no longer stack
   log handlers, and reconfiguring actually takes effect instead of silently
   doing nothing** ([#76](https://github.com/pedro-angel/kibana-py/issues/76)).
@@ -429,6 +531,7 @@ see [CONTRIBUTING.md § Changelog Policy](CONTRIBUTING.md#changelog-policy).
   call's look and its leap. Concurrent first-time configuration converges on
   one installation, a provider that is shut down stops being tracked, and a
   superseded provider is shut down rather than left holding an atexit hook.
+
 - **A missing or corrupted OpenTelemetry logs SDK no longer breaks log
   forwarding or `import kibana`.** `ConsoleLogExporter` was never bound in the
   logs `except`-branch of `kibana/observability/_imports.py`, so an install
@@ -457,53 +560,7 @@ see [CONTRIBUTING.md § Changelog Policy](CONTRIBUTING.md#changelog-policy).
   install into a failed `import kibana`, so when warnings are fatal the log
   line is what remains. All of it is pinned by the import-guard matrix
   ([#76](https://github.com/pedro-angel/kibana-py/issues/76) review follow-ups).
-- **`configure_opentelemetry(protocol="http/protobuf")` now actually reaches the
-  APM server instead of 404/405ing on every span.** Two compounding defects:
-  (1) the OTLP/HTTP exporter got the raw configured (or default) endpoint
-  verbatim — no `/v1/traces` resource path — so spans POSTed to the bare root
-  and the APM server rejected them (`405 Method Not Allowed`), while log
-  forwarding's `_get_log_endpoint` already appended `/v1/logs` correctly, so
-  traces silently dropped while logs worked; (2) when no endpoint was
-  configured, the default was always the gRPC port `:4317`, even for
-  `http/protobuf`, which needs `:4318`
-  ([#77](https://github.com/pedro-angel/kibana-py/issues/77)). A new
-  `_get_trace_endpoint` helper (mirroring `_get_log_endpoint`) now appends
-  `/v1/traces` for `http/protobuf` endpoints that don't already have a signal
-  path, and the no-endpoint-configured default is now protocol-aware (`:4318`
-  for `http/protobuf`, `:4317` for `grpc`) for both traces and log forwarding,
-  which shares the same default-endpoint computation. The "does it already
-  have the path" check is anchored to the end of the path (`_get_signal_endpoint`,
-  a shared core now used by both `_get_trace_endpoint` and `_get_log_endpoint`),
-  not a bare substring match, so an endpoint that merely contains `/v1/traces`
-  or `/v1/logs` mid-path (e.g. behind a gateway route) still gets the real
-  signal path appended instead of being wrongly treated as already-correct.
-  `configure_opentelemetry`'s `protocol` argument is now case-normalized, and
-  an unrecognized value logs a warning instead of silently picking a default.
-  The check and append both operate on the URL's *path* component only (via
-  `urllib.parse.urlsplit`/`urlunsplit`), so an endpoint with a query string or
-  fragment (e.g. `http://h:8200?token=x`) still gets the signal path inserted
-  into the path — not appended after the query — and query/fragment are
-  preserved unchanged. gRPC endpoints and already-correct explicit endpoints
-  (with or without a trailing slash, already ending in `/v1/traces`, or
-  carrying a query string/fragment) are unaffected.
-- **A malformed `space_id` now fails the same way in async as in sync: locally,
-  with no request and nothing cached.** Sync checks the id's *format* before
-  anything else, so `client.slos.get(slo_id="x", space_id="Bad Space!")` raised
-  `InvalidSpaceIdError` immediately. Async checked the space's *existence*
-  first: the same call issued a real `GET /api/spaces/space/Bad%20Space%21`,
-  raised `SpaceNotFoundError` — the wrong exception for an id that could never
-  name a space — and cached the malformed key as "missing" for the 300 s TTL
-  ([#74](https://github.com/pedro-angel/kibana-py/issues/74)).
-  `_maybe_validate_space` now validates the format first and unconditionally, so
-  every async namespace raises `InvalidSpaceIdError` with zero requests and an
-  untouched cache. Four namespaces (`connectors`, `data_views`, `ml`,
-  `saved_objects` — 42 methods) built the space-scoped path before validating,
-  the opposite order from the other 28; all 580 space-scoped async methods now
-  validate first. `Kibana.space()` / `AsyncKibana.space()` also honor the
-  `InvalidSpaceIdError` their docstrings always promised, raising before any
-  request and regardless of `validate=` — so a bad id can no longer seed the
-  space cache either. Valid space ids, and the exceptions raised for spaces that
-  merely do not exist, are unchanged.
+
 - **The sync/async parity guard can now see a mis-ordered or un-awaited space
   validation.** Its body normalizer deleted the `_maybe_validate_space`
   statement wherever it appeared, and unwrapped `await` before doing so, which
@@ -517,6 +574,7 @@ see [CONTRIBUTING.md § Changelog Policy](CONTRIBUTING.md#changelog-policy).
   order, a detached check, or a check on a different space each fail as body
   drift. Verified by mutation: removing an `await` and restoring the old order
   each fail the suite, and the restored tree passes with no allowlist entry.
+
 - **`spaces.create()` / `spaces.delete()` now invalidate the space-validation
   cache.** Space existence is cached for 5 minutes, but nothing ever cleared an
   entry: after `client.dashboards.get_all(space_id="team-a")` raised
@@ -532,6 +590,7 @@ see [CONTRIBUTING.md § Changelog Policy](CONTRIBUTING.md#changelog-policy).
   `resolve_copy_saved_objects_errors`, `disable_legacy_url_aliases`,
   `get_shareable_references`, `update_objects_spaces` — deliberately leave the
   cache alone.
+
 - **One space-validation cache per client instead of one per namespace, on a
   monotonic clock.** Each namespace client kept its own cache, so a single
   space was re-validated with a fresh `GET /api/spaces/space/{id}` once per
@@ -551,24 +610,7 @@ see [CONTRIBUTING.md § Changelog Policy](CONTRIBUTING.md#changelog-policy).
   namespace calls → 1 lookup (was 2). Default TTL (300 s) and all public
   behavior are unchanged; `_clear_space_cache()` still works and now clears the
   shared cache.
-- **A scheme-less host string no longer silently routes traffic to
-  `localhost`.** `_build_node_configs` (`kibana/_sync/client/__init__.py`,
-  shared by `AsyncKibana` via import) parsed host strings with `urlparse`,
-  which mis-parses a scheme-less string like `"myhost:5601"` into
-  `scheme='myhost', host='localhost', port=5601` — so `Kibana("myhost:5601")`
-  silently sent every request to `localhost` with a bogus scheme and path
-  prefix instead of failing
-  ([#71](https://github.com/pedro-angel/kibana-py/issues/71)). A string host
-  whose parsed form has no scheme or no hostname (e.g. `"myhost:5601"`,
-  `"myhost"`, `"http://"`, or `"://"`) now raises a `ValueError` naming the
-  offending input and the expected form (`http://host:port` or
-  `https://host:port`) before any transport is built. The check parses first
-  and inspects the result — a plain substring check for `"://"` would still
-  let `"http://"` (empty host) and `"host/path?q=a://b"` (`://` appearing
-  outside the scheme separator) through. The fix rejects rather than guesses
-  a default scheme, since silently assuming `http://` would surprise TLS
-  deployments; valid `http://`/`https://` strings (including odd-but-parsable
-  schemes), dict hosts, and `cloud_id` are unaffected.
+
 - **`import kibana` no longer crashes on a partial OpenTelemetry install.**
   `kibana/observability/_imports.py` imported the gRPC OTLP trace exporter
   unconditionally, and its except-branch never bound `OTLPSpanExporter` /
@@ -584,19 +626,6 @@ see [CONTRIBUTING.md § Changelog Policy](CONTRIBUTING.md#changelog-policy).
   imported successfully whenever the (private) OTEL logs modules failed to
   import ([#70](https://github.com/pedro-angel/kibana-py/issues/70)); it now
   degrades only the logs-specific names.
-- **A missing gRPC OTLP exporter now fails loudly instead of silently.** With
-  the above fix, "SDK present, gRPC exporter absent" became a newly-reachable
-  state — previously `import kibana` itself crashed first, so this path never
-  ran. `_create_otlp_exporter` gained an explicit `GRPC_EXPORTER_AVAILABLE`
-  check on the gRPC path (mirroring the pre-existing HTTP check), so
-  requesting `protocol="grpc"` in that state now raises a clear `ImportError`
-  naming the missing package, instead of letting `OTLPSpanExporter` be `None`
-  and raising an opaque `TypeError: 'NoneType' object is not callable` that
-  the broad exception handler in `_create_otlp_exporter_with_error_handling`
-  would mask as a generic "APM configuration error". This is what delivers
-  #68's stated outcome — "OTEL simply runs without the gRPC exporter" — as an
-  honest, diagnosable failure for the one signal that needs it, rather than a
-  silent mismatch for callers who explicitly asked for gRPC.
 
 ## [0.4.2] - 2026-07-15
 
@@ -910,7 +939,8 @@ Initial release of kibana-py, a Python client library for the Kibana REST API.
 
 ---
 
-[Unreleased]: https://github.com/pedro-angel/kibana-py/compare/v0.4.2...HEAD
+[Unreleased]: https://github.com/pedro-angel/kibana-py/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/pedro-angel/kibana-py/releases/tag/v0.5.0
 [0.4.2]: https://github.com/pedro-angel/kibana-py/releases/tag/v0.4.2
 [0.4.1]: https://github.com/pedro-angel/kibana-py/releases/tag/v0.4.1
 [0.4.0]: https://github.com/pedro-angel/kibana-py/releases/tag/v0.4.0
