@@ -72,14 +72,17 @@ wait_for_daemon() {
 }
 
 if ! docker info >/dev/null 2>&1; then
-  log "docker daemon not responding -- trying the service wrapper"
-  service docker start 2>&1 | sed 's/^/[cloud-setup]   service: /' || true
-  wait_for_daemon 10 || true
+  # PID 1 on the session VM is a Firecracker init shim, not systemd, so `service
+  # docker start` is a silent no-op and waiting on it only burns pull budget. Try it
+  # only where an init system actually exists; otherwise launch the daemon directly.
+  if [ -d /run/systemd/system ]; then
+    log "docker daemon not responding -- trying the service wrapper"
+    service docker start 2>&1 | sed 's/^/[cloud-setup]   service: /' || true
+    wait_for_daemon 10 || true
+  fi
 fi
 if ! docker info >/dev/null 2>&1; then
-  # A container image with no init system has no service script to run; the daemon
-  # has to be launched directly. This is the path that matters here.
-  log "no service-managed daemon -- launching dockerd directly"
+  log "launching dockerd directly"
   nohup dockerd >>"$dockerd_log" 2>&1 &
   wait_for_daemon 20 || true
 fi
@@ -96,8 +99,10 @@ log "docker daemon up (server $(docker version --format '{{.Server.Version}}' 2>
 
 # --- Pre-pull the stack images so the snapshot carries them.
 # Elastic images come from docker.elastic.co, which is NOT on the Trusted default
-# allowlist -- the environment must use Custom network access including that host,
-# or every pull below fails and the images are simply not cached.
+# allowlist. The environment must use Custom network access covering *.elastic.co --
+# note the wildcard: naming docker.elastic.co alone still fails every pull, because
+# the registry's 401 challenge sends the client to docker-auth.elastic.co for a token
+# and the proxy refuses the CONNECT to that separate host.
 deadline=$(( SECONDS + budget ))
 pulled=0
 missed=0

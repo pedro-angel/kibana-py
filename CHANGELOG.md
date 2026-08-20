@@ -28,6 +28,14 @@ see [CONTRIBUTING.md § Changelog Policy](CONTRIBUTING.md#changelog-policy).
   from `docker.elastic.co`, which is **not** on the platform's default network allowlist, so the
   environment must use Custom network access naming that host.
 
+- **`scripts/cloud-session-start.sh`, wired as a `SessionStart` hook in
+  `.claude/settings.json`.** The environment cache is a filesystem snapshot: it carries the
+  images the setup script pulled, but not the daemon that pulled them, and PID 1 on the session
+  VM is a Firecracker init shim rather than systemd, so nothing starts one. Without this hook
+  every session after the first finds no Docker daemon and `ci-stack-up.sh` fails. The script
+  exits at its first line unless `CLAUDE_CODE_REMOTE` is `true`, so local sessions are
+  unaffected; it is a no-op on a contributor's machine.
+
 ### Changed
 
 - **`scripts/ci-stack-up.sh` now honors an `ES_LOCAL_VERSION` already present in the

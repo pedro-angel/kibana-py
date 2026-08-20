@@ -10,12 +10,12 @@ This page is the environment's definition. It records exactly what to configure,
 setting is needed, and what the platform will not do for you.
 
 :::{warning}
-**Status: not yet verified end-to-end.** A first session on 2026-08-20 confirmed the network
-allowlist (an off-list host is refused with `403` at the proxy), the environment variables, and
-the resource ceilings — and found **no running Docker daemon**: the binary is present at
-`/usr/bin/dockerd`, but nothing starts it and `/var/run/docker.sock` does not exist. Until that
-is resolved, the in-session stack described below is a design, not a demonstrated capability.
-See [When there is no Docker daemon](#when-there-is-no-docker-daemon).
+**Status: partially verified.** Live sessions on 2026-08-20 established that the network
+allowlist is enforced (an off-list host is refused with `403` at the proxy), that the
+environment variables and resource ceilings match this page, that Docker starts cleanly once
+`dockerd` is launched directly, and that image pulls need `docker-auth.elastic.co` on the
+allowlist. Not yet demonstrated: that the stack reaches `kibana=available` on 4 vCPUs, and that
+`tests/integration/` passes against it. Treat those two as design until a session shows them.
 :::
 
 ## What a session can and cannot keep
@@ -32,14 +32,17 @@ flowchart TB
     end
     subgraph session["Every session — rebuilt from scratch"]
         clone["Fresh clone of kibana-py"]
+        hook["SessionStart hook<br/>starts dockerd"]
         up["./scripts/ci-stack-up.sh<br/>Elasticsearch + Kibana + APM"]
         work["Research, edits, pytest, PR"]
-        clone --> up --> work
+        clone --> hook --> up --> work
     end
     snap -.->|"images already on disk"| up
 ```
 
-The practical consequence: image pulls are paid once, stack bring-up is paid every session.
+The practical consequence: image pulls are paid once, stack bring-up is paid every session — and
+so is starting the Docker daemon itself, which is why `.claude/settings.json` carries a
+`SessionStart` hook that runs `scripts/cloud-session-start.sh`.
 
 ## Prerequisites
 
@@ -66,7 +69,23 @@ kibana-py
 Select **Custom**, check **Also include default list of common package managers**, and list:
 
 ```text
+*.elastic.co
+*.frame.claudeusercontent.com
+```
+
+The wildcard is a finding, not a preference. A live session configured with the five Elastic
+hosts named individually could not pull a single image: `docker.elastic.co` answers a pull with
+`401` and a bearer challenge pointing at `docker-auth.elastic.co`, a *different* host that the
+inventory did not name. The proxy refused the CONNECT, and every pull failed with
+`failed to fetch anonymous token ... Forbidden` — while `docker.elastic.co` itself still probed
+as perfectly reachable. An explicit list can only name the hosts you already know about, and a
+registry's token service is precisely the kind you do not know about until it fails.
+
+If least privilege is worth that maintenance cost, this is the corrected inventory:
+
+```text
 docker.elastic.co
+docker-auth.elastic.co
 epr.elastic.co
 artifacts.elastic.co
 geoip.elastic.co
@@ -78,16 +97,19 @@ Why each one:
 
 | Host | Needed for |
 | :--- | :--- |
-| `docker.elastic.co` | Every image in `elastic-start-local/docker-compose.yml`. **This is the one that makes or breaks the environment** — the Trusted default allowlist carries Docker Hub, not Elastic, so without this entry no stack image can be pulled. |
+| `docker.elastic.co` | Every image in `elastic-start-local/docker-compose.yml`. The Trusted default allowlist carries Docker Hub, not Elastic, so without this entry no stack image can be pulled. |
+| `docker-auth.elastic.co` | The registry's token service, and the entry an explicit list forgets. Blocking it fails every pull at authorization while leaving `docker.elastic.co` itself reachable, so the obvious probe reports green. |
 | `epr.elastic.co` | The Elastic Package Registry. Kibana's Fleet plugin queries it, and `tests/integration/test_fleet_epm_integration.py` downloads a package zip from it directly. |
 | `artifacts.elastic.co` | Fleet agent binary and artifact lookups. |
 | `geoip.elastic.co` | Elasticsearch's GeoIP downloader. Blocking it is not fatal, only noisy in the logs. |
 | `www.elastic.co` | The Kibana API reference and release notes that the compatibility research reads. |
 | `*.frame.claudeusercontent.com` | Only if sessions should read Artifacts; Claude Code fetches artifact content from that host. |
 
-A single `*.elastic.co` line covers the five Elastic hosts if you prefer brevity to an explicit
-inventory. Keeping the default package-manager list is what lets `pip install -e ".[dev,all]"`
-reach PyPI and the bootstrap below reach `raw.githubusercontent.com`.
+Keeping the default package-manager list is what lets `pip install -e ".[dev,all]"` reach PyPI
+and the bootstrap below reach `raw.githubusercontent.com`. It does not make Docker Hub usable:
+the default list names `production.cloudflare.docker.com`, while Hub now serves blobs from
+`production.cloudfront.docker.com`, which stays blocked. `docker run hello-world` therefore
+fails here and is not a valid smoke test. The Elastic stack pulls nothing from Hub.
 
 ### Environment variables
 
@@ -196,13 +218,15 @@ live validation in this repository.
 1. `cat /var/log/kibana-py-cloud-setup.log` — the setup script's own transcript, carried in the
    snapshot: which images it cached, what the deadline clipped, and how long it took. This is the
    only place the budget claim can be checked; the script's stdout is gone by session time.
-2. `curl -sS -o /dev/null -w '%{http_code}\n' https://docker.elastic.co/v2/` — expect `401`, the
-   registry's auth challenge, which means the host is reachable. This tests the allowlist entry
-   itself, and needs no Docker daemon.
+2. `docker pull docker.elastic.co/apm/apm-server:9.5.1` — the authoritative registry probe, and
+   the smallest image at about 80 MB. Nothing weaker will do: a `curl` against
+   `https://docker.elastic.co/v2/` returns a healthy `401` even when pulls are impossible,
+   because the failure happens one host later at the token service. Only a real pull exercises
+   resolve, authorize, and blob fetch together.
 3. `docker images | grep docker.elastic.co` — the cached images are on disk. Their **absence
    implicates nothing on its own**: if the daemon never started, no pull was ever attempted and
    the registry is simply untested. Step 1's log distinguishes the two cases; step 2 settles the
-   allowlist independently.
+   registry independently.
 4. `curl -sS -o /dev/null -w '%{http_code}\n' https://example.com` — expected to **fail**. A
    success means the environment is on Full network access, not the Custom list, and the
    allowlist proved nothing.
@@ -222,18 +246,29 @@ export ES_LOCAL_API_KEY=$(curl -s -u elastic:kibana-py-es-dev \
   -H 'Content-Type: application/json' -d '{"name":"kibana-py-cloud"}' | jq -r .encoded)
 ```
 
-A failure at step 2 is a missing `docker.elastic.co` entry in the allowed domains. A failure at
-step 5 with no daemon is a different problem entirely — see below.
+A step-2 failure naming `failed to fetch anonymous token` is a missing `docker-auth.elastic.co`
+entry, not a missing `docker.elastic.co` one.
 
-### When there is no Docker daemon
+### The Docker daemon, and why nothing starts it
 
-`dockerd` ships on the session image but nothing starts it, and the platform provides no
-container-support switch in the environment dialog. `scripts/cloud-setup.sh` therefore tries the
-service wrapper, then launches `dockerd` directly, and if both fail it prints the daemon's own
-error into its log rather than swallowing it. Read `/var/log/kibana-py-dockerd.log`:
+PID 1 on the session VM is a Firecracker init shim, not systemd — `/run/systemd/system` does not
+exist. `service docker start` is therefore a silent no-op, and the daemon has to be launched
+directly. Nothing about the sandbox prevents it: a live session showed root with every capability
+but `cap_sys_resource`, and `dockerd` starting clean in half a second on `overlayfs` with bridge
+networking intact.
 
-- A permissions, cgroup, or `operation not permitted` error means the environment class cannot
-  run nested containers. No setup script fixes that; the stack cannot run in-session, and live
-  verification has to come from the `integration-probe` workflow, which a session can trigger
-  with `gh workflow run integration-probe.yml` and read back with `gh run download`.
-- Anything else is a start problem, and the log names it.
+Two places do this, because the daemon is needed at two different times and neither can cover the
+other:
+
+- `scripts/cloud-setup.sh`, at cache-build time, so it can pull images.
+- `scripts/cloud-session-start.sh`, wired as a `SessionStart` hook in `.claude/settings.json`, on
+  every session. The snapshot carries the images the setup script pulled but not the daemon that
+  pulled them, so without this hook every session after the cache is built starts with no daemon
+  and `ci-stack-up.sh` fails. The script exits immediately outside a cloud session, so local
+  sessions are untouched.
+
+If a daemon still refuses to start, both scripts leave its own error in
+`/var/log/kibana-py-dockerd.log` rather than swallowing it. A permissions or cgroup error there
+would mean the environment class cannot run nested containers — in which case live verification
+moves to the `integration-probe` workflow, which a session can trigger with
+`gh workflow run integration-probe.yml` and read back with `gh run download`.
