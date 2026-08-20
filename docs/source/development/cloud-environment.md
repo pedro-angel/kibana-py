@@ -9,6 +9,15 @@ so `tests/integration/` executes against a real Kibana rather than a mock.
 This page is the environment's definition. It records exactly what to configure, why each
 setting is needed, and what the platform will not do for you.
 
+:::{warning}
+**Status: not yet verified end-to-end.** A first session on 2026-08-20 confirmed the network
+allowlist (an off-list host is refused with `403` at the proxy), the environment variables, and
+the resource ceilings — and found **no running Docker daemon**: the binary is present at
+`/usr/bin/dockerd`, but nothing starts it and `/var/run/docker.sock` does not exist. Until that
+is resolved, the in-session stack described below is a design, not a demonstrated capability.
+See [When there is no Docker daemon](#when-there-is-no-docker-daemon).
+:::
+
 ## What a session can and cannot keep
 
 The setup script runs once per cache generation and the filesystem is snapshotted after it.
@@ -187,20 +196,25 @@ live validation in this repository.
 1. `cat /var/log/kibana-py-cloud-setup.log` — the setup script's own transcript, carried in the
    snapshot: which images it cached, what the deadline clipped, and how long it took. This is the
    only place the budget claim can be checked; the script's stdout is gone by session time.
-2. `docker images | grep docker.elastic.co` — the cached images are on disk, which proves the
-   allowlist and the setup script both worked.
-3. `curl -sS -o /dev/null -w '%{http_code}\n' https://example.com` — expected to **fail**. A
+2. `curl -sS -o /dev/null -w '%{http_code}\n' https://docker.elastic.co/v2/` — expect `401`, the
+   registry's auth challenge, which means the host is reachable. This tests the allowlist entry
+   itself, and needs no Docker daemon.
+3. `docker images | grep docker.elastic.co` — the cached images are on disk. Their **absence
+   implicates nothing on its own**: if the daemon never started, no pull was ever attempted and
+   the registry is simply untested. Step 1's log distinguishes the two cases; step 2 settles the
+   allowlist independently.
+4. `curl -sS -o /dev/null -w '%{http_code}\n' https://example.com` — expected to **fail**. A
    success means the environment is on Full network access, not the Custom list, and the
    allowlist proved nothing.
-4. `ES_LOCAL_VERSION=9.5.1 ./scripts/ci-stack-up.sh` — exits zero, reports `kibana=available`.
-5. `curl -s localhost:5601/api/status | jq -r '.status.overall.level'` — prints `available`.
-6. `free -h && df -h /` — headroom under a running stack, against the 16 GB and 30 GB ceilings.
-7. `pytest tests/integration/ -q` — the suite runs against the live server. Failures here are
+5. `ES_LOCAL_VERSION=9.5.1 ./scripts/ci-stack-up.sh` — exits zero, reports `kibana=available`.
+6. `curl -s localhost:5601/api/status | jq -r '.status.overall.level'` — prints `available`.
+7. `free -h && df -h /` — headroom under a running stack, against the 16 GB and 30 GB ceilings.
+8. `pytest tests/integration/ -q` — the suite runs against the live server. Failures here are
    findings about the *client*, not about the environment; read them, do not fix them in the same
    pass.
 
 The API-key auth tests need a key that `ci-stack-up.sh` mints only under GitHub Actions. Mint one
-in the session before step 7, or record that those tests skipped and why:
+in the session before step 8, or record that those tests skipped and why:
 
 ```bash
 export ES_LOCAL_API_KEY=$(curl -s -u elastic:kibana-py-es-dev \
@@ -208,4 +222,18 @@ export ES_LOCAL_API_KEY=$(curl -s -u elastic:kibana-py-es-dev \
   -H 'Content-Type: application/json' -d '{"name":"kibana-py-cloud"}' | jq -r .encoded)
 ```
 
-A failure at step 2 is almost always a missing `docker.elastic.co` entry in the allowed domains.
+A failure at step 2 is a missing `docker.elastic.co` entry in the allowed domains. A failure at
+step 5 with no daemon is a different problem entirely — see below.
+
+### When there is no Docker daemon
+
+`dockerd` ships on the session image but nothing starts it, and the platform provides no
+container-support switch in the environment dialog. `scripts/cloud-setup.sh` therefore tries the
+service wrapper, then launches `dockerd` directly, and if both fail it prints the daemon's own
+error into its log rather than swallowing it. Read `/var/log/kibana-py-dockerd.log`:
+
+- A permissions, cgroup, or `operation not permitted` error means the environment class cannot
+  run nested containers. No setup script fixes that; the stack cannot run in-session, and live
+  verification has to come from the `integration-probe` workflow, which a session can trigger
+  with `gh workflow run integration-probe.yml` and read back with `gh run download`.
+- Anything else is a start problem, and the log names it.

@@ -56,20 +56,43 @@ else
   log "gh install failed -- built-in GitHub tools still work"
 fi
 
-# --- Docker: required for the Elastic stack. Fail open if the daemon is not up yet.
-if ! docker info >/dev/null 2>&1; then
-  log "docker daemon not responding -- attempting to start it"
-  service docker start >/dev/null 2>&1 || true
-  for _ in $(seq 1 10); do
-    docker info >/dev/null 2>&1 && break
+# --- Docker: required for the Elastic stack. Fail open, but never silently: the first
+# --- run of this script found no daemon and discarded the reason, which made the
+# --- difference between a wrong start command and an environment that cannot run
+# --- nested containers unknowable from inside a later session.
+dockerd_log=/var/log/kibana-py-dockerd.log
+touch "$dockerd_log" 2>/dev/null || dockerd_log=/tmp/kibana-py-dockerd.log
+
+wait_for_daemon() {
+  for _ in $(seq 1 "$1"); do
+    docker info >/dev/null 2>&1 && return 0
     sleep 1
   done
+  return 1
+}
+
+if ! docker info >/dev/null 2>&1; then
+  log "docker daemon not responding -- trying the service wrapper"
+  service docker start 2>&1 | sed 's/^/[cloud-setup]   service: /' || true
+  wait_for_daemon 10 || true
+fi
+if ! docker info >/dev/null 2>&1; then
+  # A container image with no init system has no service script to run; the daemon
+  # has to be launched directly. This is the path that matters here.
+  log "no service-managed daemon -- launching dockerd directly"
+  nohup dockerd >>"$dockerd_log" 2>&1 &
+  wait_for_daemon 20 || true
 fi
 if ! docker info >/dev/null 2>&1; then
   log "docker unavailable at setup time -- skipping the image pre-pull"
-  log "sessions will pull on demand: slower first stack-up, nothing else breaks"
+  log "dockerd's own last words follow. A permissions or cgroup error means this"
+  log "environment class cannot run nested containers and no script can fix it;"
+  log "anything else is a start problem that can be fixed:"
+  tail -n 20 "$dockerd_log" 2>/dev/null | sed 's/^/[cloud-setup]   dockerd: /'
+  [ -s "$dockerd_log" ] || log "  dockerd wrote nothing -- it never started"
   exit 0
 fi
+log "docker daemon up (server $(docker version --format '{{.Server.Version}}' 2>/dev/null))"
 
 # --- Pre-pull the stack images so the snapshot carries them.
 # Elastic images come from docker.elastic.co, which is NOT on the Trusted default
