@@ -9,6 +9,36 @@ see [CONTRIBUTING.md § Changelog Policy](CONTRIBUTING.md#changelog-policy).
 
 ## [Unreleased]
 
+### Added
+
+- **A Claude Code cloud environment for release-compatibility research and maintenance.**
+  `scripts/cloud-setup.sh` is the environment's setup script: it installs `gh` and pre-pulls the
+  Elasticsearch, Kibana, and APM images for every version in `KIBANA_PY_STACK_VERSIONS`
+  (default `9.5.1 9.4.3`) so the platform's filesystem snapshot carries them into later sessions.
+  It is written to the two constraints the platform imposes — it always exits zero, since a
+  non-zero exit fails session start, and it bounds all pulls with a wall-clock deadline
+  (`KIBANA_PY_PULL_BUDGET`, default 210s), since overrunning roughly five minutes means no
+  snapshot is built and every session re-pulls. Whatever the deadline clips is pulled on demand
+  inside the session instead. The script tees its own run to
+  `/var/log/kibana-py-cloud-setup.log`, which the snapshot carries, because its stdout is
+  unreachable from a later session and the budget is exactly the kind of claim that has to be
+  measured rather than asserted. [Cloud Development
+  Environment](docs/source/development/cloud-environment.md) records the environment's exact
+  configuration, including the one setting that is easy to get wrong: every stack image comes
+  from `docker.elastic.co`, which is **not** on the platform's default network allowlist, so the
+  environment must use Custom network access naming that host.
+
+### Changed
+
+- **`scripts/ci-stack-up.sh` now honors an `ES_LOCAL_VERSION` already present in the
+  environment**, so a caller can provision the stack on another version without editing a tracked
+  file: `ES_LOCAL_VERSION=9.5.1 ./scripts/ci-stack-up.sh`. The value is captured before
+  `elastic-start-local/.env` is sourced (which would otherwise overwrite it) and written back into
+  that file, because Compose reads `.env` from its own directory. With the variable unset, or set
+  to the same value the template pins, behavior is unchanged and nothing is logged. This is what
+  lets one session run the same integration selection against two stack versions and diff the
+  results, rather than inferring compatibility from release notes.
+
 ## [0.5.0] - 2026-08-03
 
 ### Changed

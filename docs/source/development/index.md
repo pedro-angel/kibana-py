@@ -9,6 +9,7 @@ Welcome to the kibana-py development documentation. This section provides compre
 contributing
 testing
 adding-space-support
+cloud-environment
 release-process
 architecture
 ```
@@ -25,6 +26,7 @@ If you're interested in contributing to kibana-py, start here:
 
 Information for project maintainers:
 
+- {doc}`cloud-environment` - The Claude Code cloud environment used for release-compatibility research and maintenance
 - {doc}`release-process` - Step-by-step guide for publishing releases
 - {doc}`architecture` - Project architecture and design decisions
 

@@ -15,8 +15,22 @@ cd "$here/elastic-start-local"
 
 # Non-secret dev env; the one template a fresh clone and CI both consume.
 cp .env.example .env
+# An ES_LOCAL_VERSION already in the environment wins over the template's pin, so a
+# caller can bring the stack up on another version without editing a tracked file:
+#   ES_LOCAL_VERSION=9.5.1 ./scripts/ci-stack-up.sh
+# Captured before the sourcing below, which would otherwise overwrite it. Compose
+# reads .env from its own directory, so the override is written back there too.
+version_override="${ES_LOCAL_VERSION:-}"
 # shellcheck disable=SC1091
 set -a; . ./.env; set +a  # ES_LOCAL_PASSWORD etc. for the api-key mint below
+if [ -n "$version_override" ] && [ "$version_override" != "$ES_LOCAL_VERSION" ]; then
+  echo "stack_version_override=${version_override} (template pins ${ES_LOCAL_VERSION})" \
+    | tee -a "$summary"
+  ES_LOCAL_VERSION="$version_override"
+  export ES_LOCAL_VERSION
+  sed -i.bak "s|^ES_LOCAL_VERSION=.*|ES_LOCAL_VERSION=${ES_LOCAL_VERSION}|" .env
+  rm -f .env.bak
+fi
 
 # ES + Kibana (+ its one-shot kibana_settings) + the standalone APM server.
 t0=$(date +%s)
