@@ -116,6 +116,20 @@ Two platform constraints shape that script, and any edit to it must respect them
   (`KIBANA_PY_PULL_BUDGET`) and stop when it expires. Completed layers still cache; whatever was
   missed is pulled on demand inside the session.
 
+### Forcing a cache rebuild while iterating
+
+The cache is keyed to the **pasted field**, not to what the fetched script contains. Editing
+`scripts/cloud-setup.sh` and pushing therefore changes nothing: the field is byte-identical, the
+snapshot is reused, and the next session runs the old script's results. Keep a revision marker in
+the pasted bootstrap and bump it to force the rebuild:
+
+```bash
+#!/bin/bash
+# rev: 1
+curl -fsSL https://raw.githubusercontent.com/pedro-angel/kibana-py/main/scripts/cloud-setup.sh \
+  -o /tmp/cloud-setup.sh && bash /tmp/cloud-setup.sh
+```
+
 ## Working in a session
 
 You do not get a shell on the VM. Claude runs every command, so the workflows below are things
