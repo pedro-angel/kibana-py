@@ -36,6 +36,14 @@ see [CONTRIBUTING.md § Changelog Policy](CONTRIBUTING.md#changelog-policy).
   exits at its first line unless `CLAUDE_CODE_REMOTE` is `true`, so local sessions are
   unaffected; it is a no-op on a contributor's machine.
 
+- **`attribution.sessionUrl: false` in `.claude/settings.json`.** Claude Code otherwise appends a
+  `Claude-Session: https://claude.ai/code/session_...` trailer to every commit made from a web or
+  Remote Control session. This repository is public and git history is permanent, so that
+  published a stable per-session identifier, tied to the author's account, in exchange for
+  nothing a reader can use — the link only opens for the account that created it. Turning it off
+  at the project level covers everyone working in this repo. `Co-Authored-By` attribution is
+  unaffected and still appended.
+
 ### Changed
 
 - **`scripts/ci-stack-up.sh` now honors an `ES_LOCAL_VERSION` already present in the
