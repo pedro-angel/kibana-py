@@ -9,13 +9,20 @@ so `tests/integration/` executes against a real Kibana rather than a mock.
 This page is the environment's definition. It records exactly what to configure, why each
 setting is needed, and what the platform will not do for you.
 
-:::{warning}
-**Status: partially verified.** Live sessions on 2026-08-20 established that the network
-allowlist is enforced (an off-list host is refused with `403` at the proxy), that the
-environment variables and resource ceilings match this page, that Docker starts cleanly once
-`dockerd` is launched directly, and that image pulls need `docker-auth.elastic.co` on the
-allowlist. Not yet demonstrated: that the stack reaches `kibana=available` on 4 vCPUs, and that
-`tests/integration/` passes against it. Treat those two as design until a session shows them.
+:::{note}
+**Status: verified end to end.** A live session on 2026-08-20 ran the verification list below on
+both pinned stack versions and captured the result in
+`docs/evidence/cloud-environment-battle-test.md`. Established: the network allowlist is enforced
+(an off-list host is refused with `403` at the proxy); the environment variables and resource
+ceilings match this page, with the disk figure corrected below; Docker starts cleanly once
+`dockerd` is launched directly; image pulls need `docker-auth.elastic.co`; **the stack reaches
+`kibana=available` on 4 vCPUs** (70s on 9.5.1, 66s on 9.4.3, from cached images); and
+**`tests/integration/` runs to completion against it** — 751 tests collected on each version.
+
+The suite does not come out green, and is not expected to: its failures are compatibility
+findings about the client plus the CA-trust constraint below, not environment faults. Two
+constraints that run surfaced are documented below: `memlock: -1` cannot be granted here (see
+"The Docker daemon"), and the stack containers do not trust the agent proxy's CA.
 :::
 
 ## What a session can and cannot keep
@@ -194,10 +201,23 @@ its response envelope in 9.5" — a measured difference rather than a reading of
 
 ## Limits worth knowing before you rely on it
 
-- **Resources**: approximately 4 vCPUs, 16 GB RAM, 30 GB disk. The stack fits comfortably —
-  Elasticsearch takes a 2 GB heap under `ES_LOCAL_JAVA_OPTS` — and this is the same class of
-  machine the `integration-probe` workflow already targets on a GitHub runner. Two cached
-  version sets consume roughly a third of the disk.
+- **Resources**: 4 vCPUs and 15 GiB RAM, with **about 21 GiB of writable disk** — measured, not
+  quoted: `df` reports a 252 G root filesystem, but writable space is a fixed per-session
+  allowance and the "Size" column is not headroom. The stack fits comfortably — Elasticsearch
+  takes a 2 GB heap under `ES_LOCAL_JAVA_OPTS`, and the three containers together peaked near
+  4.4 GiB with 10 GiB still available mid-suite. Two cached version sets are about 10 GB of
+  images, so budget roughly half the writable allowance for them. The suite is latency-bound
+  rather than CPU-bound; 4 vCPUs are not the constraint.
+- **Containers do not trust the proxy CA**: the session VM trusts the agent proxy's CA at
+  `/root/.ccr/ca-bundle.crt`, but containers started from it do not. Allowlisting a host is
+  therefore necessary but not sufficient for traffic *from inside the stack*: Kibana's Fleet
+  calls to `epr.elastic.co` and Elasticsearch's `.elser-2-elasticsearch` inference calls both
+  fail with `self-signed certificate in certificate chain` / `PKIX path building failed`, even
+  though the same URL returns `200` from the VM itself. This fails every Fleet/EPM integration
+  test and slows the suite, since each call waits out a TLS failure. Read the symptom carefully
+  — a host the egress policy actually rejects fails with `403` on `CONNECT`, never with a
+  certificate error. Fixing it means mounting the CA bundle into the stack containers and
+  pointing `NODE_EXTRA_CA_CERTS` (Kibana) and the JVM truststore (Elasticsearch) at it.
 - **Cache lifetime**: the snapshot is rebuilt when the setup script or the allowed-domain list
   changes, and after about seven days. The first session after a rebuild pays the pull cost.
 - **Session expiry**: idle sessions are reclaimed. Reopening one provisions a fresh VM with the
@@ -232,7 +252,8 @@ live validation in this repository.
    allowlist proved nothing.
 5. `ES_LOCAL_VERSION=9.5.1 ./scripts/ci-stack-up.sh` — exits zero, reports `kibana=available`.
 6. `curl -s localhost:5601/api/status | jq -r '.status.overall.level'` — prints `available`.
-7. `free -h && df -h /` — headroom under a running stack, against the 16 GB and 30 GB ceilings.
+7. `free -h && df -h /` — headroom under a running stack, against the ~15 GiB RAM and ~21 GiB
+   writable-disk figures above. Sample it while the suite runs; idle numbers prove nothing.
 8. `pytest tests/integration/ -q` — the suite runs against the live server. Failures here are
    findings about the *client*, not about the environment; read them, do not fix them in the same
    pass.
@@ -253,9 +274,24 @@ entry, not a missing `docker.elastic.co` one.
 
 PID 1 on the session VM is a Firecracker init shim, not systemd — `/run/systemd/system` does not
 exist. `service docker start` is therefore a silent no-op, and the daemon has to be launched
-directly. Nothing about the sandbox prevents it: a live session showed root with every capability
-but `cap_sys_resource`, and `dockerd` starting clean in half a second on `overlayfs` with bridge
-networking intact.
+directly. Nothing about the sandbox prevents the daemon itself: a live session showed `dockerd`
+starting clean in half a second on `overlayfs` with bridge networking intact.
+
+The one capability root does *not* have is `cap_sys_resource`, and that has a concrete
+consequence worth knowing before you hit it. The hard `RLIMIT_MEMLOCK` is pinned at 8 MiB, while
+`elastic-start-local/docker-compose.yml` asks Elasticsearch for `memlock: {soft: -1, hard: -1}`.
+Raising it needs the dropped capability, so `ci-stack-up.sh` dies in under a second with a
+message that names neither memlock nor the capability:
+
+```
+runc create failed: unable to start container process: error during container init:
+error setting rlimits for ready process: error setting rlimit type 8: operation not permitted
+```
+
+`rlimit type 8` is `RLIMIT_MEMLOCK`. Cap the value to the VM's hard limit to get past it —
+Elasticsearch never locks its heap here anyway, because the compose file does not set
+`bootstrap.memory_lock=true`, so the unlimited request is unused. Do not hard-code 8 MiB in the
+tracked file: GitHub runners do grant `CAP_SYS_RESOURCE`, where `-1` is correct.
 
 Two places do this, because the daemon is needed at two different times and neither can cover the
 other:

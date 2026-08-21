@@ -2,9 +2,10 @@
 
 **Date:** 2026-08-20
 **Machine:** the x86_64 cloud session VM (Claude Code cloud environment).
-**Commit under test:** `0bce59aa4ed3e6dcb7fa2cdd70cac205db811993` (branch
-`claude/cloud-environment-battle-test-cgq6ea`).
-**Session:** <https://claude.ai/code/session_017GaxNuLUV2RapbCvN2b5da>
+**Commit under test:** `f1a8058` on branch `claude/cloud-environment-battle-test-cgq6ea`
+(tree `0436f590`). The run itself executed `0bce59a`, which carried an identical tree and was
+later rewritten message-only to strip a trailer, so the code measured here is byte-for-byte
+the code at `f1a8058`.
 
 ## Why
 
@@ -182,10 +183,9 @@ with the cloud environment setting `ES_LOCAL_MEMLOCK=8388608`. That is a change 
 `elastic-start-local/` and CI behaviour, so it belongs in its own pass with its own review — not
 smuggled into an evidence commit.
 
-### Finding 2 — `epr.elastic.co` is not on the allowlist, and Fleet needs it
+### Finding 2 — containers do not trust the agent proxy's CA, so Fleet cannot reach the registry
 
-Kibana's Fleet plugin calls the Elastic Package Registry. That host is not allowlisted, so the
-agent proxy terminates TLS with its own CA, which Kibana's Node trust store does not carry:
+Kibana's Fleet plugin calls the Elastic Package Registry, and every such call failed:
 
 ```
 [ERROR][plugins.fleet] Failed to fetch latest version of kbnpy_fleet_epm_432648df from registry:
@@ -197,12 +197,40 @@ agent proxy terminates TLS with its own CA, which Kibana's Node trust store does
 Elasticsearch hits the same wall on the `.elser-2-elasticsearch` inference endpoint
 (`javax.net.ssl.SSLHandshakeException: (certificate_unknown) PKIX path building failed`).
 
+**This is a CA-trust problem, not an allowlist problem.** The distinction matters because it
+points at a different fix, and the error message alone invites the wrong diagnosis: a host the
+egress policy rejects fails with a `403` on `CONNECT` (as `example.com` does in pre-flight D),
+never with a certificate error. A certificate error means the connection *was* allowed and the
+proxy re-terminated TLS with its own CA — one the container does not carry. Confirmed directly:
+
+```
+$ docker run --rm --entrypoint curl $ES_IMAGE -sS https://epr.elastic.co/categories
+... unable to get local issuer certificate                        # http=000
+
+$ docker run --rm -v /root/.ccr/ca-bundle.crt:/tmp/ca.crt:ro --entrypoint curl $ES_IMAGE \
+    -sS --cacert /tmp/ca.crt -o /dev/null -w '%{http_code}\n' https://epr.elastic.co/categories
+200
+
+$ curl -sS -o /dev/null -w '%{http_code}\n' https://epr.elastic.co/categories   # from the VM itself
+200
+```
+
+`epr.elastic.co` is reachable, and is already listed in this repo's prescribed allowlist. The
+session VM trusts the proxy CA at `/root/.ccr/ca-bundle.crt`; the stack containers do not, and
+the agent-proxy README calls this out as a known limitation of running containers under it.
+
 Two consequences, both measured below:
 
 1. **Every Fleet/EPM test fails**, with `[502] Error connecting to package registry` or the
    downstream `[404] [tcp] package not installed or found in registry`.
 2. **The suite is slower.** Each registry call waits out a TLS failure. Progress visibly stalls
    through the Fleet block while container CPU sits near idle.
+
+**The fix (not applied here)** is to give the stack containers the CA, by mounting
+`/root/.ccr/ca-bundle.crt` into the Kibana and Elasticsearch services and pointing
+`NODE_EXTRA_CA_CERTS` (Kibana) and the JVM truststore (Elasticsearch) at it. That is a change to
+`elastic-start-local/`, so it belongs in its own pass — and it only matters inside a proxied
+environment like this one, not on a GitHub runner.
 
 This is an environment property, not a client defect, and it applies **identically to both
 versions** — which is exactly why the version-to-version diff below is still trustworthy: these
@@ -327,7 +355,7 @@ The CPU numbers are the interesting part. At steady state the containers are clo
 (0.65% and 1.69%), which says the suite is **latency-bound, not CPU-bound** — 4 vCPUs are not the
 constraint. Bring-up is the only genuinely CPU-hungry phase (Kibana peaked at 141% during plugin
 init). Runtime is dominated by round-trips, and by the Fleet tests waiting out TLS failures
-against the unreachable package registry (Finding 2).
+against a package registry whose certificate they cannot verify (Finding 2).
 
 ### Step 4 — API key — PASS
 
@@ -579,9 +607,8 @@ peaking near 4.4 GiB and never dropping below 10 GiB available; 21 G of writable
 252 G "Size" column is meaningless here); 4 vCPUs, which the suite never saturates.
 
 Two caveats the page does not yet carry, both above: `memlock: -1` cannot be granted here
-(Finding 1), and `epr.elastic.co` is missing from the allowlist, which fails every Fleet/EPM test
-and slows the suite (Finding 2). Neither is a client defect. Updating that page is left to a
-separate change; this file is the measurement.
+(Finding 1), and the stack containers do not trust the agent proxy's CA, which fails every
+Fleet/EPM test and slows the suite (Finding 2). Neither is a client defect.
 
 ## Verdict
 

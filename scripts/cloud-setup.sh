@@ -45,6 +45,20 @@ images="elasticsearch/elasticsearch kibana/kibana apm/apm-server"
 
 log() { printf '[cloud-setup] %s\n' "$*"; }
 
+# The budget is consumed by arithmetic below. Under `set -u` a non-numeric value
+# (say "210s") fails that assignment, leaves `deadline` unset, and aborts the script
+# on the next reference -- precisely the non-zero exit this script must never produce.
+# The value comes from the environment's variables field, so validate rather than trust.
+case "$budget" in
+  ''|*[!0-9]*)
+    log "KIBANA_PY_PULL_BUDGET='${budget}' is not a whole number of seconds -- using 210"
+    budget=210
+    ;;
+esac
+
+# Counted once so the skip accounting below stays right if `images` gains an entry.
+image_count=$(wc -w <<<"$images")
+
 # --- gh: not on the session image; the built-in GitHub tools cover PRs, but
 # --- `gh api`, `gh release` and `gh workflow run` are how this repo is maintained.
 log "installing gh"
@@ -111,7 +125,7 @@ for version in $versions; do
   remaining=$(( deadline - SECONDS ))
   if [ "$remaining" -le 15 ]; then
     log "budget of ${budget}s exhausted before ${version} -- skipping it"
-    missed=$(( missed + 3 ))
+    missed=$(( missed + image_count ))
     continue
   fi
   log "pulling ${version} images in parallel (${remaining}s of budget left)"
@@ -131,7 +145,7 @@ done
 
 log "cached ${pulled} image(s); ${missed} left to pull on demand"
 docker images --format '{{.Repository}}:{{.Tag}} ({{.Size}})' 2>/dev/null \
-  | grep "^${registry}" | sed 's/^/[cloud-setup]   /' || true
+  | grep "^${registry//./\\.}" | sed 's/^/[cloud-setup]   /' || true
 log "finished in ${SECONDS}s (this transcript: ${log_file})"
 
 exit 0
