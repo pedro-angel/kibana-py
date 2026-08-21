@@ -200,7 +200,9 @@ class TestDashboardsSearchEnvelope:
         assert results.body["dashboards"] is results.body["data"]
 
     def test_empty_result_normalizes_too(self, kibana_client, unique_suffix):
-        results = kibana_client.dashboards.get_all(query=f"{PREFIX}-absent-{unique_suffix}*")
+        results = kibana_client.dashboards.get_all(
+            query=f"{PREFIX}-absent-{unique_suffix}*"
+        )
         assert results.body["total"] == 0
         assert results.body["dashboards"] == []
         assert results.body["meta"]["total"] == 0
@@ -208,7 +210,9 @@ class TestDashboardsSearchEnvelope:
 
     def test_pagination_counters_agree(self, kibana_client, one_dashboard):
         title, _dashboard_id = one_dashboard
-        results = kibana_client.dashboards.get_all(query=f"{title}*", per_page=1, page=1)
+        results = kibana_client.dashboards.get_all(
+            query=f"{title}*", per_page=1, page=1
+        )
         assert results.body["page"] == results.body["meta"]["page"] == 1
         assert results.body["total"] == results.body["meta"]["total"]
 

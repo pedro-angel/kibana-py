@@ -69,7 +69,9 @@ class TestParseVersion:
     def test_parses(self, value, expected):
         assert parse_version(value) == expected
 
-    @pytest.mark.parametrize("value", [None, "", "nine", "9.5", "v9.5.2", 952, object()])
+    @pytest.mark.parametrize(
+        "value", [None, "", "nine", "9.5", "v9.5.2", 952, object()]
+    )
     def test_unparseable_is_none(self, value):
         assert parse_version(value) is None
 
@@ -119,9 +121,7 @@ class TestCapabilities:
     """Gating is measured absence, and it fails open."""
 
     def test_known_absence_is_reported(self):
-        assert not capability_available(
-            "streams.generate_significant_events", "9.5.2"
-        )
+        assert not capability_available("streams.generate_significant_events", "9.5.2")
         assert capability_available("streams.generate_significant_events", "9.4.5")
 
     def test_unknown_capability_is_assumed_present(self):
@@ -137,7 +137,9 @@ class TestCapabilities:
         for capability, lines in CAPABILITIES.items():
             assert lines, f"{capability} is gated to no line at all"
             for line in lines:
-                assert line in supported_lines(), f"{capability} names unsupported {line}"
+                assert (
+                    line in supported_lines()
+                ), f"{capability} names unsupported {line}"
 
 
 class TestNormalizeDashboardsSearch:
@@ -182,7 +184,9 @@ class TestNormalizeDashboardsSearch:
         assert once == twice
 
     def test_empty_page_normalizes(self):
-        body = normalize_dashboards_search({"data": [], "meta": {"total": 0, "page": 1, "per_page": 2}})
+        body = normalize_dashboards_search(
+            {"data": [], "meta": {"total": 0, "page": 1, "per_page": 2}}
+        )
         assert body["dashboards"] == []
         assert body["total"] == 0
 

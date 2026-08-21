@@ -277,7 +277,9 @@ def normalize_dashboards_search(body: Any) -> Any:
     if "dashboards" in body and "data" not in body:
         body["data"] = body["dashboards"]
     if "meta" not in body:
-        derived = {key: body[key] for key in ("total", "page", "per_page") if key in body}
+        derived = {
+            key: body[key] for key in ("total", "page", "per_page") if key in body
+        }
         if derived:
             body["meta"] = derived
 
