@@ -298,12 +298,13 @@ overwrites what the server sent:
   raises rather than silently dropping your input, and points at `upsert_query()`,
   `bulk_queries()` and `delete_query()` — which work on every supported line.
 
-### Endpoints that exist on only one line
+### Capabilities that exist on only one line
 
 Kibana 9.5 removed two significant-events endpoints from the public API, replacing them
-with an internal, unversioned surface this client deliberately does not call. Calling
-them against 9.5 raises `KibanaVersionError` **before any request is sent**, rather than
-returning a `404` that reads like a missing stream:
+with an internal, unversioned surface this client deliberately does not call; and it
+stopped accepting the `queries` field described above. Using any of the three against 9.5
+raises `KibanaVersionError` **before any request is sent**, rather than returning a `404`
+that reads like a missing stream or a `400` about a field you did not know was contested:
 
 | Capability | Available on |
 | :--- | :--- |
