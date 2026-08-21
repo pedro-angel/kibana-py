@@ -25,12 +25,21 @@ from kibana.exceptions import ApiError, KibanaVersionError
 # The two servers' real answers to GET /api/dashboards, and to the significant-events
 # read. Taken from the live probes recorded in docs/evidence/multi-version-9.4.5-9.5.2.md.
 DASHBOARDS_94 = {"dashboards": [{"id": "d1"}], "page": 1, "total": 1}
-DASHBOARDS_95 = {"data": [{"id": "d1"}], "meta": {"total": 1, "page": 1, "per_page": 20}}
+DASHBOARDS_95 = {
+    "data": [{"id": "d1"}],
+    "meta": {"total": 1, "page": 1, "per_page": 20},
+}
 SIG_EVENTS_94 = {"significant_events": [{"id": "q1"}], "aggregated_occurrences": []}
 SIG_EVENTS_95 = {"queries": [{"id": "q1"}], "aggregated_occurrences": []}
 
-STATUS_94 = {"version": {"number": "9.4.5"}, "status": {"overall": {"level": "available"}}}
-STATUS_95 = {"version": {"number": "9.5.2"}, "status": {"overall": {"level": "available"}}}
+STATUS_94 = {
+    "version": {"number": "9.4.5"},
+    "status": {"overall": {"level": "available"}},
+}
+STATUS_95 = {
+    "version": {"number": "9.5.2"},
+    "status": {"overall": {"level": "available"}},
+}
 
 
 def _response(body, status=200):
@@ -70,7 +79,9 @@ class TestServerVersion:
     def test_not_requested_until_asked(self, client, mock_transport):
         mock_transport.perform_request.return_value = _response(DASHBOARDS_94)
         client.dashboards.get_all()
-        targets = [_target(call) for call in mock_transport.perform_request.call_args_list]
+        targets = [
+            _target(call) for call in mock_transport.perform_request.call_args_list
+        ]
         assert "/api/status" not in targets
 
     def test_reads_the_version_number(self, client, mock_transport):
@@ -100,7 +111,9 @@ class TestServerVersion:
     def test_a_non_string_version_is_rejected_rather_than_returned(
         self, client, mock_transport
     ):
-        mock_transport.perform_request.return_value = _response({"version": {"number": 95}})
+        mock_transport.perform_request.return_value = _response(
+            {"version": {"number": 95}}
+        )
         assert client.server_version() is None
 
     def test_options_clone_shares_the_resolved_value(self, client, mock_transport):
@@ -156,7 +169,9 @@ class TestDashboardsSearchNormalization:
         assert _target(call) == "/api/dashboards"
 
     async def test_async_normalizes_too(self, async_client, mock_async_transport):
-        mock_async_transport.perform_request.return_value = _response(dict(DASHBOARDS_95))
+        mock_async_transport.perform_request.return_value = _response(
+            dict(DASHBOARDS_95)
+        )
         body = (await async_client.dashboards.get_all()).body
         assert body["total"] == 1
         assert body["dashboards"] == [{"id": "d1"}]
@@ -186,7 +201,9 @@ class TestSignificantEventsNormalization:
         assert body["significant_events"] == [{"id": "q1"}]
 
     async def test_async_normalizes_too(self, async_client, mock_async_transport):
-        mock_async_transport.perform_request.return_value = _response(dict(SIG_EVENTS_95))
+        mock_async_transport.perform_request.return_value = _response(
+            dict(SIG_EVENTS_95)
+        )
         body = (
             await async_client.streams.get_significant_events(
                 name="logs.ecs.app",
@@ -249,7 +266,9 @@ class TestStreamUpsertBody:
         assert excinfo.value.available_on == ("9.4",)
         # The refusal has to be actionable, or it is just a nicer 400.
         assert "upsert_query()" in str(excinfo.value)
-        targets = [_target(call) for call in mock_transport.perform_request.call_args_list]
+        targets = [
+            _target(call) for call in mock_transport.perform_request.call_args_list
+        ]
         assert targets == ["/api/status"]
 
     def test_an_explicit_empty_list_is_still_sent_on_94(self, client, mock_transport):
@@ -264,7 +283,9 @@ class TestStreamUpsertBody:
             _response({"acknowledged": True}),
         ]
         await async_client.streams.upsert(name="logs.ecs.app", stream=self.STREAM)
-        assert "queries" not in mock_async_transport.perform_request.call_args[1]["body"]
+        assert (
+            "queries" not in mock_async_transport.perform_request.call_args[1]["body"]
+        )
 
     async def test_async_defaults_it_on_94(self, async_client, mock_async_transport):
         mock_async_transport.perform_request.side_effect = [
@@ -272,7 +293,9 @@ class TestStreamUpsertBody:
             _response({"acknowledged": True}),
         ]
         await async_client.streams.upsert(name="logs.ecs.app", stream=self.STREAM)
-        assert mock_async_transport.perform_request.call_args[1]["body"]["queries"] == []
+        assert (
+            mock_async_transport.perform_request.call_args[1]["body"]["queries"] == []
+        )
 
 
 class TestCapabilityGate:
@@ -306,13 +329,17 @@ class TestCapabilityGate:
         _on_version(mock_transport, STATUS_95)
         with pytest.raises(KibanaVersionError):
             self._generate(client)
-        targets = [_target(call) for call in mock_transport.perform_request.call_args_list]
+        targets = [
+            _target(call) for call in mock_transport.perform_request.call_args_list
+        ]
         assert targets == ["/api/status"]
 
     def test_generate_allowed_on_94(self, client, mock_transport):
         _on_version(mock_transport, STATUS_94, {"queries": []})
         self._generate(client)
-        targets = [_target(call) for call in mock_transport.perform_request.call_args_list]
+        targets = [
+            _target(call) for call in mock_transport.perform_request.call_args_list
+        ]
         assert "/api/streams/logs.ecs.app/significant_events/_generate" in targets
 
     def test_preview_refused_on_95(self, client, mock_transport):
@@ -324,14 +351,18 @@ class TestCapabilityGate:
     def test_preview_allowed_on_94(self, client, mock_transport):
         _on_version(mock_transport, STATUS_94, {"occurrences": []})
         self._preview(client)
-        targets = [_target(call) for call in mock_transport.perform_request.call_args_list]
+        targets = [
+            _target(call) for call in mock_transport.perform_request.call_args_list
+        ]
         assert "/api/streams/logs.ecs.app/significant_events/_preview" in targets
 
     def test_proceeds_when_the_version_is_unknown(self, client, mock_transport):
         """Fails open: an unreadable /api/status must not block a working call."""
         _on_version(mock_transport, {"status": {}}, {"queries": []})
         self._generate(client)
-        targets = [_target(call) for call in mock_transport.perform_request.call_args_list]
+        targets = [
+            _target(call) for call in mock_transport.perform_request.call_args_list
+        ]
         assert "/api/streams/logs.ecs.app/significant_events/_generate" in targets
 
     def test_proceeds_when_status_itself_errors(self, client, mock_transport):
@@ -347,7 +378,9 @@ class TestCapabilityGate:
         self._generate(client)
         assert any("_generate" in target for target in calls)
 
-    def test_proceeds_on_a_server_outside_the_supported_set(self, client, mock_transport):
+    def test_proceeds_on_a_server_outside_the_supported_set(
+        self, client, mock_transport
+    ):
         """The client has measured nothing about 9.3; it must not invent a refusal."""
         _on_version(
             mock_transport,
@@ -355,7 +388,9 @@ class TestCapabilityGate:
             {"queries": []},
         )
         self._generate(client)
-        targets = [_target(call) for call in mock_transport.perform_request.call_args_list]
+        targets = [
+            _target(call) for call in mock_transport.perform_request.call_args_list
+        ]
         assert "/api/streams/logs.ecs.app/significant_events/_generate" in targets
 
     def test_ungated_streams_methods_never_ask_for_the_version(
@@ -364,10 +399,46 @@ class TestCapabilityGate:
         """The version lookup stays off every call path that does not need it."""
         mock_transport.perform_request.return_value = _response({"queries": []})
         client.streams.get_queries(name="logs.ecs.app")
-        targets = [_target(call) for call in mock_transport.perform_request.call_args_list]
+        targets = [
+            _target(call) for call in mock_transport.perform_request.call_args_list
+        ]
         assert "/api/status" not in targets
 
-    async def test_async_generate_refused_on_95(self, async_client, mock_async_transport):
+    def test_the_gate_reaches_through_a_space_scoped_client(
+        self, client, mock_transport
+    ):
+        """A space-scoped client must not silently lose version awareness.
+
+        ``client.space(...)`` re-wires every namespace client, and the gate reads the
+        version through ``self._client``. If that indirection ever changed to something
+        without ``server_version()``, the gate would fail open everywhere and nothing
+        else in this file would notice -- it would look like a passing suite.
+        """
+        _on_version(mock_transport, STATUS_95)
+        scoped = client.space("marketing", validate=False)
+        assert scoped.streams._client.server_version() == "9.5.2"
+        with pytest.raises(KibanaVersionError):
+            scoped.streams.generate_significant_events(
+                name="logs.ecs.app",
+                from_="2026-07-01T00:00:00.000Z",
+                to="2026-07-02T00:00:00.000Z",
+            )
+
+    async def test_the_gate_reaches_through_an_async_space_scoped_client(
+        self, async_client, mock_async_transport
+    ):
+        mock_async_transport.perform_request.return_value = _response(STATUS_95)
+        scoped = await async_client.space("marketing", validate=False)
+        with pytest.raises(KibanaVersionError):
+            await scoped.streams.generate_significant_events(
+                name="logs.ecs.app",
+                from_="2026-07-01T00:00:00.000Z",
+                to="2026-07-02T00:00:00.000Z",
+            )
+
+    async def test_async_generate_refused_on_95(
+        self, async_client, mock_async_transport
+    ):
         mock_async_transport.perform_request.return_value = _response(STATUS_95)
         with pytest.raises(KibanaVersionError):
             await async_client.streams.generate_significant_events(
