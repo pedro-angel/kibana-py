@@ -176,12 +176,33 @@ duration of each `docker compose up`, and `git checkout --` restored the file im
 afterwards. The change is **not committed** — the tree is clean at the commit that carries this
 document, and `git status --porcelain` returned empty before it was written.
 
-**Recommendation (not applied here).** A committed fix should not simply hard-code 8 MiB: GitHub
-runners do grant `CAP_SYS_RESOURCE`, and `-1` is correct there. The portable form is to make the
-value overridable, e.g. `memlock: {soft: ${ES_LOCAL_MEMLOCK:--1}, hard: ${ES_LOCAL_MEMLOCK:--1}}`
-with the cloud environment setting `ES_LOCAL_MEMLOCK=8388608`. That is a change to
-`elastic-start-local/` and CI behaviour, so it belongs in its own pass with its own review — not
-smuggled into an evidence commit.
+**Recommendation — APPLIED, in its own pass.** A committed fix should not simply hard-code 8 MiB:
+GitHub runners do grant `CAP_SYS_RESOURCE`, and `-1` is correct there. The portable form is to
+make the value overridable, `memlock: {soft: ${ES_LOCAL_MEMLOCK:--1}, hard: ${ES_LOCAL_MEMLOCK:--1}}`
+with the cloud environment setting `ES_LOCAL_MEMLOCK=8388608`. Because that changes
+`elastic-start-local/` and CI behaviour, it was kept out of this evidence commit and landed
+separately, as this section said it should be.
+
+It is now in the tree. `elastic-start-local/docker-compose.yml` carries the overridable form, and
+`ES_LOCAL_MEMLOCK` is documented in `docs/source/development/cloud-environment.md` — deliberately
+*not* in `elastic-start-local/.env.example`, because `ci-stack-up.sh` sources that template into
+its own shell and a value there would overwrite the one inherited from the environment, the same
+collision `ES_LOCAL_VERSION` already works around.
+
+Both halves of the fix were then verified live rather than argued:
+
+- **The cloud half.** With `ES_LOCAL_MEMLOCK=8388608` in the environment and a working tree
+  carrying no edit to `elastic-start-local/`, `ES_LOCAL_VERSION=9.5.1 ./scripts/ci-stack-up.sh`
+  exited `0` in `1m33s` with `kibana=available apm_http=200`; 9.4.3 did the same in `1m23s`.
+  The run above could only reach that state by editing this file and reverting it, which means
+  the tree that passed was never the tree that was committed. That gap is closed: the committed
+  tree is now the tree that starts.
+- **The runner half.** integration-probe [run 32496886105][probe-run] executed both matrix jobs
+  on GitHub-hosted runners with `ES_LOCAL_MEMLOCK` unset, so Compose resolved the default `-1`.
+  Both "Provision stack" steps succeeded (~113s each). The default is therefore measured as
+  harmless on CI, not merely reasoned about.
+
+[probe-run]: https://github.com/pedro-angel/kibana-py/actions/runs/32496886105
 
 ### Finding 2 — containers do not trust the agent proxy's CA, so Fleet cannot reach the registry
 
@@ -645,6 +666,38 @@ reduce to two server-side contract changes that `kibana-py` 0.5.0 does not yet h
 
 Both are reported here as measurements only. Nothing under `kibana/` was touched, no test was
 edited, and no fix was attempted in this pass.
+
+### Re-run on 2026-08-21 — the nine confirmed, the totals superseded
+
+The A/B was repeated end to end at commit `8d12bc1`, after Finding 1's memlock fix and Finding
+2's proxy-CA fix had both landed. **The nine are exactly the same nine**, by test id, with zero
+test-set drift and zero improvements in either direction — the regression set above is correct
+and reproducible.
+
+The surrounding totals are not, and are superseded by this table. Finding 2's fix was measured
+*after* the numbers above were taken, so the 21 package-registry casualties that failed on both
+sides now pass on both sides:
+
+| | passed | failed | errors | skipped | collected |
+|---|---:|---:|---:|---:|---:|
+| 9.4.3 — original run | 712 | 16 | 5 | 18 | 751 |
+| 9.4.3 — re-run | **733** | **0** | **0** | 18 | 751 |
+| 9.5.1 — original run | 703 | 25 | 5 | 18 | 751 |
+| 9.5.1 — re-run | **724** | **9** | **0** | 18 | 751 |
+
+`733 = 712 + 21` and `724 = 703 + 21` account for the difference exactly: 9.4.3 is now fully
+green, and every remaining 9.5.1 failure is one of the nine. Wall clock fell from ~43m to
+`21m52s` (9.4.3) and `22m53s` (9.5.1), the 21 registry tests no longer spending their time
+timing out against an untrusted certificate.
+
+Two environment prerequisites this page's checklist does not mention, both of which stop the
+suite before a single test runs:
+
+- `pip install -e ".[dev,all]"` fails here — Debian owns `packaging` 24.0 with no `RECORD`
+  file, so pip refuses to uninstall it. `--ignore-installed packaging` gets past it.
+- `pytest` on `PATH` is a `uv`-isolated shim under `/root/.local/share/uv/tools/`, which cannot
+  import the package under test; it fails with `ModuleNotFoundError: elastic_transport`.
+  `python3 -m pytest` is the invocation that works.
 
 ## Reproducing
 
