@@ -236,6 +236,23 @@ This is an environment property, not a client defect, and it applies **identical
 versions** — which is exactly why the version-to-version diff below is still trustworthy: these
 tests fail on 9.4.3 too, so they cancel.
 
+**Fixed and verified after this run.** `elastic-start-local/docker-compose.proxy-ca.yml` mounts
+the CA into Kibana and sets `NODE_EXTRA_CA_CERTS`; `ci-stack-up.sh` overlays it only when the CA
+file is present, so CI is untouched. Re-running the three affected files against a fresh 9.5.1
+stack turned all 21 failures green:
+
+```
+pytest tests/integration/test_fleet_epm_integration.py \
+       tests/integration/test_fleet_policies_integration.py \
+       tests/integration/test_entity_analytics_integration.py -q
+=> 54 passed in 208.68s (0:03:28)
+```
+
+`GET /api/fleet/epm/categories`, which returned `[502] Error connecting to package registry`
+during the run above, now returns `200` with the real category list. Elasticsearch's own
+outbound calls are still untrusted — see the environment page for why that is a separate job.
+The numbers recorded elsewhere in this file are the run as it happened and are left unchanged.
+
 ## Method
 
 Both versions were run through an identical protocol, in the order the task set: **9.5.1 first,

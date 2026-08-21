@@ -88,7 +88,13 @@ jobs:
           path: dist/
 
   integration:
-    name: Integration tests (release gate)
+    # Gated on 9.4.3 only, deliberately. The supported lines are 9.5.x and 9.4.x
+    # (README "Version support"), and integration-probe already runs both, but the
+    # client has known 9.5 incompatibilities recorded in
+    # docs/evidence/cloud-environment-battle-test.md. Matrixing this gate over 9.5.1
+    # before those are fixed would block every release on a known-red line. Add
+    # 9.5.1 here the moment the probe comes back green on it.
+    name: Integration tests (release gate, Kibana 9.4.3)
     needs: validate-release
     runs-on: ubuntu-latest
     timeout-minutes: 60

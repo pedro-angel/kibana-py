@@ -46,6 +46,28 @@ see [CONTRIBUTING.md § Changelog Policy](CONTRIBUTING.md#changelog-policy).
 
 ### Changed
 
+- **The client now targets two Kibana minor lines, at the latest patch of each** — currently
+  9.5.1 and 9.4.3 — instead of 9.4.x alone. README gains a *Version support* section stating the
+  policy and the current state of each line, and `integration-probe` matrixes over both so the
+  difference between them is measured rather than assumed. The release gate still blocks on
+  9.4.3 only: nine integration tests pass on 9.4.3 and fail on 9.5.1 (the `GET /api/dashboards`
+  `{data, meta}` rewrap and the Streams significant-events move, both recorded in
+  `docs/evidence/cloud-environment-battle-test.md`), and gating releases on a known-red line
+  would block every release. 9.5.1 joins the gate when those close.
+
+- **`scripts/ci-stack-up.sh` overlays `elastic-start-local/docker-compose.proxy-ca.yml` when a
+  proxy CA is present**, giving Kibana `NODE_EXTRA_CA_CERTS` so it trusts an egress gateway that
+  re-terminates container TLS. Where container egress is transparently intercepted — a Claude
+  Code cloud session, a corporate MITM gateway — Kibana otherwise rejects every outbound HTTPS
+  call with `self-signed certificate in certificate chain`, which fails every Fleet/EPM
+  integration test. The overlay is applied only when the CA file actually exists (path
+  overridable with `KIBANA_PY_PROXY_CA`), so CI, where nothing intercepts egress, runs the same
+  compose invocation as before. Verified on 9.5.1: the 21 registry-blocked tests across
+  `test_fleet_epm_integration.py`, `test_fleet_policies_integration.py` and
+  `test_entity_analytics_integration.py` went from failing to 54 passed. Elasticsearch's own
+  outbound calls are still untrusted — the JVM needs a `keytool` import rather than a PEM, and
+  no test depends on that path; documented rather than fixed.
+
 - **`scripts/ci-stack-up.sh` now honors an `ES_LOCAL_VERSION` already present in the
   environment**, so a caller can provision the stack on another version without editing a tracked
   file: `ES_LOCAL_VERSION=9.5.1 ./scripts/ci-stack-up.sh`. The value is captured before

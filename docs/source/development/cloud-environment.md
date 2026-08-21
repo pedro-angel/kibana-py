@@ -208,16 +208,31 @@ its response envelope in 9.5" — a measured difference rather than a reading of
   4.4 GiB with 10 GiB still available mid-suite. Two cached version sets are about 10 GB of
   images, so budget roughly half the writable allowance for them. The suite is latency-bound
   rather than CPU-bound; 4 vCPUs are not the constraint.
-- **Containers do not trust the proxy CA**: the session VM trusts the agent proxy's CA at
-  `/root/.ccr/ca-bundle.crt`, but containers started from it do not. Allowlisting a host is
-  therefore necessary but not sufficient for traffic *from inside the stack*: Kibana's Fleet
-  calls to `epr.elastic.co` and Elasticsearch's `.elser-2-elasticsearch` inference calls both
-  fail with `self-signed certificate in certificate chain` / `PKIX path building failed`, even
-  though the same URL returns `200` from the VM itself. This fails every Fleet/EPM integration
-  test and slows the suite, since each call waits out a TLS failure. Read the symptom carefully
-  — a host the egress policy actually rejects fails with `403` on `CONNECT`, never with a
-  certificate error. Fixing it means mounting the CA bundle into the stack containers and
-  pointing `NODE_EXTRA_CA_CERTS` (Kibana) and the JVM truststore (Elasticsearch) at it.
+- **Container egress is intercepted; VM egress is not.** The VM's own processes reach the
+  internet through an explicit `CONNECT` proxy (`HTTPS_PROXY`) and are handed the origin's real
+  certificate, so ordinary CA bundles validate. Containers cannot reach that proxy — it listens
+  on the VM's loopback — so their traffic is transparently re-terminated by an egress gateway
+  presenting `Anthropic — Egress Gateway SDS Issuing CA (production)`. Anything inside the stack
+  therefore fails HTTPS with `self-signed certificate in certificate chain` / `PKIX path
+  building failed`, even where the same URL returns `200` from the VM.
+
+  Read the symptom carefully: a host the egress policy actually *rejects* fails with `403` on
+  `CONNECT`, never with a certificate error. A certificate error means the host was allowed.
+
+  **Kibana is fixed.** `elastic-start-local/docker-compose.proxy-ca.yml` mounts the CA and sets
+  `NODE_EXTRA_CA_CERTS`; `ci-stack-up.sh` overlays it only when the CA file exists, so CI, where
+  nothing intercepts egress, is unaffected. Override the path with `KIBANA_PY_PROXY_CA`. This
+  clears every Fleet/EPM failure — verified on 9.5.1, where the 21 registry-blocked tests in
+  `test_fleet_epm_integration.py`, `test_fleet_policies_integration.py` and
+  `test_entity_analytics_integration.py` went from failing to **54 passed**.
+
+  **Elasticsearch is not fixed**, deliberately. Its outbound calls (the
+  `.elser-2-elasticsearch` inference path) still fail, because the JVM reads its own truststore
+  rather than the OS one: a PEM is not enough, the CA has to be imported into the bundled JDK's
+  `cacerts` with `keytool`, which means an init step inside the container. No integration test
+  depends on that path, so the cost is not yet worth paying. If you need it, import the CA into
+  `/usr/share/elasticsearch/jdk/lib/security/cacerts` (default password `changeit`) and mount
+  the result, or point `ES_JAVA_OPTS` at a truststore you build yourself.
 - **Cache lifetime**: the snapshot is rebuilt when the setup script or the allowed-domain list
   changes, and after about seven days. The first session after a rebuild pays the pull cost.
 - **Session expiry**: idle sessions are reclaimed. Reopening one provisions a fresh VM with the
