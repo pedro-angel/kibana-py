@@ -285,9 +285,17 @@ live validation in this repository.
 6. `curl -s localhost:5601/api/status | jq -r '.status.overall.level'` — prints `available`.
 7. `free -h && df -h /` — headroom under a running stack, against the ~15 GiB RAM and ~21 GiB
    writable-disk figures above. Sample it while the suite runs; idle numbers prove nothing.
-8. `pytest tests/integration/ -q` — the suite runs against the live server. Failures here are
-   findings about the *client*, not about the environment; read them, do not fix them in the same
-   pass.
+8. `python3 -m pytest tests/integration/ -q` — the suite runs against the live server. Failures
+   here are findings about the *client*, not about the environment; read them, do not fix them in
+   the same pass.
+
+Step 8 has two prerequisites this VM imposes, both of which fail the whole suite before a single
+test runs:
+
+- Install with `pip install -e ".[dev,all]" --ignore-installed`. Without the flag pip aborts
+  trying to uninstall Debian's distribution-managed `packaging` 24.0.
+- Invoke pytest as `python3 -m pytest`, not `pytest`. The `pytest` on `PATH` is a uv-isolated
+  shim that cannot import the package under test.
 
 The API-key auth tests need a key that `ci-stack-up.sh` mints only under GitHub Actions. Mint one
 in the session before step 8, or record that those tests skipped and why:
