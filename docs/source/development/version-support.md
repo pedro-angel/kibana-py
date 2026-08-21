@@ -174,8 +174,8 @@ future maintainer needs when the same question comes round.
 
 ## What a divergence looks like, and what to do with it
 
-Three kinds, three mechanisms. The full rationale is in the design doc; this is the
-working summary.
+Four kinds seen so far, absorbed by two mechanisms. The full rationale is in the design
+doc; this is the working summary.
 
 | Kind | Example found in 9.5 | Mechanism | Needs to know the version? |
 | :--- | :--- | :--- | :--- |
