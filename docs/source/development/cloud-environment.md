@@ -123,11 +123,27 @@ fails here and is not a valid smoke test. The Elastic stack pulls nothing from H
 ```text
 KIBANA_PY_STACK_VERSIONS=9.5.1 9.4.3
 KIBANA_PY_PULL_BUDGET=210
+ES_LOCAL_MEMLOCK=8388608
 ```
 
 The leftmost version gets first claim on the pull budget, so put the version you are actively
 working against first. Caching two versions is what makes an A/B run possible: the same
 integration selection can be executed against both and the results diffed.
+
+`ES_LOCAL_MEMLOCK` is what makes the stack startable here at all. The session VM drops
+`CAP_SYS_RESOURCE` and pins the `RLIMIT_MEMLOCK` hard limit at 8 MiB, so the unlimited
+`memlock: {soft: -1, hard: -1}` that `elastic-start-local/docker-compose.yml` inherits from the
+upstream `start-local` template is refused by `runc` and every container dies during init, in
+under a second. The compose file reads the limit as `${ES_LOCAL_MEMLOCK:--1}`, so setting this
+variable to the VM's own hard limit caps the request to something grantable. It is safe to cap:
+the compose file never sets `bootstrap.memory_lock=true`, so Elasticsearch never locks its heap.
+The `-1` default is deliberate and keeps GitHub runners, which do grant `CAP_SYS_RESOURCE`,
+unchanged.
+
+It belongs **here and not in `elastic-start-local/.env.example`**. `ci-stack-up.sh` sources that
+template into its own shell, so any value written there would overwrite the one inherited from
+the environment — the same collision `ES_LOCAL_VERSION` has to work around by capturing its
+override before the sourcing.
 
 Cloud environments have **no secrets store** and every variable is readable by anyone using the
 environment. Do not put a token here. In particular, leave `GH_TOKEN` unset — the GitHub proxy

@@ -280,8 +280,11 @@ once the gaps close.
 server-side contract changes the client does not yet handle:
 
 - `GET /api/dashboards` returns `{data, meta{total, page, per_page}}` on 9.5, not
-  `{dashboards, page, total}` — so `dashboards.get_all()` raises `KeyError` for every
-  caller, sync and async.
+  `{dashboards, page, total}`. `dashboards.get_all()` itself does not raise — it returns
+  the server's body unchanged, sync and async — but the keys it documents are gone, so a
+  caller reading `body["dashboards"]` or `body["total"]` is the one that raises `KeyError`.
+  Until the client normalizes the envelope, read `body["data"]` for the list and
+  `body["meta"]["total"]` for the count on 9.5.
 - Streams significant-events queries moved off the stream upsert body (`queries` is now
   rejected as an excess key) and the read envelope renamed `significant_events` to
   `queries`.
