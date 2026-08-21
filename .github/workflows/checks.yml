@@ -27,3 +27,25 @@ jobs:
       # the pinned git-controls-starter block, so `pre-commit run --all-files` above
       # already runs it. It used to invoke a vendored copy under skills/, which the
       # methodology de-vendoring deleted out from under this job.
+
+  supported-versions:
+    # The supported Kibana set is declared once, in kibana/_compat.py; every other
+    # statement of it is derived or checked. This job is what stops a mirror being
+    # edited alone. It needs neither the package nor a stack: the checker reads the
+    # source with `ast` and compares files.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+      - name: Every version statement agrees with kibana/_compat.py
+        run: python3 scripts/checks/supported-versions.py --check
+      - name: Report whether the pins are still the latest patches (informational)
+        # Never fails the job: a newer upstream patch is news for a maintainer, not a
+        # broken build, and --fail-on-drift is deliberately not passed. An unreachable
+        # registry reports UNKNOWN rather than agreement.
+        run: python3 scripts/checks/supported-versions.py --latest

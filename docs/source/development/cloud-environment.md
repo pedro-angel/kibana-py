@@ -121,10 +121,15 @@ fails here and is not a valid smoke test. The Elastic stack pulls nothing from H
 ### Environment variables
 
 ```text
-KIBANA_PY_STACK_VERSIONS=9.5.1 9.4.3
+KIBANA_PY_STACK_VERSIONS=9.5.2 9.4.5
 KIBANA_PY_PULL_BUDGET=210
 ES_LOCAL_MEMLOCK=8388608
 ```
+
+These are the supported pins. They are declared once, in `kibana/_compat.py`, and only
+mirrored here -- `make versions` fails if the two disagree, so this block cannot quietly
+go stale. The policy behind the set, and the procedure for moving it forward, are in
+{doc}`version-support`.
 
 The leftmost version gets first claim on the pull budget, so put the version you are actively
 working against first. Caching two versions is what makes an A/B run possible: the same

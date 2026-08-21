@@ -92,13 +92,23 @@ test-python-matrix: ## Run unit tests across all supported Python versions via n
 # ---------------------------------------------------------------------------
 
 .PHONY: check
-check: hooks lint audit sast test docs ## Local PR gate: hooks+lint+audit+sast+unit+docs (the vocabulary floor; matches GitHub Actions)
+check: hooks lint audit sast test docs versions ## Local PR gate: hooks+lint+audit+sast+unit+docs+versions (the vocabulary floor; matches GitHub Actions)
 	@echo "\n✓ All checks passed. Note: run 'make test-python-matrix' to verify across all supported Python versions."
 
 .PHONY: hooks
 hooks: ## Run pre-commit-stage hooks on all files (plus the manual-stage pin check CI runs)
 	$(VENV_BIN)/pre-commit run --all-files
 	$(VENV_BIN)/pre-commit run check-pin-comments-match --hook-stage manual --all-files
+
+.PHONY: versions
+versions: ## Check every Kibana version statement against the one source (kibana/_compat.py)
+	@# The supported set is declared once, in kibana/_compat.py. Every other place
+	@# that names a version -- the CI matrixes, the stack template, the cloud setup
+	@# script, the README table, the cloud-environment page -- is a mirror, derived
+	@# or checked. This leaf is what makes editing a mirror alone a failure rather
+	@# than a slow drift nobody notices. `--latest` (not run here: it needs the
+	@# network) asks the registry whether the pins are still the newest patches.
+	python3 scripts/checks/supported-versions.py --check
 
 .PHONY: vocabulary
 vocabulary: ## Check make target names against the shared cross-repo vocabulary

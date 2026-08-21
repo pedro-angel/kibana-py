@@ -87,19 +87,39 @@ jobs:
           name: dist
           path: dist/
 
-  integration:
-    # Gated on 9.4.3 only, deliberately. The supported lines are 9.5.x and 9.4.x
-    # (README "Version support"), and integration-probe already runs both, but the
-    # client has known 9.5 incompatibilities recorded in
-    # docs/evidence/cloud-environment-battle-test.md. Matrixing this gate over 9.5.1
-    # before those are fixed would block every release on a known-red line. Add
-    # 9.5.1 here the moment the probe comes back green on it.
-    name: Integration tests (release gate, Kibana 9.4.3)
+  # The release gate blocks on EVERY supported Kibana line, not a chosen one. The
+  # set is declared once in kibana/_compat.py and read here, so "supported" and
+  # "release-gated" are the same list by construction: a line cannot be claimed in
+  # the README without also being able to block a release.
+  supported-versions:
+    name: resolve supported versions
     needs: validate-release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      matrix: ${{ steps.resolve.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: resolve
+        run: |
+          matrix="$(python3 scripts/checks/supported-versions.py --matrix)"
+          echo "release gate runs on: $matrix" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
+  integration:
+    name: Integration tests (release gate, Kibana ${{ matrix.stack-version }})
+    needs: supported-versions
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
       contents: read
+    strategy:
+      # No fail-fast: a break on one supported line must not hide the other's
+      # result, or a release is re-cut once per line instead of once.
+      fail-fast: false
+      matrix:
+        stack-version: ${{ fromJson(needs.supported-versions.outputs.matrix) }}
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -114,6 +134,8 @@ jobs:
         run: pip install -e ".[dev,all,probe]"
 
       - name: Provision stack (ES + Kibana + APM)
+        env:
+          ES_LOCAL_VERSION: ${{ matrix.stack-version }}
         run: ./scripts/ci-stack-up.sh
 
       # Stable selection only: quarantined flakes (-m "not flaky") are excluded so a
