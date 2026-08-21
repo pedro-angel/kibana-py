@@ -258,8 +258,39 @@ For more information, see the [Development Documentation](https://kibana-py.read
 ## Requirements
 
 - Python 3.11+
-- Kibana 9.4.x (developed and live-tested against 9.4.3)
+- Kibana — see [Version support](#version-support) below
 - elastic-transport >= 9.1.0
+
+## Version support
+
+The client targets the **two most recent Kibana minor lines, at the latest patch of
+each**. Older patches of a supported line are expected to work but are not tested; a
+minor line drops off the list when a third one appears.
+
+| Kibana line | Tested patch | Status |
+| :--- | :--- | :--- |
+| 9.5.x | 9.5.1 | **In progress** — known gaps below |
+| 9.4.x | 9.4.3 | Supported; the release gate blocks on it |
+
+Both lines run in the `integration-probe` workflow, so the difference between them is
+measured rather than assumed. The release gate blocks on 9.4.3 only, and picks up 9.5.1
+once the gaps close.
+
+**Known 9.5 gaps.** Nine integration tests pass on 9.4.3 and fail on 9.5.1, from two
+server-side contract changes the client does not yet handle:
+
+- `GET /api/dashboards` returns `{data, meta{total, page, per_page}}` on 9.5, not
+  `{dashboards, page, total}`. `dashboards.get_all()` itself does not raise — it returns
+  the server's body unchanged, sync and async — but the keys it documents are gone, so a
+  caller reading `body["dashboards"]` or `body["total"]` is the one that raises `KeyError`.
+  Until the client normalizes the envelope, read `body["data"]` for the list and
+  `body["meta"]["total"]` for the count on 9.5.
+- Streams significant-events queries moved off the stream upsert body (`queries` is now
+  rejected as an excess key) and the read envelope renamed `significant_events` to
+  `queries`.
+
+Measurements, method, and the full diff:
+[`docs/evidence/cloud-environment-battle-test.md`](docs/evidence/cloud-environment-battle-test.md).
 
 ## Resources
 

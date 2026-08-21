@@ -1,0 +1,26 @@
+# Overlay for environments that intercept container egress with their own CA.
+#
+# A Claude Code cloud session is one: traffic from a container is transparently
+# re-terminated by an egress gateway presenting its own certificate, while the VM's
+# own processes reach the internet through an explicit CONNECT proxy and see the real
+# one. Kibana therefore fails every outbound HTTPS call with
+# `self-signed certificate in certificate chain` -- most visibly Fleet's calls to the
+# Elastic Package Registry, which fail every `tests/integration/test_fleet_epm_*` test.
+#
+# Applied only when the CA file actually exists: scripts/ci-stack-up.sh adds this
+# `-f` when it finds KIBANA_PY_PROXY_CA on disk, so a GitHub runner -- where nothing
+# intercepts egress -- never loads it and its compose invocation is unchanged.
+#
+# Kibana only. Elasticsearch makes outbound calls too (the `.elser-2-elasticsearch`
+# inference path fails the same way), but the JVM reads its own truststore rather than
+# the OS one and needs a `keytool` import of the CA into the bundled JDK's `cacerts`
+# instead of a PEM. No integration test depends on that path, so it is left undone and
+# documented in docs/source/development/cloud-environment.md.
+services:
+  kibana:
+    volumes:
+      - ${KIBANA_PY_PROXY_CA:-/root/.ccr/ca-bundle.crt}:/usr/share/kibana/config/proxy-ca.crt:ro
+    environment:
+      # Node appends this file to its built-in CA list rather than replacing it, so
+      # public certificates still validate normally.
+      - NODE_EXTRA_CA_CERTS=/usr/share/kibana/config/proxy-ca.crt

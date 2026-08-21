@@ -9,6 +9,74 @@ see [CONTRIBUTING.md § Changelog Policy](CONTRIBUTING.md#changelog-policy).
 
 ## [Unreleased]
 
+### Added
+
+- **A Claude Code cloud environment for release-compatibility research and maintenance.**
+  `scripts/cloud-setup.sh` is the environment's setup script: it installs `gh` and pre-pulls the
+  Elasticsearch, Kibana, and APM images for every version in `KIBANA_PY_STACK_VERSIONS`
+  (default `9.5.1 9.4.3`) so the platform's filesystem snapshot carries them into later sessions.
+  It is written to the two constraints the platform imposes — it always exits zero, since a
+  non-zero exit fails session start, and it bounds all pulls with a wall-clock deadline
+  (`KIBANA_PY_PULL_BUDGET`, default 210s), since overrunning roughly five minutes means no
+  snapshot is built and every session re-pulls. Whatever the deadline clips is pulled on demand
+  inside the session instead. The script tees its own run to
+  `/var/log/kibana-py-cloud-setup.log`, which the snapshot carries, because its stdout is
+  unreachable from a later session and the budget is exactly the kind of claim that has to be
+  measured rather than asserted. [Cloud Development
+  Environment](docs/source/development/cloud-environment.md) records the environment's exact
+  configuration, including the one setting that is easy to get wrong: every stack image comes
+  from `docker.elastic.co`, which is **not** on the platform's default network allowlist, so the
+  environment must use Custom network access naming that host.
+
+- **`scripts/cloud-session-start.sh`, wired as a `SessionStart` hook in
+  `.claude/settings.json`.** The environment cache is a filesystem snapshot: it carries the
+  images the setup script pulled, but not the daemon that pulled them, and PID 1 on the session
+  VM is a Firecracker init shim rather than systemd, so nothing starts one. Without this hook
+  every session after the first finds no Docker daemon and `ci-stack-up.sh` fails. The script
+  exits at its first line unless `CLAUDE_CODE_REMOTE` is `true`, so local sessions are
+  unaffected; it is a no-op on a contributor's machine.
+
+- **`attribution.sessionUrl: false` in `.claude/settings.json`.** Claude Code otherwise appends a
+  `Claude-Session: https://claude.ai/code/session_...` trailer to every commit made from a web or
+  Remote Control session. This repository is public and git history is permanent, so that
+  published a stable per-session identifier, tied to the author's account, in exchange for
+  nothing a reader can use — the link only opens for the account that created it. Turning it off
+  at the project level covers everyone working in this repo. `Co-Authored-By` attribution is
+  unaffected and still appended.
+
+### Changed
+
+- **The client now targets two Kibana minor lines, at the latest patch of each** — currently
+  9.5.1 and 9.4.3 — instead of 9.4.x alone. README gains a *Version support* section stating the
+  policy and the current state of each line, and `integration-probe` matrixes over both so the
+  difference between them is measured rather than assumed. The release gate still blocks on
+  9.4.3 only: nine integration tests pass on 9.4.3 and fail on 9.5.1 (the `GET /api/dashboards`
+  `{data, meta}` rewrap and the Streams significant-events move, both recorded in
+  `docs/evidence/cloud-environment-battle-test.md`), and gating releases on a known-red line
+  would block every release. 9.5.1 joins the gate when those close.
+
+- **`scripts/ci-stack-up.sh` overlays `elastic-start-local/docker-compose.proxy-ca.yml` when a
+  proxy CA is present**, giving Kibana `NODE_EXTRA_CA_CERTS` so it trusts an egress gateway that
+  re-terminates container TLS. Where container egress is transparently intercepted — a Claude
+  Code cloud session, a corporate MITM gateway — Kibana otherwise rejects every outbound HTTPS
+  call with `self-signed certificate in certificate chain`, which fails every Fleet/EPM
+  integration test. The overlay is applied only when the CA file actually exists (path
+  overridable with `KIBANA_PY_PROXY_CA`), so CI, where nothing intercepts egress, runs the same
+  compose invocation as before. Verified on 9.5.1: the 21 registry-blocked tests across
+  `test_fleet_epm_integration.py`, `test_fleet_policies_integration.py` and
+  `test_entity_analytics_integration.py` went from failing to 54 passed. Elasticsearch's own
+  outbound calls are still untrusted — the JVM needs a `keytool` import rather than a PEM, and
+  no test depends on that path; documented rather than fixed.
+
+- **`scripts/ci-stack-up.sh` now honors an `ES_LOCAL_VERSION` already present in the
+  environment**, so a caller can provision the stack on another version without editing a tracked
+  file: `ES_LOCAL_VERSION=9.5.1 ./scripts/ci-stack-up.sh`. The value is captured before
+  `elastic-start-local/.env` is sourced (which would otherwise overwrite it) and written back into
+  that file, because Compose reads `.env` from its own directory. With the variable unset, or set
+  to the same value the template pins, behavior is unchanged and nothing is logged. This is what
+  lets one session run the same integration selection against two stack versions and diff the
+  results, rather than inferring compatibility from release notes.
+
 ## [0.5.0] - 2026-08-03
 
 ### Changed

@@ -32,10 +32,16 @@ concurrency:
 
 jobs:
   probe:
+    name: probe (Kibana ${{ matrix.stack-version }})
     runs-on: ubuntu-latest
     timeout-minutes: 120     # cold 4-core is slower than the 20min warm/18-core local baseline
     permissions:
       contents: read
+    strategy:
+      fail-fast: false       # a break on one line must not hide the other line's result
+      matrix:
+        # The supported stack lines: latest patch of each. See README "Version support".
+        stack-version: ["9.5.1", "9.4.3"]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
@@ -65,6 +71,8 @@ jobs:
 
       # --- provision ES + Kibana + APM via the shared script (the release gate uses the same one) ---
       - name: Provision stack (ES + Kibana + APM)
+        env:
+          ES_LOCAL_VERSION: ${{ matrix.stack-version }}
         run: ./scripts/ci-stack-up.sh
 
       # --- H3: run the selection K times; randomized order; per-test timeout; NO reruns ---
@@ -102,6 +110,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
-          name: integration-probe-evidence
+          name: integration-probe-evidence-${{ matrix.stack-version }}
           path: probe-junit/**
           if-no-files-found: error

@@ -15,12 +15,41 @@ cd "$here/elastic-start-local"
 
 # Non-secret dev env; the one template a fresh clone and CI both consume.
 cp .env.example .env
+# An ES_LOCAL_VERSION already in the environment wins over the template's pin, so a
+# caller can bring the stack up on another version without editing a tracked file:
+#   ES_LOCAL_VERSION=9.5.1 ./scripts/ci-stack-up.sh
+# Captured before the sourcing below, which would otherwise overwrite it. Compose
+# reads .env from its own directory, so the override is written back there too.
+version_override="${ES_LOCAL_VERSION:-}"
 # shellcheck disable=SC1091
 set -a; . ./.env; set +a  # ES_LOCAL_PASSWORD etc. for the api-key mint below
+if [ -n "$version_override" ] && [ "$version_override" != "$ES_LOCAL_VERSION" ]; then
+  echo "stack_version_override=${version_override} (template pins ${ES_LOCAL_VERSION})" \
+    | tee -a "$summary"
+  ES_LOCAL_VERSION="$version_override"
+  export ES_LOCAL_VERSION
+  sed -i.bak "s|^ES_LOCAL_VERSION=.*|ES_LOCAL_VERSION=${ES_LOCAL_VERSION}|" .env
+  rm -f .env.bak
+fi
 
 # ES + Kibana (+ its one-shot kibana_settings) + the standalone APM server.
+compose_files="-f docker-compose.yml -f docker-compose.apm.yml"
+
+# Where container egress is transparently re-terminated by a proxy's own CA -- a
+# Claude Code cloud session, a corporate MITM gateway -- Kibana rejects every
+# outbound HTTPS call unless it carries that CA. Overlay it only when the file is
+# really there, so CI, where nothing intercepts egress, runs the invocation above
+# unchanged and never depends on a path that does not exist on a runner.
+proxy_ca="${KIBANA_PY_PROXY_CA:-/root/.ccr/ca-bundle.crt}"
+if [ -f "$proxy_ca" ]; then
+  export KIBANA_PY_PROXY_CA="$proxy_ca"
+  compose_files="$compose_files -f docker-compose.proxy-ca.yml"
+  echo "proxy_ca=${proxy_ca} (trusting it in Kibana)" | tee -a "$summary"
+fi
+
 t0=$(date +%s)
-docker compose -f docker-compose.yml -f docker-compose.apm.yml up --wait -d
+# shellcheck disable=SC2086  # compose_files is a deliberate list of -f flags
+docker compose $compose_files up --wait -d
 echo "compose_up_seconds=$(( $(date +%s) - t0 ))" | tee -a "$summary"
 
 # Kibana readiness: poll /api/status until "available". The compose 302
