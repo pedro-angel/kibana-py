@@ -72,6 +72,9 @@ _check_transport_compatibility()
 
 from kibana._async.client import AsyncKibana, AsyncSpaceScopedKibana
 
+# Import the declared Kibana compatibility set (see kibana/_compat.py)
+from kibana._compat import SUPPORTED_VERSIONS, is_supported
+
 # Import main client classes
 from kibana._sync.client import Kibana, SpaceScopedKibana
 
@@ -91,6 +94,7 @@ from kibana.exceptions import (
     ConnectionTimeout,
     InvalidSpaceIdError,
     KibanaException,
+    KibanaVersionError,
     NotFoundError,
     SerializationError,
     SpaceError,
@@ -129,6 +133,9 @@ __all__ = [
     "ActionsClient",
     "SavedObjectsClient",
     "SpacesClient",
+    # Version support
+    "SUPPORTED_VERSIONS",
+    "is_supported",
     # Exceptions
     "KibanaException",
     "ApiError",
@@ -145,6 +152,7 @@ __all__ = [
     "SpaceError",
     "SpaceNotFoundError",
     "InvalidSpaceIdError",
+    "KibanaVersionError",
     # Serializers
     "Serializer",
     "JSONSerializer",

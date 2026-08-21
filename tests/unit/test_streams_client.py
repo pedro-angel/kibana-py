@@ -180,6 +180,12 @@ class TestStreamsCrud:
         call_kwargs = mock_transport.perform_request.call_args[1]
         assert call_kwargs["method"] == "PUT"
         assert call_kwargs["target"] == "/api/streams/logs.ecs.myapp"
+        # All three linked-object lists are defaulted here. `queries` is the
+        # version-dependent one -- 9.4 requires it, 9.5 rejects it -- and this mock
+        # transport answers no /api/status, so the client cannot determine the
+        # version and fails OPEN to the pre-existing behaviour. That is the property
+        # under test: an unreadable server must not change what a working call sends.
+        # The 9.5 branch is covered in test_version_compat_client.py.
         assert call_kwargs["body"] == {
             "stream": stream,
             "dashboards": [],

@@ -8,8 +8,9 @@ from typing import Any
 from elastic_transport import ObjectApiResponse
 
 from kibana._async.client._base import AsyncBaseClient
+from kibana._compat import capability_available, capability_lines
 from kibana._space_cache import SpaceValidationCache, shared_space_cache
-from kibana.exceptions import NotFoundError, SpaceNotFoundError
+from kibana.exceptions import KibanaVersionError, NotFoundError, SpaceNotFoundError
 
 
 class AsyncNamespaceClient:
@@ -66,6 +67,56 @@ class AsyncNamespaceClient:
     @_cache_ttl.setter
     def _cache_ttl(self, value: float) -> None:
         self._space_validation_cache.ttl = value
+
+    async def _server_version_or_none(self) -> str | None:
+        """The connected server's version, or ``None`` when it cannot be read.
+
+        Swallowing the error is the point: every caller here is deciding whether
+        the client can *prove* something about the server, and "could not ask" is
+        not proof. The public ``server_version()`` still raises, so a caller who
+        asks directly gets the real failure.
+        """
+        try:
+            return await self._client.server_version()
+        except Exception:  # noqa: BLE001 -- see the docstring
+            return None
+
+    async def _capability_available(self, capability: str) -> bool:
+        """Whether *capability* exists on the connected server.
+
+        Fails open, like :meth:`_require_capability`: an unreadable or
+        unsupported version answers ``True``, so behavior is unchanged from
+        before any of this existed.
+        """
+        return capability_available(capability, await self._server_version_or_none())
+
+    async def _require_capability(
+        self, capability: str, hint: str | None = None
+    ) -> None:
+        """Refuse a capability the connected Kibana does not have, before sending.
+
+        A capability is a whole endpoint (Kibana removes public routes between
+        minor lines) or a single request field one line requires and another
+        rejects. Both are rows in :data:`kibana._compat.CAPABILITIES` and both
+        come through here. Without it, the first returns a bare ``404`` that
+        reads exactly like "you named a stream that does not exist", and the
+        second a ``400`` about a field the caller did not know was contested.
+
+        Leniency is deliberate and one-directional: the call proceeds whenever
+        the client cannot *prove* it would fail -- the server version could not
+        be determined, or it is off the supported set entirely. The client never
+        refuses on a guess, and the server stays the authority on its own routes.
+
+        :param capability: ``"<namespace>.<method>"`` key into ``CAPABILITIES``.
+        :param hint: Optional guidance on what to use instead on this server.
+        :raises KibanaVersionError: If the connected server's line is supported
+            and is known not to have this capability.
+        """
+        version = await self._server_version_or_none()
+        if not capability_available(capability, version):
+            raise KibanaVersionError(
+                capability, version, capability_lines(capability), hint
+            )
 
     def _build_space_path(self, base_path: str, space_id: str | None = None) -> str:
         """

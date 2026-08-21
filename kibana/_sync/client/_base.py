@@ -20,6 +20,7 @@ from elastic_transport import (
     TransportApiResponse,
 )
 
+from kibana._compat import ServerVersionCache
 from kibana._space_cache import SpaceValidationCache
 from kibana.exceptions import HTTP_EXCEPTIONS, ApiError, translate_transport_errors
 from kibana.observability import KibanaInstrumentor, span_context
@@ -421,6 +422,50 @@ class BaseClient:
         # One space-existence cache for the whole client: every namespace client
         # borrows it, and SpacesClient invalidates it (see kibana._space_cache).
         self._space_validation_cache = SpaceValidationCache()
+        # Resolved-once holder for the server's version string, shared with every
+        # options() clone. Populated lazily by server_version(); nothing queries
+        # /api/status until something actually asks.
+        self._server_version_cache = ServerVersionCache()
+
+    def server_version(self) -> str | None:
+        """The Kibana version this client is connected to.
+
+        Reads ``version.number`` from ``GET /api/status`` the first time it is
+        asked and caches the answer for the client's lifetime (and for every
+        clone ``options()`` makes of it -- same server, same version). Callers
+        that never ask, and calls that do not need it, pay nothing.
+
+        Returns:
+            The version string Kibana reports, e.g. ``"9.5.2"``, or ``None``
+            when the server answers without one.
+
+        Raises:
+            ApiError: If ``/api/status`` rejects the request (bad credentials,
+                for instance). The failure is not cached, so a later call can
+                still succeed. Internal capability checks swallow this and let
+                the endpoint answer for itself -- see
+                :meth:`~kibana._sync.client.utils.NamespaceClient._require_capability`.
+
+        Example:
+            >>> client.server_version()
+            '9.5.2'
+            >>> from kibana import is_supported
+            >>> is_supported(client.server_version())
+            True
+        """
+        cache = self._server_version_cache
+        if not cache.resolved:
+            body = self.perform_request("GET", "/api/status").body
+            value = None
+            if isinstance(body, dict):
+                version = body.get("version")
+                if isinstance(version, dict):
+                    number = version.get("number")
+                    if isinstance(number, str):
+                        value = number
+            cache.value = value
+            cache.resolved = True
+        return cache.value
 
     def options(
         self,
@@ -501,6 +546,9 @@ class BaseClient:
         # credentials is intended: existence is not a per-identity fact, and the
         # endpoint still authorizes every request (see the docstring).
         new_client._space_validation_cache = self._space_validation_cache
+        # Same server, so the same version: share the holder rather than making
+        # the clone re-query /api/status.
+        new_client._server_version_cache = self._server_version_cache
 
         # Apply new options if provided
         if not isinstance(api_key, DefaultType):
