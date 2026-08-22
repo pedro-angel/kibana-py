@@ -304,7 +304,57 @@ Stated so the scorecard is not read for more than it is worth.
 - **The Python version matrix.** Certified separately by `make test-python-matrix`, not by
   these runs.
 
-## 6. Reproducing
+## 6. The Definition-of-Done gate
+
+`make dod` on this VM, at `69f3483`:
+
+```
+  NO-GO unit_green        (3531 passed, but 1 skipped in a no-skip suite)
+  GO    types_clean
+  GO    hygiene_hooks
+  GO    audit_clean
+  GO    sast_clean
+  NO-GO docs_strict
+  GO    vocabulary_conformant
+  GO    versions_consistent
+  GO    integration_green   (748 passed, 18 skipped)
+  GO    benchmark_green     (14 passed, 0 skipped)
+  GO    matrix_green        (3531 passed on 3.11, 3.12, 3.13, 3.14)
+  GO    changelog_entry
+VERDICT: NO-GO
+```
+
+**Ten GO, two NO-GO, and both NO-GOs are this sandbox rather than this repository.**
+Stated plainly rather than argued away:
+
+- **`unit_green`** — the unit suite is 3531 passed, 1 skipped, and the gate rejects *any*
+  skip in the unit suite. It is right to: a unit test that skips has an environmental
+  dependency. The one that does is
+  `test_validate_apm_connectivity_reaches_ipv6_only_listener`, which binds a real IPv6
+  loopback listener. This Firecracker kernel has **no IPv6 at all** — no
+  `/proc/sys/net/ipv6`, no `/proc/net/if_inet6`, `socket(AF_INET6, …)` raises `Errno 97` —
+  and it cannot be enabled. Before this branch the test *failed* here rather than skipping,
+  so `unit_green` was NO-GO either way; the widened guard turns a red into a stated skip.
+  Wherever IPv6 loopback exists, including GitHub runners, the test runs and the criterion
+  passes.
+- **`docs_strict`** — `sphinx-build -W` builds clean; Sphinx `linkcheck` reports six broken
+  external links, every one a `403` at the egress proxy for a host the allowlist does not
+  name (`cli.github.com`, `docs.pytest.org`, `docs.pypi.org`, `docs.readthedocs.io`,
+  `www.jaegertracing.io`, and `github.com/…/discussions`). All six are on pages this branch
+  does not modify. No link introduced by this work is among them.
+
+Both are recorded in `docs/source/development/cloud-environment.md` so the next session
+recognises them instead of re-diagnosing them, and both certify in CI, where neither
+constraint applies.
+
+The `integration_green` GO is worth one more line: it ran through
+`make test-integration` → `local-stack.sh`, a **different bring-up path** from the one runs
+C and D used. Its first attempt failed in `test_fleet_epm_integration.py`, because that
+path did not apply the proxy-CA overlay and Kibana therefore could not reach the package
+registry — a stack that looked healthy and was not. The overlay decision now lives in
+`scripts/proxy-ca.sh` and is sourced by both scripts, and the criterion passes.
+
+## 7. Reproducing
 
 ```bash
 # whichever pin you want
