@@ -112,6 +112,79 @@ Why each one:
 | `www.elastic.co` | The Kibana API reference and release notes that the compatibility research reads. |
 | `*.frame.claudeusercontent.com` | Only if sessions should read Artifacts; Claude Code fetches artifact content from that host. |
 
+#### If sessions build the docs
+
+`make docs` runs Sphinx `linkcheck`, which resolves every external link in
+`docs/source/`. Those hosts have nothing to do with the stack, so add them only if you
+intend to run the docs build in a session:
+
+```text
+cli.github.com
+docs.pytest.org
+docs.pypi.org
+docs.readthedocs.io
+docs.readthedocs.com
+www.jaegertracing.io
+```
+
+| Host | Needed for |
+| :--- | :--- |
+| `cli.github.com` | The `gh` CLI link in the release process page. |
+| `docs.pytest.org` | The pytest link in the contributing page. |
+| `docs.pypi.org` | The trusted-publishing link in the release process page. |
+| `docs.readthedocs.io` | The import-guide link in the release process page — and **not sufficient on its own**, see below. |
+| `docs.readthedocs.com` | Where that `.io` link actually lands. |
+| `www.jaegertracing.io` | A tracing-backend link in the observability user guide. |
+
+**Both readthedocs hosts, and this is the `docker-auth.elastic.co` lesson a second time.**
+The documentation links `docs.readthedocs.io`; that answers `302` and the link resolves at
+`docs.readthedocs.com`. The allowlist is applied to the **redirect target**, so naming only
+the host that appears in the source leaves the link refused. Measured 2026-08-22:
+
+```
+$ curl -sSL -o /dev/null -w '%{url_effective}\n' \
+    https://docs.readthedocs.io/en/stable/intro/import-guide.html
+https://docs.readthedocs.com/platform/stable/intro/add-project.html
+```
+
+An explicit list can only name the hosts you already know about, and a redirect target is
+another kind you do not know about until it fails. A denial is legible when you look for
+it — the proxy says so in a header rather than failing obscurely:
+
+```
+HTTP/2 403
+x-deny-reason: host_not_allowed
+Host not in allowlist: docs.pypi.org. Add this host to your network egress settings.
+```
+
+#### What the allowlist cannot fix
+
+One `linkcheck` failure is **not** an egress-policy problem, and widening the network list
+will never clear it. `docs/source/development/index.md` links the repository's GitHub
+Discussions, and the session's **GitHub credential proxy** — a different control, the one
+that keeps your real token outside the VM — refuses it:
+
+```
+$ curl -sS https://github.com/pedro-angel/kibana-py/discussions
+{"message":"This GitHub API path is not available: sessions are bound to their configured
+ repositories. Use repository-scoped endpoints (repos/{owner}/{repo}/...)."}
+```
+
+The link is genuinely valid — the repository has Discussions enabled (`has_discussions:
+true` from the repository API) — so this is a sandbox artifact, not a broken link. The
+refusal is narrow, and worth knowing precisely before assuming a whole class of URL is
+unreachable. Measured against `github.com/pedro-angel/kibana-py`:
+
+| Path | Result |
+| :--- | :--- |
+| `/`, `/tree/main`, `/blob/main/README.md` | 200 |
+| `/issues`, `/pulls`, `/releases`, `/issues/new/choose` | 200 / 302 |
+| `/discussions`, `/wiki` | **403** from the credential proxy |
+
+Only those two segments are refused. This is why `make dod` reports `docs_strict` NO-GO in
+a cloud session even with a complete allowlist, and why that criterion certifies in CI and
+on a maintainer's machine rather than here.
+
 Keeping the default package-manager list is what lets `pip install -e ".[dev,all]"` reach PyPI
 and the bootstrap below reach `raw.githubusercontent.com`. It does not make Docker Hub usable:
 the default list names `production.cloudflare.docker.com`, while Hub now serves blobs from
@@ -272,12 +345,13 @@ its response envelope in 9.5" — a measured difference rather than a reading of
   environment**, because the gate rejects any skip in the unit suite. That is the gate
   working: a unit test that skips has an environmental dependency. The test runs and passes
   wherever IPv6 loopback exists, including GitHub runners.
-- **`make dod` also reports `docs_strict` NO-GO here**, for the network policy rather than the
-  docs. `make docs` runs Sphinx `linkcheck`, and hosts outside the allowlist fail `CONNECT`
-  with `403` at the proxy — `www.jaegertracing.io` today. The strict HTML build
-  (`sphinx-build -W`) passes; only the external-link pass fails, and only on links whose hosts
-  the allowlist does not name. Add a host to the allowlist if a link genuinely matters, and
-  read a `linkcheck` failure here as a question about the allowlist before assuming it is a
+- **`make dod` also reports `docs_strict` NO-GO here**, and only the external-link pass is at
+  fault — the strict HTML build (`sphinx-build -W`) passes. Most of it is the allowlist and is
+  fixable by naming the hosts in ["If sessions build the docs"](#if-sessions-build-the-docs):
+  that took a measured run from six broken links to one. The one that remains is the GitHub
+  Discussions link, refused by the credential proxy rather than the egress policy, which no
+  network setting clears — see ["What the allowlist cannot fix"](#what-the-allowlist-cannot-fix).
+  Read a `linkcheck` failure here as a question about the environment before assuming it is a
   question about the documentation.
 
   Both NO-GOs are properties of this sandbox, not of the repository, and both are visible in
