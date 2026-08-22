@@ -181,9 +181,22 @@ unreachable. Measured against `github.com/pedro-angel/kibana-py`:
 | `/issues`, `/pulls`, `/releases`, `/issues/new/choose` | 200 / 302 |
 | `/discussions`, `/wiki` | **403** from the credential proxy |
 
-Only those two segments are refused. This is why `make dod` reports `docs_strict` NO-GO in
-a cloud session even with a complete allowlist, and why that criterion certifies in CI and
-on a maintainer's machine rather than here.
+Only those two segments are refused.
+
+`docs/source/conf.py` therefore adds those two patterns to `linkcheck_ignore` **when, and
+only when, `CLAUDE_CODE_REMOTE` is `true`** — the same variable `scripts/cloud-session-start.sh`
+gates on. CI and a maintainer's machine check the links exactly as before, so the gate is not
+weakened where it can run; it is relaxed only where it provably cannot. The build announces
+the skip rather than applying it silently:
+
+```
+conf.py: CLAUDE_CODE_REMOTE=true -- linkcheck is skipping 2 pattern(s) this
+environment's GitHub credential proxy refuses (see development/cloud-environment.md)
+```
+
+Verified in both directions on 2026-08-22: with the variable set, `linkcheck` passes the
+Discussions link; with it unset, the same build reports it broken. If you add a documentation
+link to a GitHub path in that set, expect it to be checked everywhere except here.
 
 Keeping the default package-manager list is what lets `pip install -e ".[dev,all]"` reach PyPI
 and the bootstrap below reach `raw.githubusercontent.com`. It does not make Docker Hub usable:
