@@ -127,32 +127,42 @@ linkcheck_ignore = [
     r"https://github\.com/pedro-angel/kibana-py/compare/.*$",
 ]
 
-# Two GitHub paths are unreachable from inside a Claude Code cloud session, and only
-# from there. The session's GitHub credential proxy -- the control that keeps the real
-# token outside the VM -- answers /discussions and /wiki with 403 ("sessions are bound
-# to their configured repositories"), while /, /tree, /blob, /issues, /pulls,
-# /releases and /issues/new/choose all resolve. Measured 2026-08-22; the map is in
-# docs/source/development/cloud-environment.md. The links are valid -- this repository
-# has Discussions enabled -- so the failure is the sandbox, not the documentation.
+# Links this repository's documentation is entitled to make, and that a Claude Code
+# cloud session cannot resolve. Measured 2026-08-22; both are recorded with their
+# evidence in docs/source/development/cloud-environment.md.
+#
+#   github.com/<repo>/discussions and /wiki -- refused by the session's GitHub
+#   credential proxy, the control that keeps the real token outside the VM ("sessions
+#   are bound to their configured repositories"). Narrow: /, /tree, /blob, /issues,
+#   /pulls, /releases and /issues/new/choose all resolve. The links are valid; this
+#   repository has Discussions enabled.
+#
+#   docs.pypi.org -- refused by the egress allowlist with `host_not_allowed`, and NOT
+#   fixable by configuring one. Custom entries under pypi.org do not take effect:
+#   blog.pypi.org is refused with `*.pypi.org` in the allowed list, while unrelated
+#   hosts added in the same edit began answering immediately. The proxy already
+#   special-cases pypi.org in its bypass list, which is the likeliest cause.
 #
 # Scoped to that environment ONLY, deliberately. CI and a maintainer's machine check
 # these links exactly as before, so the gate is not weakened where it can run; it is
 # relaxed only where it provably cannot. Widening `linkcheck_ignore` unconditionally
-# would buy a green `docs_strict` in the sandbox by giving up the one place the link
-# is actually verified.
+# would buy a green `docs_strict` in the sandbox by giving up the one place the links
+# are actually verified -- which matters most for the pypi.org one, whose validity has
+# never been observed from here at all. If it is dead, CI is what will say so.
 #
 # Announced rather than applied silently: an exemption nobody can see in the build
 # log is how a gate stops gating without anyone deciding that it should.
 _SANDBOX_UNREACHABLE_LINKS = [
     r"https://github\.com/.+/discussions/?$",
     r"https://github\.com/.+/wiki/?$",
+    r"https://docs\.pypi\.org/.*$",
 ]
 
 if os.environ.get("CLAUDE_CODE_REMOTE") == "true":
     linkcheck_ignore += _SANDBOX_UNREACHABLE_LINKS
     print(
         "conf.py: CLAUDE_CODE_REMOTE=true -- linkcheck is skipping "
-        f"{len(_SANDBOX_UNREACHABLE_LINKS)} pattern(s) this environment's GitHub "
-        "credential proxy refuses (see development/cloud-environment.md): "
+        f"{len(_SANDBOX_UNREACHABLE_LINKS)} pattern(s) this environment cannot "
+        "reach (see development/cloud-environment.md): "
         + ", ".join(_SANDBOX_UNREACHABLE_LINKS)
     )
