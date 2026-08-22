@@ -131,5 +131,28 @@ supported set can move forward by procedure rather than by archaeology.
 
 ### Task 9 — Certify
 
-- [x] `make dod` → GO.
+- [x] `make dod` → **10 GO, 2 NO-GO**, both NO-GOs properties of the sandbox rather than
+      the repository: `unit_green` (the Firecracker kernel has no IPv6 and one unit test
+      needs a real IPv6 listener, so it skips, and the gate rejects any skip in the unit
+      suite) and `docs_strict` (Sphinx linkcheck cannot reach six hosts outside the egress
+      allowlist, none on a page this branch touches). Both certify in CI. Recorded in the
+      evidence file and on the cloud-environment page rather than marked `n/a`.
 - [x] CHANGELOG entry.
+
+### Task 10 — Repairs the certification run itself demanded
+
+Not planned. Each was found by running a gate rather than by reading code, and each is a
+defect in the verification machinery, so each got its own commit.
+
+- [x] **The two stack bring-up paths disagreed.** `ci-stack-up.sh` applied the proxy-CA
+      overlay; `local-stack.sh` — which `make test-integration` and therefore the DoD gate
+      use — did not. The same suite passed under one and failed under the other on the same
+      commit and server. The decision now lives in `scripts/proxy-ca.sh`, sourced by both.
+- [x] **The data-view fixture could not survive an interrupted run.** A unique id but a
+      fixed name, and Kibana rejects duplicate data views by name, so one leftover failed
+      four tests on a healthy stack.
+- [x] **The telemetry-overhead benchmark was a coin flip.** A ratio of means over a
+      network-dominated measurement: 1.04x, 1.59x, 0.97x on identical code. Medians plus an
+      absolute floor.
+- [x] **An IPv6 capability guard started one line too late**, so a host with no IPv6 failed
+      where the author had intended it to skip.

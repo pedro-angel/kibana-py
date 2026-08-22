@@ -88,6 +88,18 @@ see [CONTRIBUTING.md § Changelog Policy](CONTRIBUTING.md#changelog-policy).
 
 ### Changed
 
+- **`local-stack.sh` now trusts an intercepting proxy's CA too, from the same source as
+  `scripts/ci-stack-up.sh`.** The overlay was applied by the CI bring-up path and not by the
+  local one, which `make stack-start`, `make test-integration` and the Definition-of-Done gate
+  all use. Where container egress is intercepted, the local path therefore produced a stack that
+  looked healthy — containers up, `/api/status` available — but whose Kibana could not make an
+  outbound HTTPS call, so every Fleet/EPM test failed against it while the same tests passed
+  under `ci-stack-up.sh`. Upstream `elastic-start-local/start.sh` runs a bare `docker compose up`
+  that no `-f` flag can reach, so the overlay is injected through `COMPOSE_FILE` for that one
+  invocation. The detection itself moved to `scripts/proxy-ca.sh` and is sourced by both scripts,
+  because a rule that held in one of two places is what produced this. With no CA on disk — a
+  GitHub runner — the compose invocation is unchanged.
+
 - **The client now supports two Kibana minor lines at the latest patch of each — 9.5.2 and
   9.4.5 — and the release gate blocks on both.** Supported and release-gated are the same list
   by construction: the set is declared once in `kibana/_compat.py`, and both `integration-probe`
