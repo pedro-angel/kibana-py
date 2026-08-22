@@ -229,6 +229,22 @@ single exception being a test that exists precisely to assert a difference.
 Both runs exited `0`. The runner recorded `commit=1d3a8fb…`, `tree=f93fc01…` and
 `dirty_paths=0` for each before starting, so neither measured an uncommitted tree.
 
+**Re-confirmed at `b867334` after the bring-up refactor.** `scripts/ci-stack-up.sh` changed
+after runs C and D, to share the proxy-CA decision with `local-stack.sh` (see the *Repairs*
+section). The client is untouched — `git diff 1d3a8fb..b867334 -- kibana/ tests/` is empty —
+but the script that provisions the server is not, so 9.4.5 was run again on the branch head.
+9.5.2 had already been re-run through the Definition-of-Done gate at `69f3483` (748 passed).
+
+```
+C  (9.4.5 @ 1d3a8fb): total=766 passed=747 failed=0 error=0 skipped=19 wall=1226.6s
+C' (9.4.5 @ b867334): total=766 passed=747 failed=0 error=0 skipped=19 wall=1278.5s
+
+differing outcomes: 0
+```
+
+Same 766 tests, same 766 outcomes. The refactor is behaviour-preserving against a live
+server, not merely against a reading of the diff.
+
 ### Skips, and why each is not a hole
 
 Every skip carries a stated reason. Grouped:
