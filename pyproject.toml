@@ -79,7 +79,10 @@ dev = [
     "nox",
     "pre-commit>=3.0",
     "psutil>=5.0",
-    "kibana-py[docs,build]",
+    # [probe] rides along so `make test-integration-ci` -- the release gate's own
+    # leaf, and what `make test-integration-matrix` runs per version -- works from a
+    # plain `make setup` instead of failing on an unrecognized --timeout.
+    "kibana-py[docs,build,probe]",
 ]
 
 [project.urls]

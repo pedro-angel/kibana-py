@@ -8,10 +8,15 @@
 # a shell mirror could never keep byte-identical — delegation is the mirror).
 # Criteria marked `required` must pass; `n/a` are skipped (declare, don't delete, so
 # the omission is a visible decision). Full logs land in /tmp/dod-<criterion>.log.
-# integration/benchmark need the local Elastic Stack (their make targets start it —
-# docker required); test-python-matrix uses pyenv-installed interpreters when
-# available. CI runs the fast criteria on every PR; this gate is the superset a
-# human runs where the infrastructure lives.
+# integration/benchmark need the local Elastic Stack (docker required).
+# integration_green runs the release-gate selection against EVERY supported Kibana
+# version (make test-integration-matrix, which provisions and tears down per pin),
+# because a gate that certifies one line while the README claims several is exactly
+# the "supported but not gated" drift docs/source/development/version-support.md
+# refuses. It therefore costs one full integration run per supported line.
+# test-python-matrix uses pyenv-installed interpreters when available. CI runs the
+# fast criteria on every PR; this gate is the superset a human runs where the
+# infrastructure lives.
 #
 # Portable POSIX sh; zero deps beyond make and the project venv.
 # Concept adapted from cmanaha/extended-superpowers (MIT).
@@ -93,7 +98,7 @@ if req sast_clean;             then run sast_clean             make sast; fi
 if req docs_strict;            then run docs_strict            make docs; fi
 if req vocabulary_conformant;  then run vocabulary_conformant  make vocabulary; fi
 if req versions_consistent;    then run versions_consistent    make versions; fi
-if req integration_green;      then run_suite integration_green yes make test-integration; fi
+if req integration_green;      then run_suite integration_green yes make test-integration-matrix; fi
 if req benchmark_green;        then run_suite benchmark_green   yes make test-benchmark; fi
 if req matrix_green;           then run_suite matrix_green      yes make test-python-matrix; fi
 

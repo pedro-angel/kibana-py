@@ -219,6 +219,24 @@ pytest tests/unit/  # Only run unit tests
 
 Integration tests are automatically skipped if `KIBANA_URL` is not set.
 
+#### Against every supported Kibana line
+
+The client supports more than one Kibana minor line, and the release gate blocks on
+all of them. `make test-integration-matrix` is that coverage locally: for each version
+in the supported set it destroys the stack and its volumes, provisions at that pin, and
+runs `make test-integration-ci` — the release gate's own selection.
+
+```bash
+make test-integration-matrix
+```
+
+The version list comes from `scripts/checks/supported-versions.py --matrix`, the same
+single source `.github/workflows/release.yml` builds its matrix from, so a line added to
+`kibana/_compat.py` is covered here with no edit to the script, the Makefile, or this
+page. Budget one full integration run per supported version; `make test-integration`
+(one line — whatever `elastic-start-local/.env.example` pins) stays the fast loop while
+iterating. Locally, export `ES_LOCAL_API_KEY` first or the api-key auth tests skip.
+
 ### CI Behavior
 
 The default GitHub Actions test workflow runs unit/lint/type checks only.
@@ -512,7 +530,7 @@ jobs:
                     pytest tests/unit/ --cov=kibana --cov-fail-under=75
 ```
 
-Integration tests are intentionally excluded from this CI workflow and are run on demand using `make test-integration`.
+Integration tests are intentionally excluded from this CI workflow. They run on demand — `make test-integration` locally, `make test-integration-matrix` across every supported Kibana line before a release, and as the tagged release's required gate (see [Release Process](release-process.md)).
 
 ## Troubleshooting
 

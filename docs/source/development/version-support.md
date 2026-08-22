@@ -38,6 +38,7 @@ authored by hand twice. They are handled in exactly one of two ways:
 | :--- | :--- |
 | `.github/workflows/integration-probe.yml` matrix | **derived** — a `versions` job runs `supported-versions.py --matrix` |
 | `.github/workflows/release.yml` gate matrix | **derived** — same |
+| `scripts/integration-matrix.sh` (the local gate's loop) | **derived** — same, so `make test-integration-matrix` and `make dod` cover a new line with no edit |
 | `elastic-start-local/.env.example` (`ES_LOCAL_VERSION`) | **checked** against the newest pin |
 | `scripts/cloud-setup.sh` (pre-pull default) | **checked** against all pins, newest first |
 | `README.md` "Version support" table | **checked** row by row |
@@ -69,6 +70,13 @@ the source, if a workflow has re-grown a hard-coded version, or if a supported l
 no dated support decision. It is a required Definition-of-Done criterion
 (`versions_consistent` in `dod.config`) and runs in the `checks` workflow, so drift
 cannot merge.
+
+`make versions` proves the *statements* agree. What proves the *client* agrees is the
+integration suite running against every line in the set — in CI as the release gate's
+matrix, and locally as `make test-integration-matrix`, which the `integration_green`
+Definition-of-Done criterion runs. Both build their version list from `--matrix` below,
+so "supported but not gated" cannot be reached by forgetting a line: adding one to
+`kibana/_compat.py` adds it to both gates.
 
 Two other modes:
 

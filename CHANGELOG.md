@@ -53,6 +53,27 @@ see [CONTRIBUTING.md § Changelog Policy](CONTRIBUTING.md#changelog-policy).
   [Kibana version support](docs/source/development/version-support.md); the design chain behind it
   is under `docs/superpowers/`.
 
+- **`make test-integration-matrix` — the release gate's own coverage, locally.** The release
+  gate runs the integration suite against every supported Kibana line. Locally that was a
+  manual loop — export `ES_LOCAL_VERSION`, provision, run, tear down, repeat — with nothing to
+  catch a line the runner forgot, which made the local gate *weaker* than the CI gate it is
+  supposed to be a superset of. The new target runs `scripts/integration-matrix.sh`, which
+  reads the supported set from the same `supported-versions.py --matrix` the release gate does
+  and, per version, destroys the stack and its volumes, provisions at that pin, and runs the
+  gate's own `make test-integration-ci` leaf — so the pytest command string still lives in the
+  Makefile recipe exactly once. Adding a line to `kibana/_compat.py` covers it here with no
+  edit to the script, the Makefile, or the docs. The Definition-of-Done criterion
+  `integration_green` now runs this instead of the single-version `make test-integration`, so
+  `make dod` costs one full integration run per supported line — the price of a local gate that
+  certifies what the release gate certifies. It fails closed at every step an optimist would
+  skip: an empty or unreadable supported set is a hard error rather than a green matrix over
+  zero versions, a version whose stack never comes up is a NO-GO rather than a missing row, a
+  version that exits 0 having executed no tests is a NO-GO, and a `MAKEFLAGS` leaked from a
+  parent `make -k` is cleared so a child recipe cannot ignore errors into a false pass. The
+  `[probe]` extra (pytest-timeout, which the gate's `--timeout` needs) now rides along with
+  `dev`, so a plain `make setup` can run the gate's own selection instead of failing on an
+  unrecognized argument.
+
 - **A Claude Code cloud environment for release-compatibility research and maintenance.**
   `scripts/cloud-setup.sh` is the environment's setup script: it installs `gh` and pre-pulls the
   Elasticsearch, Kibana, and APM images for every version in `KIBANA_PY_STACK_VERSIONS`

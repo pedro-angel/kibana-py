@@ -111,9 +111,10 @@ A PyPI/TestPyPI **API token** is needed *only* for the optional manual dry-run
 
 ## Pre-release checklist
 
+- [ ] `make dod` reports **GO** — the tooling-certified verdict over every criterion in `dod.config`, including the integration matrix below. The individual checks are listed here because a NO-GO tells you which one to re-run, not because passing them one by one substitutes for the gate.
 - [ ] `make check` passes (hooks, lint, dependency audit, SAST, unit tests, docs)
 - [ ] `make test-python-matrix` passes (multi-Python unit matrix via nox; fails closed if any supported interpreter is missing — install them via pyenv)
-- [ ] `make test-integration` passes locally against a live stack — recommended for fast feedback before tagging; the tagged release also runs it as a **required gate** in CI (the `integration` job — see [How a release runs](#how-a-release-runs)), so a failure there blocks publish even if this local step is skipped
+- [ ] `make test-integration-matrix` passes locally — the release-gate selection against **every** supported Kibana line, provisioning and tearing down per pin, driven by the same `supported-versions.py --matrix` the release gate uses, so a line cannot be missed by forgetting to set `ES_LOCAL_VERSION` by hand. Budget one full integration run per supported version. `make test-integration` (single line, the stack template's pin) is the faster loop while iterating; it is **not** what the release gate covers. The tagged release runs the matrix as a **required gate** in CI (the `integration` job — see [How a release runs](#how-a-release-runs)), so a failure there blocks publish even if this local step is skipped
 - [ ] Documentation builds clean: `make docs` (already covered by `make check`) (HTML with `-W` + linkcheck, matching RTD's `fail_on_warning`)
 - [ ] Version bumped in `kibana/_version.py`
 - [ ] `CHANGELOG.md` updated (entry **and** reference links)
