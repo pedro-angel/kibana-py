@@ -167,18 +167,36 @@ class TestTelemetryOverhead:
         finally:
             client.close()
 
-        baseline_mean = statistics.mean(baseline_times)
-        disabled_mean = statistics.mean(disabled_times)
-        overhead_ratio = disabled_mean / baseline_mean if baseline_mean > 0 else 1
+        # MEDIAN, not mean, and an absolute floor before the ratio is allowed to
+        # fail the test. Both samples are dominated by the same network round trip
+        # (~13ms here), while the thing under test -- client-side cost when
+        # telemetry is off -- is microseconds. A ratio of two means over 50 samples
+        # is therefore a measure of network jitter, not of overhead: observed
+        # readings on an idle host ranged 0.97x, 1.04x, 1.59x for identical code,
+        # and a ratio BELOW 1.0 is physically impossible as overhead. A single
+        # outlier moves a mean and barely moves a median.
+        #
+        # The floor is what makes this honest: with a sub-millisecond true
+        # difference, no ratio computed from millisecond-scale samples means
+        # anything. Real overhead -- an accidental extra request, a synchronous
+        # export -- costs milliseconds and still fails both conditions.
+        baseline_median = statistics.median(baseline_times)
+        disabled_median = statistics.median(disabled_times)
+        overhead_ratio = disabled_median / baseline_median if baseline_median > 0 else 1
+        absolute_overhead_ms = (disabled_median - baseline_median) * 1000
 
-        print(f"Baseline mean: {baseline_mean*1000:.2f}ms")
-        print(f"Disabled mean: {disabled_mean*1000:.2f}ms")
+        print(f"Baseline median: {baseline_median*1000:.2f}ms")
+        print(f"Disabled median: {disabled_median*1000:.2f}ms")
         print(f"Overhead ratio: {overhead_ratio:.2f}x")
+        print(f"Absolute overhead: {absolute_overhead_ms:.2f}ms")
 
-        # Should have minimal overhead (< 10%)
-        assert (
-            overhead_ratio <= 1.1
-        ), f"Unexpected overhead when disabled: {overhead_ratio:.2f}x"
+        # Fails only when the overhead is BOTH proportionally large and large
+        # enough in absolute terms to be a real cost rather than jitter.
+        assert overhead_ratio <= 1.1 or absolute_overhead_ms <= 2.0, (
+            f"Unexpected overhead when disabled: {overhead_ratio:.2f}x "
+            f"({absolute_overhead_ms:.2f}ms over a "
+            f"{baseline_median*1000:.2f}ms baseline)"
+        )
 
 
 class TestMemoryUsage:

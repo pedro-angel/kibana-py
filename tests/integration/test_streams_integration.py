@@ -10,7 +10,12 @@ import uuid
 
 import pytest
 
-from kibana.exceptions import BadRequestError, NotFoundError
+from kibana._compat import capability_available
+from kibana.exceptions import (
+    BadRequestError,
+    KibanaVersionError,
+    NotFoundError,
+)
 
 from .utils import (
     create_test_async_kibana_client,
@@ -301,32 +306,70 @@ class TestStreamsQueries:
             to="2026-07-02T00:00:00.000Z",
             bucket_size="1h",
         )
-        assert "significant_events" in events.body
         assert "aggregated_occurrences" in events.body
+        # 9.5 renamed this list to `queries`; the client carries both names on both
+        # lines, so this assertion holds whichever server answered.
+        assert "significant_events" in events.body
+        assert "queries" in events.body
         ids = [e["id"] for e in events.body["significant_events"]]
         assert "kbnpy-streams-sig" in ids
 
-        preview = kibana_client.streams.preview_significant_events(
-            name=child_stream,
-            from_="2026-07-01T00:00:00.000Z",
-            to="2026-07-02T00:00:00.000Z",
-            bucket_size="1h",
-            esql=esql,
-        )
-        assert "occurrences" in preview.body
-        assert "change_points" in preview.body
+        # Preview is a 9.4-line endpoint: 9.5 removed it from the public API, so
+        # the client refuses before sending rather than surfacing a bare 404.
+        # Both branches are asserted -- neither is skipped. The version-transparent
+        # half of this contract lives in test_version_compat_integration.py.
+        if capability_available(
+            "streams.preview_significant_events", kibana_client.server_version()
+        ):
+            preview = kibana_client.streams.preview_significant_events(
+                name=child_stream,
+                from_="2026-07-01T00:00:00.000Z",
+                to="2026-07-02T00:00:00.000Z",
+                bucket_size="1h",
+                esql=esql,
+            )
+            assert "occurrences" in preview.body
+            assert "change_points" in preview.body
+        else:
+            with pytest.raises(KibanaVersionError) as excinfo:
+                kibana_client.streams.preview_significant_events(
+                    name=child_stream,
+                    from_="2026-07-01T00:00:00.000Z",
+                    to="2026-07-02T00:00:00.000Z",
+                    bucket_size="1h",
+                    esql=esql,
+                )
+            assert excinfo.value.capability == "streams.preview_significant_events"
 
     def test_generate_significant_events_requires_ai_connector(
         self, kibana_client, child_stream
     ):
-        # The trial stack has no AI connector configured: the endpoint must
-        # be reachable and reject the request with a clear 400 error.
-        with pytest.raises(BadRequestError, match="connector"):
-            kibana_client.streams.generate_significant_events(
-                name=child_stream,
-                from_="2026-07-01T00:00:00.000Z",
-                to="2026-07-02T00:00:00.000Z",
-            )
+        """9.4: reachable, rejects without a connector. 9.5: removed, refused early.
+
+        Both branches drive the real path -- on 9.4 the assertion is the server's own
+        semantic rejection (it names the connector), not merely a status code, so a
+        routing or payload bug still fails this test.
+        """
+        if capability_available(
+            "streams.generate_significant_events", kibana_client.server_version()
+        ):
+            # The trial stack has no AI connector configured: the endpoint must
+            # be reachable and reject the request with a clear 400 error.
+            with pytest.raises(BadRequestError, match="connector"):
+                kibana_client.streams.generate_significant_events(
+                    name=child_stream,
+                    from_="2026-07-01T00:00:00.000Z",
+                    to="2026-07-02T00:00:00.000Z",
+                )
+        else:
+            with pytest.raises(KibanaVersionError) as excinfo:
+                kibana_client.streams.generate_significant_events(
+                    name=child_stream,
+                    from_="2026-07-01T00:00:00.000Z",
+                    to="2026-07-02T00:00:00.000Z",
+                )
+            assert excinfo.value.capability == "streams.generate_significant_events"
+            assert excinfo.value.available_on == ("9.4",)
 
 
 class TestStreamsContentPacks:

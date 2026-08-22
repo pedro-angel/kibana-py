@@ -35,16 +35,17 @@ fi
 # ES + Kibana (+ its one-shot kibana_settings) + the standalone APM server.
 compose_files="-f docker-compose.yml -f docker-compose.apm.yml"
 
-# Where container egress is transparently re-terminated by a proxy's own CA -- a
-# Claude Code cloud session, a corporate MITM gateway -- Kibana rejects every
-# outbound HTTPS call unless it carries that CA. Overlay it only when the file is
-# really there, so CI, where nothing intercepts egress, runs the invocation above
-# unchanged and never depends on a path that does not exist on a runner.
-proxy_ca="${KIBANA_PY_PROXY_CA:-/root/.ccr/ca-bundle.crt}"
-if [ -f "$proxy_ca" ]; then
-  export KIBANA_PY_PROXY_CA="$proxy_ca"
-  compose_files="$compose_files -f docker-compose.proxy-ca.yml"
-  echo "proxy_ca=${proxy_ca} (trusting it in Kibana)" | tee -a "$summary"
+# Where container egress is transparently re-terminated by a proxy's own CA, Kibana
+# needs that CA or every outbound HTTPS call fails. The decision lives in
+# scripts/proxy-ca.sh so this script and local-stack.sh cannot disagree about it --
+# they did, and the local path silently produced a stack that could not reach the
+# package registry.
+# shellcheck source=proxy-ca.sh
+. "$here/scripts/proxy-ca.sh"
+kibana_py_detect_proxy_ca
+if [ -n "$kibana_py_proxy_ca_overlay" ]; then
+  compose_files="$compose_files -f $kibana_py_proxy_ca_overlay"
+  echo "proxy_ca=${KIBANA_PY_PROXY_CA} (trusting it in Kibana)" | tee -a "$summary"
 fi
 
 t0=$(date +%s)

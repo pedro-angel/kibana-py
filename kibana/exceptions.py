@@ -374,6 +374,67 @@ class InvalidSpaceIdError(SpaceError):
         super().__init__(f"Invalid space ID format: {space_id}")
 
 
+class KibanaVersionError(KibanaException):
+    """Raised when a client method is not available on the connected Kibana.
+
+    Kibana occasionally removes a public endpoint between minor lines. Calling
+    such a method against a server that no longer routes it would otherwise
+    surface as a bare :class:`NotFoundError` -- indistinguishable from naming a
+    resource that does not exist, and a poor thing to debug. This error says
+    which method, which server, and where the capability does exist.
+
+    It is raised *before* the request is sent, so nothing reaches the server.
+    The client raises it only when it has positively determined the server's
+    version and that version's line is in the supported set; when the version
+    cannot be determined the request is attempted and the server answers.
+
+    Attributes:
+        capability: The ``"<namespace>.<method>"`` name that was refused. A
+            request *field* one line requires and another rejects is named the
+            same way, e.g. ``"streams.upsert.queries"``.
+        server_version: The version string reported by the connected Kibana.
+        available_on: The supported minor lines that do have the capability.
+        hint: What to do instead on this server, when there is an answer.
+
+    Example:
+        >>> try:
+        ...     client.streams.preview_significant_events(...)
+        ... except KibanaVersionError as e:
+        ...     print(f"{e.capability} is gone in {e.server_version}")
+        ...     print(f"still available on: {', '.join(e.available_on)}")
+    """
+
+    def __init__(
+        self,
+        capability: str,
+        server_version: str | None,
+        available_on: tuple[str, ...],
+        hint: str | None = None,
+    ):
+        """Initialize KibanaVersionError.
+
+        Args:
+            capability: The ``"<namespace>.<method>"`` name that was refused.
+            server_version: The connected server's version string.
+            available_on: Supported minor lines that have the capability.
+            hint: Optional guidance on what to use instead on this server.
+        """
+        self.capability = capability
+        self.server_version = server_version
+        self.available_on = available_on
+        self.hint = hint
+        where = ", ".join(f"{line}.x" for line in available_on) or "no supported line"
+        message = (
+            f"{capability} is not available on Kibana {server_version}: "
+            f"it exists on {where}."
+        )
+        if hint:
+            message = f"{message} {hint}"
+        super().__init__(
+            f"{message} See README 'Version support' for the supported set."
+        )
+
+
 # Mapping of HTTP status codes to exception classes
 HTTP_EXCEPTIONS: dict[int, type[ApiError]] = {
     400: BadRequestError,

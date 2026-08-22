@@ -479,7 +479,7 @@ class TestAgentBuilderSkills:
 class TestAgentBuilderPlugins:
     """Live tests for the Agent Builder plugins API (technical preview).
 
-    On the default Kibana 9.4.3 configuration the plugins routes are not
+    On a default Kibana configuration the plugins routes are not
     registered (feature-flag gated) and every call returns a plain 404, in
     contrast to the OpenAPI spec which documents them unconditionally.
     """
@@ -490,7 +490,7 @@ class TestAgentBuilderPlugins:
             listed = kibana_client.agent_builder.list_plugins()
         except NotFoundError:
             pytest.skip(
-                "plugins API is not enabled on this Kibana 9.4.3 stack "
+                "plugins API is not enabled on this Kibana stack "
                 "(technical-preview routes are feature-flag gated and "
                 "return 404)"
             )

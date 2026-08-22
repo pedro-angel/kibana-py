@@ -11,6 +11,48 @@ see [CONTRIBUTING.md § Changelog Policy](CONTRIBUTING.md#changelog-policy).
 
 ### Added
 
+- **One client contract across every supported Kibana line.** Kibana changes API shapes between
+  minor lines; the client now absorbs those changes so the same caller code runs on 9.5.x and
+  9.4.x, and it does so **additively** — it never removes, renames, or overwrites a key the
+  server actually sent. `dashboards.get_all()` carries both spellings of the search envelope
+  (`dashboards`/`page`/`total` and `data`/`meta`) on both lines, aliasing one list rather than
+  copying it; `streams.get_significant_events()` carries both `significant_events` and `queries`.
+  `streams.upsert()` is the one request that varies by server version, because the two lines
+  cannot be reconciled: 9.4 **requires** a `queries` field in the stream body and 9.5 **rejects**
+  it as an excess key, so no single body satisfies both. The client supplies the field where it
+  is required and omits it where it is not — an upsert that does not mention queries now
+  succeeds on both lines, and 9.4's behaviour is byte-for-byte what it was. Passing `queries`
+  explicitly against 9.5 raises rather than silently dropping it. Everything version-specific
+  lives in the new `kibana/_compat.py`, reached through one table lookup; no method in the
+  client branches on a version.
+
+- **`client.server_version()`, `kibana.is_supported()` and `kibana.SUPPORTED_VERSIONS`.** The
+  client can say what it is connected to and whether that is a version it claims. The version is
+  read from `/api/status` lazily, once per client, and shared with every `options()` clone — no
+  call path that does not need it pays for it, and a failed lookup is not cached.
+
+- **`KibanaVersionError` for capabilities a supported line does not have.** Kibana 9.5 removed
+  `streams.generate_significant_events()` and `streams.preview_significant_events()` from the
+  public API, replacing them with an internal, unversioned surface this client deliberately does
+  not call. Calling either against 9.5 now raises before any request is sent, naming the method,
+  the server version and the lines that do route it, instead of returning a bare `404`
+  indistinguishable from a missing stream. The gate fails **open**: an unknown version, an
+  unreachable `/api/status`, or a server outside the supported set all proceed as before, because
+  the client refuses only what it can prove.
+
+- **A version-support maintenance framework.** The supported set is declared once, in
+  `kibana/_compat.py`; every other statement of it — both CI matrixes, the stack template, the
+  cloud setup script, the README table, the cloud-environment page — is either derived from it or
+  checked against it by `make versions` (`scripts/checks/supported-versions.py`), a new required
+  Definition-of-Done criterion. `--latest` asks the Elastic registry whether the pins are still
+  the newest patches and reports an unreachable registry as *unknown* rather than as agreement.
+  Adding a line requires a dated decision about the **oldest** supported line — the gate rejects a
+  set whose oldest line is not recorded as deliberately `kept` — so "should the version we have
+  supported longest still be supported?" is a question the repository forces someone to answer
+  rather than one that goes unasked. Policy, procedure, criteria and the decision record are in
+  [Kibana version support](docs/source/development/version-support.md); the design chain behind it
+  is under `docs/superpowers/`.
+
 - **A Claude Code cloud environment for release-compatibility research and maintenance.**
   `scripts/cloud-setup.sh` is the environment's setup script: it installs `gh` and pre-pulls the
   Elasticsearch, Kibana, and APM images for every version in `KIBANA_PY_STACK_VERSIONS`
@@ -46,14 +88,26 @@ see [CONTRIBUTING.md § Changelog Policy](CONTRIBUTING.md#changelog-policy).
 
 ### Changed
 
-- **The client now targets two Kibana minor lines, at the latest patch of each** — currently
-  9.5.1 and 9.4.3 — instead of 9.4.x alone. README gains a *Version support* section stating the
-  policy and the current state of each line, and `integration-probe` matrixes over both so the
-  difference between them is measured rather than assumed. The release gate still blocks on
-  9.4.3 only: nine integration tests pass on 9.4.3 and fail on 9.5.1 (the `GET /api/dashboards`
-  `{data, meta}` rewrap and the Streams significant-events move, both recorded in
-  `docs/evidence/cloud-environment-battle-test.md`), and gating releases on a known-red line
-  would block every release. 9.5.1 joins the gate when those close.
+- **`local-stack.sh` now trusts an intercepting proxy's CA too, from the same source as
+  `scripts/ci-stack-up.sh`.** The overlay was applied by the CI bring-up path and not by the
+  local one, which `make stack-start`, `make test-integration` and the Definition-of-Done gate
+  all use. Where container egress is intercepted, the local path therefore produced a stack that
+  looked healthy — containers up, `/api/status` available — but whose Kibana could not make an
+  outbound HTTPS call, so every Fleet/EPM test failed against it while the same tests passed
+  under `ci-stack-up.sh`. Upstream `elastic-start-local/start.sh` runs a bare `docker compose up`
+  that no `-f` flag can reach, so the overlay is injected through `COMPOSE_FILE` for that one
+  invocation. The detection itself moved to `scripts/proxy-ca.sh` and is sourced by both scripts,
+  because a rule that held in one of two places is what produced this. With no CA on disk — a
+  GitHub runner — the compose invocation is unchanged.
+
+- **The client now supports two Kibana minor lines at the latest patch of each — 9.5.2 and
+  9.4.5 — and the release gate blocks on both.** Supported and release-gated are the same list
+  by construction: the set is declared once in `kibana/_compat.py`, and both `integration-probe`
+  and the release gate build their matrix from it, so a line the gate does not run cannot be
+  claimed in the README. The nine integration tests that previously passed on 9.4 and failed on
+  9.5 now pass on both; the client absorbs the differences additively (see *Added* below). Both
+  pins were run live end to end and the result captured in
+  `docs/evidence/multi-version-9.4.5-9.5.2.md`.
 
 - **`scripts/ci-stack-up.sh` overlays `elastic-start-local/docker-compose.proxy-ca.yml` when a
   proxy CA is present**, giving Kibana `NODE_EXTRA_CA_CERTS` so it trusts an egress gateway that
@@ -62,7 +116,7 @@ see [CONTRIBUTING.md § Changelog Policy](CONTRIBUTING.md#changelog-policy).
   call with `self-signed certificate in certificate chain`, which fails every Fleet/EPM
   integration test. The overlay is applied only when the CA file actually exists (path
   overridable with `KIBANA_PY_PROXY_CA`), so CI, where nothing intercepts egress, runs the same
-  compose invocation as before. Verified on 9.5.1: the 21 registry-blocked tests across
+  compose invocation as before. Verified on 9.5.1 and still green on 9.5.2: the 21 registry-blocked tests across
   `test_fleet_epm_integration.py`, `test_fleet_policies_integration.py` and
   `test_entity_analytics_integration.py` went from failing to 54 passed. Elasticsearch's own
   outbound calls are still untrusted — the JVM needs a `keytool` import rather than a PEM, and

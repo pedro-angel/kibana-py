@@ -27,7 +27,8 @@ cfg="${1:-dod.config}"
 # Fail closed on config typos: every row must be a known criterion set to
 # `required` or `n/a` — a misspelled value must never silently skip a gate.
 known="unit_green types_clean hygiene_hooks audit_clean sast_clean docs_strict \
-vocabulary_conformant integration_green benchmark_green matrix_green changelog_entry"
+vocabulary_conformant versions_consistent integration_green benchmark_green \
+matrix_green changelog_entry"
 while IFS= read -r line; do
   case "$line" in ''|\#*) continue ;; esac
   crit=$(printf '%s' "$line" | sed 's/[[:space:]]*=.*//')
@@ -91,6 +92,7 @@ if req audit_clean;            then run audit_clean            make audit; fi
 if req sast_clean;             then run sast_clean             make sast; fi
 if req docs_strict;            then run docs_strict            make docs; fi
 if req vocabulary_conformant;  then run vocabulary_conformant  make vocabulary; fi
+if req versions_consistent;    then run versions_consistent    make versions; fi
 if req integration_green;      then run_suite integration_green yes make test-integration; fi
 if req benchmark_green;        then run_suite benchmark_green   yes make test-benchmark; fi
 if req matrix_green;           then run_suite matrix_green      yes make test-python-matrix; fi

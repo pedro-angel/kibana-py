@@ -1,6 +1,6 @@
 # Kibana Python Client Examples
 
-Examples demonstrating how to use the kibana-py client library. All examples auto-detect configuration from `elastic-start-local/.env` — just start the local stack and run them. Every API namespace has a runnable `<namespace>_management.py` walkthrough, live-tested against Kibana 9.4.3.
+Examples demonstrating how to use the kibana-py client library. All examples auto-detect configuration from `elastic-start-local/.env` — just start the local stack and run them. Every API namespace has a runnable `<namespace>_management.py` walkthrough, live-tested against every supported Kibana version (9.5.2 and 9.4.5 today).
 
 ## Prerequisites
 

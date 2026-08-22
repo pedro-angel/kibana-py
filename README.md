@@ -9,7 +9,7 @@
 
 > **Disclaimer:** This is an independent, community-driven project and is **not** officially affiliated with, endorsed by, or supported by Elastic N.V. or any of its subsidiaries. "Kibana" and "Elasticsearch" are trademarks of Elastic N.V. This project is provided "as is", without warranty of any kind. Use it at your own risk. See the [Disclaimer](#disclaimer) section and the [LICENSE](LICENSE) for full details.
 
-A Python client library for the Kibana REST API with **complete Kibana 9.4.3 platform, Fleet, and Security Solution API coverage** — 39 namespaces, 610 endpoints, sync and async. Built following the design patterns of the [elasticsearch-py](https://github.com/elastic/elasticsearch-py) client, and verified live against Kibana 9.4.3.
+A Python client library for the Kibana REST API with **complete platform, Fleet, and Security Solution API coverage** — 39 namespaces, 610 endpoints, sync and async. Built following the design patterns of the [elasticsearch-py](https://github.com/elastic/elasticsearch-py) client, and verified live against **Kibana 9.5.2 and 9.4.5** — see [Version support](#version-support).
 
 Headline feature: first-class support for the **new Kibana Dashboards HTTP API** (`client.dashboards`, technical preview in 9.4) and its sibling **Visualizations HTTP API** (`client.visualizations`) — manage dashboards and Lens visualizations through a real, documented data model instead of opaque saved objects.
 
@@ -25,7 +25,8 @@ Headline feature: first-class support for the **new Kibana Dashboards HTTP API**
 
 ## Features
 
-- **Complete API coverage**: 39 namespaces, 610 endpoints spanning the Kibana 9.4.3 platform, Fleet, and Security Solution REST APIs, every one live-tested against a real Kibana 9.4.3
+- **Complete API coverage**: 39 namespaces, 610 endpoints spanning the Kibana platform, Fleet, and Security Solution REST APIs, every one live-tested against a real Kibana
+- **Two Kibana lines, one contract**: the same code runs on Kibana 9.5.x and 9.4.x. Where the server renamed a response between lines, the client carries both names; where an endpoint was removed, it says so instead of returning a bare 404. See [Version support](#version-support)
 - **Fleet & Security Solution**: full clients for Fleet (agents, policies, integrations/EPM, outputs, enrollment) and Security Solution (detection engine, exceptions, value lists, timelines, endpoint response actions, entity analytics, osquery, AI assistant, attack discovery)
 - **New Dashboards & Visualizations APIs**: first-class clients for the tech-preview Dashboards and Lens Visualizations HTTP APIs introduced in Kibana 9.4
 - **Dual API support**: synchronous (`Kibana`) and asynchronous (`AsyncKibana`) clients with full method parity
@@ -131,7 +132,7 @@ For more examples and detailed usage, see:
 
 ## API Coverage
 
-Full coverage of the Kibana 9.4.3 platform, Fleet, and Security Solution REST APIs — 39 namespaces, 610 endpoints, identical sync and async surfaces.
+Full coverage of the Kibana platform, Fleet, and Security Solution REST APIs — 39 namespaces, 610 endpoints, identical sync and async surfaces, live-tested on every [supported version](#version-support).
 
 ### Platform (24 namespaces, 269 endpoints)
 
@@ -189,7 +190,7 @@ Full coverage of the Kibana 9.4.3 platform, Fleet, and Security Solution REST AP
 
 ¹ Some endpoints in this namespace are technical preview in Kibana 9.4 (e.g. Agent Builder consumption/skills/plugins, cases custom-field/template features, `status.get_features()`).
 
-² Most single-object and bulk saved-object CRUD endpoints are deprecated by Kibana 9.4.3 in favor of the type-specific APIs (dashboards, data views, ...) and the export/import APIs; the client methods carry deprecation notes with replacements.
+² Most single-object and bulk saved-object CRUD endpoints are deprecated by Kibana 9.4 in favor of the type-specific APIs (dashboards, data views, ...) and the export/import APIs; the client methods carry deprecation notes with replacements.
 
 ³ Entity analytics spans several maturity levels in Kibana 9.4: asset-criticality endpoints are deprecated (superseded by the entity store), watchlists and privileged-user monitoring are technical preview, and the risk-score engine and entity store are GA. Method docstrings note the per-endpoint state and any live-server behavior that differs from the OpenAPI spec.
 
@@ -264,33 +265,83 @@ For more information, see the [Development Documentation](https://kibana-py.read
 ## Version support
 
 The client targets the **two most recent Kibana minor lines, at the latest patch of
-each**. Older patches of a supported line are expected to work but are not tested; a
-minor line drops off the list when a third one appears.
+each**, and is tested live against both. Older patches of a supported line are expected
+to work but are not tested.
 
 | Kibana line | Tested patch | Status |
 | :--- | :--- | :--- |
-| 9.5.x | 9.5.1 | **In progress** — known gaps below |
-| 9.4.x | 9.4.3 | Supported; the release gate blocks on it |
+| 9.5.x | 9.5.2 | Supported; the release gate blocks on it |
+| 9.4.x | 9.4.5 | Supported; the release gate blocks on it |
 
-Both lines run in the `integration-probe` workflow, so the difference between them is
-measured rather than assumed. The release gate blocks on 9.4.3 only, and picks up 9.5.1
-once the gaps close.
+Supported and release-gated are the same list, by construction: the set is declared once
+in `kibana/_compat.py`, and both the `integration-probe` workflow and the release gate
+build their matrix from it. A line the gate does not run is not a line the README can
+claim.
 
-**Known 9.5 gaps.** Nine integration tests pass on 9.4.3 and fail on 9.5.1, from two
-server-side contract changes the client does not yet handle:
+### One contract across both lines
 
-- `GET /api/dashboards` returns `{data, meta{total, page, per_page}}` on 9.5, not
-  `{dashboards, page, total}`. `dashboards.get_all()` itself does not raise — it returns
-  the server's body unchanged, sync and async — but the keys it documents are gone, so a
-  caller reading `body["dashboards"]` or `body["total"]` is the one that raises `KeyError`.
-  Until the client normalizes the envelope, read `body["data"]` for the list and
-  `body["meta"]["total"]` for the count on 9.5.
-- Streams significant-events queries moved off the stream upsert body (`queries` is now
-  rejected as an excess key) and the read envelope renamed `significant_events` to
-  `queries`.
+Kibana changes API shapes between minor lines. The client absorbs those changes so the
+same code runs on both, and it does so **additively** — it never removes, renames, or
+overwrites what the server sent:
 
-Measurements, method, and the full diff:
-[`docs/evidence/cloud-environment-battle-test.md`](docs/evidence/cloud-environment-battle-test.md).
+- **`dashboards.get_all()`** — 9.5 rewrapped the search envelope. The response carries
+  both spellings on both lines: `body["dashboards"]` / `body["page"]` / `body["total"]`
+  (the 9.4 names) and `body["data"]` / `body["meta"]` (the 9.5 names). The list is the
+  same object under either name.
+- **`streams.get_significant_events()`** — 9.5 renamed `significant_events` to
+  `queries`. Both names are present on both lines.
+- **`streams.upsert()`** — the one request in the client that varies by server version.
+  9.4 **requires** a `queries` field in the stream body; 9.5 **rejects** it as an excess
+  key. No single body satisfies both, so the client supplies the field where it is
+  required and omits it where it is not: an upsert that does not mention queries succeeds
+  on both lines, unchanged from before on 9.4. Passing `queries` explicitly against 9.5
+  raises rather than silently dropping your input, and points at `upsert_query()`,
+  `bulk_queries()` and `delete_query()` — which work on every supported line.
+
+### Capabilities that exist on only one line
+
+Kibana 9.5 removed two significant-events endpoints from the public API, replacing them
+with an internal, unversioned surface this client deliberately does not call; and it
+stopped accepting the `queries` field described above. Using any of the three against 9.5
+raises `KibanaVersionError` **before any request is sent**, rather than returning a `404`
+that reads like a missing stream or a `400` about a field you did not know was contested:
+
+| Capability | Available on |
+| :--- | :--- |
+| `streams.generate_significant_events()` | 9.4.x |
+| `streams.preview_significant_events()` | 9.4.x |
+| `streams.upsert(queries=...)` | 9.4.x |
+
+### Asking the client what it is talking to
+
+```python
+from kibana import Kibana, is_supported, SUPPORTED_VERSIONS
+
+client = Kibana("http://localhost:5601", api_key="...")
+
+client.server_version()              # '9.5.2' — one lazy request, cached
+is_supported(client.server_version())  # True
+SUPPORTED_VERSIONS                   # (('9.5', '9.5.2'), ('9.4', '9.4.5'))
+```
+
+`await client.server_version()` on the async client. Nothing queries `/api/status` until
+something asks, and the answer is resolved once per client.
+
+The client does not refuse to talk to an unsupported Kibana. It has measured nothing
+about one, so it makes no claim: calls behave exactly as they would without any of this.
+
+### Moving the set forward
+
+The policy, the procedure, the criteria for dropping the oldest line, and the dated
+record of every decision are in
+[Kibana version support](https://kibana-py.readthedocs.io/en/latest/development/version-support.html)
+(`docs/source/development/version-support.md`). `make versions` checks that every version
+statement in the repository agrees with the one source, and
+`python3 scripts/checks/supported-versions.py --latest` asks the Elastic registry whether
+the pins are still the newest patches.
+
+Measurements, method, and the full per-version diff:
+[`docs/evidence/multi-version-9.4.5-9.5.2.md`](docs/evidence/multi-version-9.4.5-9.5.2.md).
 
 ## Resources
 

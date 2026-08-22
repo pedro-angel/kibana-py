@@ -25,7 +25,9 @@
 # Environment variables (set them in the cloud environment's variables field):
 #   KIBANA_PY_STACK_VERSIONS  space-separated stack versions to pre-pull, most
 #                             important first -- the leftmost gets the budget.
-#                             Default: "9.5.1 9.4.3".
+#                             Default: "9.5.2 9.4.5" -- the supported set
+#                             declared in kibana/_compat.py. `make versions`
+#                             fails if this default drifts from it.
 #   KIBANA_PY_PULL_BUDGET     seconds allowed for all image pulls. Default: 210.
 
 set -uo pipefail   # deliberately not -e: a failed step must not fail session start
@@ -38,7 +40,7 @@ log_file=/var/log/kibana-py-cloud-setup.log
 touch "$log_file" 2>/dev/null || log_file=/tmp/kibana-py-cloud-setup.log
 exec > >(tee -a "$log_file") 2>&1
 
-versions="${KIBANA_PY_STACK_VERSIONS:-9.5.1 9.4.3}"
+versions="${KIBANA_PY_STACK_VERSIONS:-9.5.2 9.4.5}"
 budget="${KIBANA_PY_PULL_BUDGET:-210}"
 registry="docker.elastic.co"
 images="elasticsearch/elasticsearch kibana/kibana apm/apm-server"

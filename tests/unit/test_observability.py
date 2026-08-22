@@ -1455,16 +1455,24 @@ class TestAPMServerIntegration:
 
         from kibana.observability import _validate_apm_connectivity
 
-        server = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+        # Capability guard, not a functional skip: some sandboxes/CI runners
+        # disable IPv6 entirely. This test exists to prove the probe *can* reach
+        # an IPv6-only target, which is meaningless to assert on a host that
+        # cannot even create one -- skip rather than fail or false-pass.
+        #
+        # The guard covers socket CREATION as well as bind. A host with no IPv6
+        # support at all fails one line earlier, at socket(AF_INET6, ...), with
+        # `OSError: [Errno 97] Address family not supported by protocol` -- so a
+        # guard that starts at bind() lets the very host it is meant to excuse
+        # fail instead of skip.
+        try:
+            server = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+        except OSError as e:
+            pytest.skip(f"IPv6 unavailable on this host: {e}")
         try:
             try:
                 server.bind(("::1", 0))
             except OSError as e:
-                # Capability guard, not a functional skip: some sandboxes/CI
-                # runners disable IPv6 loopback binding entirely. This test
-                # exists to prove the probe *can* reach an IPv6-only target,
-                # which is meaningless to assert on a host that cannot even
-                # create one -- skip rather than fail or false-pass.
                 pytest.skip(f"IPv6 loopback bind unavailable on this host: {e}")
             server.listen(1)
             port = server.getsockname()[1]

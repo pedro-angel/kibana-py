@@ -31,8 +31,28 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # The supported set is declared once, in kibana/_compat.py. This job reads it and
+  # hands it to the matrix below, so the matrix cannot drift from the client's own
+  # idea of what it supports -- there is no version literal here to fall out of date.
+  # `make versions` fails if a literal ever reappears in this file.
+  versions:
+    name: resolve supported versions
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      matrix: ${{ steps.resolve.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - id: resolve
+        run: |
+          matrix="$(python3 scripts/checks/supported-versions.py --matrix)"
+          echo "supported pins: $matrix" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
   probe:
     name: probe (Kibana ${{ matrix.stack-version }})
+    needs: versions
     runs-on: ubuntu-latest
     timeout-minutes: 120     # cold 4-core is slower than the 20min warm/18-core local baseline
     permissions:
@@ -40,8 +60,7 @@ jobs:
     strategy:
       fail-fast: false       # a break on one line must not hide the other line's result
       matrix:
-        # The supported stack lines: latest patch of each. See README "Version support".
-        stack-version: ["9.5.1", "9.4.3"]
+        stack-version: ${{ fromJson(needs.versions.outputs.matrix) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 

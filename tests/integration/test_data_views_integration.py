@@ -100,12 +100,19 @@ def _delete_data_view_quietly(client, view_id: str) -> None:
 @pytest.fixture
 def data_view(kibana_client, es_index):
     """Create a data view over the test index; delete it afterwards."""
-    view_id = f"{RESOURCE_PREFIX}-dv-{uuid.uuid4().hex[:8]}"
+    suffix = uuid.uuid4().hex[:8]
+    view_id = f"{RESOURCE_PREFIX}-dv-{suffix}"
     response = kibana_client.data_views.create(
         data_view={
             "id": view_id,
             "title": es_index,
-            "name": f"{RESOURCE_PREFIX} test view",
+            # The NAME is unique too, not just the id. Kibana rejects a duplicate
+            # data view by name ("Duplicate data view: ..."), so a fixed name meant
+            # that one leftover view -- from a run that was interrupted before its
+            # teardown -- failed every test using this fixture, on a stack that was
+            # otherwise healthy. Measured: four setup errors in the 9.4.5 run
+            # recorded in docs/evidence/multi-version-9.4.5-9.5.2.md.
+            "name": f"{RESOURCE_PREFIX} test view {suffix}",
             "timeFieldName": "@timestamp",
         }
     )

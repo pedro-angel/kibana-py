@@ -149,12 +149,33 @@ results = client.dashboards.get_all(tags=["ops-tag-id"])
 # Exclude tags
 results = client.dashboards.get_all(query="Team*", excluded_tags=["archived-tag-id"])
 
+
 # Pagination
 page1 = client.dashboards.get_all(query="Team*", per_page=10, page=1)
 page2 = client.dashboards.get_all(query="Team*", per_page=10, page=2)
 ```
 
-The response body is `{"dashboards": [...], "page": n, "total": n}`, where each entry is an `{id, data, meta}` envelope.
+Each entry in the list is an `{id, data, meta}` envelope.
+
+:::{note}
+**The search envelope reads the same on every supported Kibana.** Kibana 9.5 rewrapped
+this response — the list moved from `dashboards` to `data` and the counters moved into a
+nested `meta` object. The client adds whichever spelling the server did not send, so both
+work on both lines and neither is removed:
+
+```python
+results = client.dashboards.get_all(query="Team*")
+
+results.body["total"]            # the 9.4 spelling
+results.body["meta"]["total"]    # the 9.5 spelling — the same number
+
+results.body["dashboards"]       # the 9.4 spelling
+results.body["data"]             # the 9.5 spelling — the same list object
+```
+
+`results.body["dashboards"] is results.body["data"]`. See
+{doc}`/development/version-support`.
+:::
 
 :::{note}
 Tag filters match tag IDs as opaque strings — the server does not validate that the tag IDs exist, on reads or writes.
@@ -256,9 +277,11 @@ Two caveats:
 - `access_control` is **create-only**: `update()` does not accept it, and the server rejects it in a PUT body with a 400 error.
 - Setting it requires an identifiable user profile. Under plain basic authentication the server responds 400 ("Kibana could not determine the user profile ID for the caller") — use an API key or a real user session.
 
-## Live Server Behavior (Kibana 9.4.3)
+## Live Server Behavior
 
-kibana-py is tested against a live Kibana 9.4.3 stack. A few observed behaviors to be aware of:
+Observed against a live Kibana 9.4.3 stack. These are dated observations, not a
+per-version contract — the client's cross-version guarantees are the ones in
+{doc}`/development/version-support`:
 
 - **`time_range.mode` is dropped.** The API schema accepts `{"from", "to", "mode"}` (mode: `"absolute"` or `"relative"`), but the server persists only `from`/`to` — don't expect `mode` to round-trip on reads.
 - **Status codes:** `create()` returns HTTP 201; `update()` returns 200 on replace and 201 on create-via-upsert; `delete()` returns 204 with an empty body. Check `response.meta.status` if you need to distinguish upsert outcomes.

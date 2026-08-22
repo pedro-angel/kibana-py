@@ -8,7 +8,8 @@ Before you begin, make sure you have:
 
 - **Python 3.11 or newer** — kibana-py requires Python >= 3.11
 - Installed kibana-py (see {doc}`installation`)
-- A running Kibana instance (version 9.4.x recommended; kibana-py is tested against Kibana 9.4.3)
+- A running Kibana instance. kibana-py is tested live against **Kibana 9.5.2 and 9.4.5** —
+  the latest patch of each supported minor line. See {doc}`development/version-support`.
 - Valid credentials for authentication
 
 ## Basic Usage

@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 from elastic_transport import ObjectApiResponse, SerializationError, Serializer
 
 from kibana._async.client.utils import AsyncNamespaceClient, _quote
+from kibana._compat import normalize_significant_events
 
 if TYPE_CHECKING:
     from kibana._async.client import AsyncKibana
@@ -364,7 +365,17 @@ class AsyncStreamsClient(AsyncNamespaceClient):
                 empty list; the API requires the field).
             queries: Significant-events queries to store on the stream; each
                 item needs ``id``, ``title``, ``description`` and
-                ``esql: {"query": ...}`` (defaults to an empty list).
+                ``esql: {"query": ...}``. **Kibana 9.4 only**, and the one
+                argument here whose handling depends on the server version:
+                9.4 requires the field in the body (defaulted to ``[]`` when you
+                do not pass it, as before), while 9.5 rejects it with
+                ``"Excess keys are not allowed"`` and the client omits it. An
+                upsert that does not mention queries therefore succeeds on both
+                lines. Passing queries against 9.5 raises
+                :class:`~kibana.exceptions.KibanaVersionError` rather than
+                dropping your input: manage them there with
+                :meth:`upsert_query`, :meth:`bulk_queries` and
+                :meth:`delete_query`, which work on every supported line.
             rules: Rule IDs to link to the stream (defaults to an empty
                 list).
             space_id: Optional space ID to upsert the stream in.
@@ -376,6 +387,9 @@ class AsyncStreamsClient(AsyncNamespaceClient):
             (``"created"`` or ``"updated"``).
 
         Raises:
+            KibanaVersionError: If ``queries`` is passed to a Kibana that does
+                not accept it in this body (9.5 and later) -- raised before any
+                request is sent.
             BadRequestError: If the definition fails validation.
             NotFoundError: If a parent stream does not exist.
             AuthenticationException: If authentication fails.
@@ -400,9 +414,28 @@ class AsyncStreamsClient(AsyncNamespaceClient):
         body: dict[str, Any] = {
             "stream": stream,
             "dashboards": dashboards if dashboards is not None else [],
-            "queries": queries if queries is not None else [],
             "rules": rules if rules is not None else [],
         }
+        # `queries` is the one request field the two supported lines genuinely
+        # disagree about, measured live: 9.4 REQUIRES it (a body without it is a 400
+        # naming `queries`), and 9.5 REJECTS it ("Excess keys are not allowed"). No
+        # single body satisfies both, so this is the one place a request depends on
+        # the server version.
+        #
+        # Where the field is required, it is defaulted exactly as before. Where it is
+        # not accepted, it is omitted -- and a caller who explicitly passed queries is
+        # told so, with the portable alternative, rather than having their input
+        # silently dropped or bounced by the server.
+        if queries is not None:
+            await self._require_capability(
+                "streams.upsert.queries",
+                "Manage significant-events queries with upsert_query(), "
+                "bulk_queries() or delete_query(), which work on every "
+                "supported line.",
+            )
+            body["queries"] = queries
+        elif await self._capability_available("streams.upsert.queries"):
+            body["queries"] = []
         await self._maybe_validate_space(space_id, validate_spaces)
         path = self._build_space_path(f"/api/streams/{_quote(name)}", space_id)
         return await self.perform_request(
@@ -941,8 +974,15 @@ class AsyncStreamsClient(AsyncNamespaceClient):
                 operation.
 
         Returns:
-            ObjectApiResponse with ``significant_events`` (per-query
-            occurrences and change points) and ``aggregated_occurrences``.
+            ObjectApiResponse whose body carries the per-query occurrences and
+            change points under **both** names Kibana has used, plus
+            ``aggregated_occurrences``:
+
+            - ``significant_events`` -- the 9.4 name;
+            - ``queries`` -- the 9.5 name, the same list object aliased.
+
+            Kibana 9.5 renamed the key; the client adds the missing one rather
+            than choosing, so either reads correctly on either line.
 
         Raises:
             NotFoundError: If the stream does not exist.
@@ -970,12 +1010,16 @@ class AsyncStreamsClient(AsyncNamespaceClient):
         path = self._build_space_path(
             f"/api/streams/{_quote(name)}/significant_events", space_id
         )
-        return await self.perform_request(
+        response = await self.perform_request(
             "GET",
             path,
             params=params,
             headers={"accept": "application/json"},
         )
+        # 9.5 renamed this list from significant_events to queries. Add whichever
+        # name is missing; remove neither. See kibana._compat.
+        normalize_significant_events(response.body)
+        return response
 
     async def generate_significant_events(
         self,
@@ -1012,6 +1056,11 @@ class AsyncStreamsClient(AsyncNamespaceClient):
             ObjectApiResponse with the generated queries.
 
         Raises:
+            KibanaVersionError: On Kibana 9.5, which removed this endpoint from
+                the public API -- raised before any request is sent. 9.5's
+                replacement is an internal, unversioned surface that this client
+                deliberately does not call; see
+                :doc:`/development/version-support`.
             BadRequestError: If no connector ID is provided and no default
                 AI connector is configured.
             NotFoundError: If the stream does not exist.
@@ -1026,6 +1075,7 @@ class AsyncStreamsClient(AsyncNamespaceClient):
             ...     connector_id="my-ai-connector",
             ... )
         """
+        await self._require_capability("streams.generate_significant_events")
         params: dict[str, Any] = {
             "from": from_,
             "to": to,
@@ -1080,6 +1130,9 @@ class AsyncStreamsClient(AsyncNamespaceClient):
             for the previewed query.
 
         Raises:
+            KibanaVersionError: On Kibana 9.5, which removed this endpoint from
+                the public API -- raised before any request is sent. See
+                :doc:`/development/version-support`.
             BadRequestError: If the ES|QL query fails validation.
             NotFoundError: If the stream does not exist.
             AuthenticationException: If authentication fails.
@@ -1097,6 +1150,7 @@ class AsyncStreamsClient(AsyncNamespaceClient):
             ...     ),
             ... )
         """
+        await self._require_capability("streams.preview_significant_events")
         params: dict[str, Any] = {
             "from": from_,
             "to": to,

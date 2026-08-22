@@ -112,6 +112,115 @@ Why each one:
 | `www.elastic.co` | The Kibana API reference and release notes that the compatibility research reads. |
 | `*.frame.claudeusercontent.com` | Only if sessions should read Artifacts; Claude Code fetches artifact content from that host. |
 
+#### If sessions build the docs
+
+`make docs` runs Sphinx `linkcheck`, which resolves every external link in
+`docs/source/`. Those hosts have nothing to do with the stack, so add them only if you
+intend to run the docs build in a session:
+
+```text
+cli.github.com
+docs.pytest.org
+docs.pypi.org
+docs.readthedocs.com
+www.jaegertracing.io
+```
+
+| Host | Needed for |
+| :--- | :--- |
+| `cli.github.com` | The `gh` CLI link in the release process page. |
+| `docs.pytest.org` | The pytest link in the contributing page. |
+| `docs.pypi.org` | The trusted-publishing link in the release process page. **Listed for completeness — an entry for it does not take effect here**, see below. |
+| `docs.readthedocs.com` | Where the release-process page's `docs.readthedocs.io` import-guide link actually lands. Allowing the `.io` host does **not** cover it — see below. |
+| `www.jaegertracing.io` | A tracing-backend link in the observability user guide. |
+
+**The allowlist applies to the redirect target, and this is the `docker-auth.elastic.co`
+lesson a second time.** The documentation links `docs.readthedocs.io`; that answers `302`
+and the link resolves at `docs.readthedocs.com`. Allowing the host that appears in the
+source — whether named outright or covered by a `*.readthedocs.io` wildcard — leaves the
+link refused, because the host that gets refused is the one at the end of the redirect.
+
+The failure says so, and it is worth reading the *host* in the error rather than the URL
+in the message: `linkcheck` reported the `.io` URL as broken while naming
+`host='docs.readthedocs.com'` as what it could not reach. Measured 2026-08-22:
+
+```
+$ curl -sSL -o /dev/null -w '%{url_effective}\n' \
+    https://docs.readthedocs.io/en/stable/intro/import-guide.html
+https://docs.readthedocs.com/platform/stable/intro/add-project.html
+```
+
+An explicit list can only name the hosts you already know about, and a redirect target is
+another kind you do not know about until it fails. A denial is legible when you look for
+it — the proxy says so in a header rather than failing obscurely:
+
+```
+HTTP/2 403
+x-deny-reason: host_not_allowed
+Host not in allowlist: docs.pypi.org. Add this host to your network egress settings.
+```
+
+#### What the allowlist cannot fix
+
+Two `linkcheck` failures survive a correct allowlist, for different reasons.
+
+**`docs.pypi.org` cannot be allowed.** An entry for it — bare or as `*.pypi.org` — is
+accepted by the settings UI and has no effect; the host still answers `403` with
+`x-deny-reason: host_not_allowed`. This is not a propagation delay: hosts added in the same
+edit began answering immediately, and `blog.pypi.org` is refused with the wildcard in place
+while `test.pypi.org` answers, which is what a built-in PyPI default would look like. The
+proxy already special-cases `pypi.org` in its bypass list (`noProxy`), the likeliest cause.
+Measured 2026-08-22:
+
+| Host | Result |
+| :--- | :--- |
+| `pypi.org` | 200 — in the proxy's bypass list |
+| `test.pypi.org` | 200 — a platform default, not your entry |
+| `docs.pypi.org` | **403** `host_not_allowed` |
+| `blog.pypi.org` | **403** `host_not_allowed` |
+
+**The GitHub Discussions link is a different control entirely**, and widening the network
+list will never clear it either. `docs/source/development/index.md` links the repository's GitHub
+Discussions, and the session's **GitHub credential proxy** — a different control, the one
+that keeps your real token outside the VM — refuses it:
+
+```
+$ curl -sS https://github.com/pedro-angel/kibana-py/discussions
+{"message":"This GitHub API path is not available: sessions are bound to their configured
+ repositories. Use repository-scoped endpoints (repos/{owner}/{repo}/...)."}
+```
+
+The link is genuinely valid — the repository has Discussions enabled (`has_discussions:
+true` from the repository API) — so this is a sandbox artifact, not a broken link. The
+refusal is narrow, and worth knowing precisely before assuming a whole class of URL is
+unreachable. Measured against `github.com/pedro-angel/kibana-py`:
+
+| Path | Result |
+| :--- | :--- |
+| `/`, `/tree/main`, `/blob/main/README.md` | 200 |
+| `/issues`, `/pulls`, `/releases`, `/issues/new/choose` | 200 / 302 |
+| `/discussions`, `/wiki` | **403** from the credential proxy |
+
+Only those two segments are refused.
+
+`docs/source/conf.py` therefore adds both cases — those two GitHub paths and
+`docs.pypi.org` — to `linkcheck_ignore` **when, and only when, `CLAUDE_CODE_REMOTE` is
+`true`** — the same variable `scripts/cloud-session-start.sh`
+gates on. CI and a maintainer's machine check the links exactly as before, so the gate is not
+weakened where it can run; it is relaxed only where it provably cannot. The build announces
+the skip rather than applying it silently:
+
+```
+conf.py: CLAUDE_CODE_REMOTE=true -- linkcheck is skipping 2 pattern(s) this
+environment's GitHub credential proxy refuses (see development/cloud-environment.md)
+```
+
+Verified in both directions on 2026-08-22: with the variable set, `linkcheck` reports **zero**
+broken links; with it unset, the same build reports both. The `docs.pypi.org` link in
+particular has never been observed to resolve *from here at all*, so the scoping is what
+keeps the exemption honest — if that link is dead, CI is what will say so. If you add a documentation
+link to a GitHub path in that set, expect it to be checked everywhere except here.
+
 Keeping the default package-manager list is what lets `pip install -e ".[dev,all]"` reach PyPI
 and the bootstrap below reach `raw.githubusercontent.com`. It does not make Docker Hub usable:
 the default list names `production.cloudflare.docker.com`, while Hub now serves blobs from
@@ -121,10 +230,15 @@ fails here and is not a valid smoke test. The Elastic stack pulls nothing from H
 ### Environment variables
 
 ```text
-KIBANA_PY_STACK_VERSIONS=9.5.1 9.4.3
+KIBANA_PY_STACK_VERSIONS=9.5.2 9.4.5
 KIBANA_PY_PULL_BUDGET=210
 ES_LOCAL_MEMLOCK=8388608
 ```
+
+These are the supported pins. They are declared once, in `kibana/_compat.py`, and only
+mirrored here -- `make versions` fails if the two disagree, so this block cannot quietly
+go stale. The policy behind the set, and the procedure for moving it forward, are in
+{doc}`version-support`.
 
 The leftmost version gets first claim on the pull budget, so put the version you are actively
 working against first. Caching two versions is what makes an A/B run possible: the same
@@ -258,6 +372,27 @@ its response envelope in 9.5" — a measured difference rather than a reading of
   `gh api repos/{owner}/{repo}/...` where a GraphQL-only API would otherwise be needed.
 - **Architecture**: sessions are x86_64 Ubuntu 24.04 regardless of your own machine. Results
   from an aarch64 laptop are not a substitute for a run here, and vice versa.
+- **No IPv6, at all.** The Firecracker kernel is built without it: there is no
+  `/proc/sys/net/ipv6`, no `/proc/net/if_inet6`, and `socket(AF_INET6, …)` raises
+  `OSError: [Errno 97] Address family not supported by protocol`. It cannot be switched on.
+  One unit test needs a real IPv6 loopback listener
+  (`test_validate_apm_connectivity_reaches_ipv6_only_listener`, the regression test for #83)
+  and therefore skips here — which makes **`make dod` report `unit_green` NO-GO in this
+  environment**, because the gate rejects any skip in the unit suite. That is the gate
+  working: a unit test that skips has an environmental dependency. The test runs and passes
+  wherever IPv6 loopback exists, including GitHub runners.
+- **`make dod` also reports `docs_strict` NO-GO here**, and only the external-link pass is at
+  fault — the strict HTML build (`sphinx-build -W`) passes. Most of it is the allowlist and is
+  fixable by naming the hosts under *Network access* → *If sessions build the docs*: that took
+  a measured run from six broken links to one. The one that remains is the GitHub Discussions
+  link, refused by the credential proxy rather than the egress policy, which no network setting
+  clears — see *What the allowlist cannot fix* in the same section.
+  Read a `linkcheck` failure here as a question about the environment before assuming it is a
+  question about the documentation.
+
+  Both NO-GOs are properties of this sandbox, not of the repository, and both are visible in
+  the gate's own per-criterion logs under `/tmp/dod-kibana-py/`. Neither can be cleared from
+  inside a session; the corresponding CI jobs are where those two criteria actually certify.
 
 ## Verify the environment before trusting it
 

@@ -6,6 +6,8 @@ from typing import Any
 
 from elastic_transport import ObjectApiResponse
 
+from kibana._compat import normalize_dashboards_search
+
 from .utils import NamespaceClient, _quote
 
 
@@ -111,9 +113,22 @@ class DashboardsClient(NamespaceClient):
             validate_spaces: Override space-existence validation for this call.
 
         Returns:
-            ObjectApiResponse whose body contains ``dashboards`` (a list of
-            ``{"id", "data", "meta"}`` envelopes) plus ``page`` and
-            ``total`` pagination fields.
+            ObjectApiResponse whose body carries the search page under **both**
+            spellings Kibana has used for it, so the same code reads every
+            supported server:
+
+            - ``dashboards`` (a list of ``{"id", "data", "meta"}`` envelopes)
+              with top-level ``page`` and ``total`` -- the 9.4 spelling;
+            - ``data`` (the same list object) with ``meta`` carrying ``total``,
+              ``page`` and, where the server reported it, ``per_page`` -- the
+              9.5 spelling.
+
+            Kibana 9.5 rewrapped this response: the list moved from
+            ``dashboards`` to ``data`` and the counters moved into ``meta``. The
+            client adds the missing names rather than choosing one, and never
+            removes or overwrites what the server sent, so ``body["total"]`` and
+            ``body["meta"]["total"]`` are both correct on both lines.
+            ``body["dashboards"] is body["data"]`` -- one list, aliased.
 
         Raises:
             BadRequestError: If a query parameter is invalid.
@@ -126,7 +141,8 @@ class DashboardsClient(NamespaceClient):
             ...     per_page=10,
             ...     page=1,
             ... )
-            >>> print(results.body["total"])
+            >>> print(results.body["total"])          # the 9.4 spelling
+            >>> print(results.body["meta"]["total"])   # the 9.5 spelling, same number
             >>> for item in results.body["dashboards"]:
             ...     print(item["id"], item["data"]["title"])
         """
@@ -143,11 +159,16 @@ class DashboardsClient(NamespaceClient):
             params["excluded_tags"] = excluded_tags
 
         path = self._build_space_path("/api/dashboards", space_id, validate_spaces)
-        return self.perform_request(
+        response = self.perform_request(
             "GET",
             path,
             params=params or None,
         )
+        # 9.4 answers {dashboards, page, total}; 9.5 answers {data, meta{...}}.
+        # Add whichever spelling is missing so one piece of caller code reads both
+        # servers -- nothing the server sent is removed. See kibana._compat.
+        normalize_dashboards_search(response.body)
+        return response
 
     def create(
         self,
