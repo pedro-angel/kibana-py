@@ -55,6 +55,21 @@ see [CONTRIBUTING.md § Changelog Policy](CONTRIBUTING.md#changelog-policy).
   [Kibana version support](docs/source/development/version-support.md); the design chain behind it
   is under `docs/superpowers/`.
 
+- **The Definition-of-Done gate preflights its own environment.** A virtualenv created
+  before a dependency entered `pyproject.toml` is not an environment this repository has
+  ever tested, but the drift used to surface several criteria in, as some leaf failing on
+  a missing import — an error about a pytest flag rather than about the environment.
+  `scripts/checks/environment-current.py` reads the *current*
+  `[project.optional-dependencies]` (resolving the self-referential `kibana-py[...]`
+  entries by the project's own name, PEP 503-normalized) and asks the interpreter that
+  will run the gate whether each distribution is installed, naming what is missing and the
+  one command that fixes it. It deliberately does not use
+  `importlib.metadata.requires()`, which reports the metadata recorded at install time —
+  a stale editable install would answer with the stale extras and agree with itself. The
+  comparison only means something if one side is the file on disk. Stdlib only, no
+  network; `make dod` exits 2 rather than certifying from an environment that is not the
+  declared one.
+
 - **`make test-integration-matrix` — the release gate's own coverage, locally.** The release
   gate runs the integration suite against every supported Kibana line. Locally that was a
   manual loop — export `ES_LOCAL_VERSION`, provision, run, tear down, repeat — with nothing to

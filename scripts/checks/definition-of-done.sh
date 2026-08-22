@@ -42,6 +42,23 @@ while IFS= read -r line; do
   case "$val" in required|n/a) : ;; *) echo "FAIL: criterion '$crit' has invalid value '$val' (use: required | n/a)"; exit 2 ;; esac
 done <"$cfg"
 
+# Preflight: certify the TREE, not whatever happens to be installed. A virtualenv
+# created before a dependency entered pyproject.toml is not an environment this
+# repository has ever tested, and the drift surfaces as some leaf failing on a missing
+# import several criteria in -- an error about a pytest flag rather than about the
+# environment. Ask once, up front, and say which command fixes it.
+venv_python="${VENV_DIR:-.venv}/bin/python"
+[ -x "$venv_python" ] || venv_python="$(command -v python3 || true)"
+if [ -z "$venv_python" ]; then
+  echo "FAIL: no python3 and no ${VENV_DIR:-.venv}/bin/python -- run: make setup"
+  exit 2
+fi
+if ! "$venv_python" scripts/checks/environment-current.py --python "$venv_python"; then
+  echo
+  echo "FAIL: refusing to certify from an environment that does not match pyproject.toml."
+  exit 2
+fi
+
 req()    { grep -qE "^$1[[:space:]]*=[[:space:]]*required([[:space:]]|$)" "$cfg"; }
 nogo=0
 logdir="/tmp/dod-$(basename "$(pwd)")"   # per-repo: sibling gates share /tmp
