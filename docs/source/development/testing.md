@@ -224,7 +224,10 @@ Integration tests are automatically skipped if `KIBANA_URL` is not set.
 The client supports more than one Kibana minor line, and the release gate blocks on
 all of them. `make test-integration-matrix` is that coverage locally: for each version
 in the supported set it destroys the stack and its volumes, provisions at that pin, and
-runs `make test-integration-ci` — the release gate's own selection.
+runs `make test-integration-ci` — the release gate's own selection. Versions run oldest
+first and the newest one's stack is **left running**, so `elastic-start-local/.env` ends
+up agreeing with the template's pin rather than the oldest line, and `make test-benchmark`
+still finds a warm stack. Run `make stack-destroy` when you want the disk back.
 
 ```bash
 make test-integration-matrix

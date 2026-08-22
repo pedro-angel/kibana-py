@@ -74,7 +74,12 @@ see [CONTRIBUTING.md § Changelog Policy](CONTRIBUTING.md#changelog-policy).
   parent `make -k` is cleared so a child recipe cannot ignore errors into a false pass. The
   `[probe]` extra (pytest-timeout, which the gate's `--timeout` needs) now rides along with
   `dev`, so a plain `make setup` can run the gate's own selection instead of failing on an
-  unrecognized argument.
+  unrecognized argument. Versions run oldest first and the last stack is left up, because
+  `ci-stack-up.sh` writes `ES_LOCAL_VERSION` into `elastic-start-local/.env` on every
+  bring-up and `local-stack.sh` re-seeds that file only when it is missing: ending on the
+  oldest line would have silently pinned every later `make stack-start` to it, and tearing
+  down at the end would have made `benchmark_green` — the criterion that runs next, and
+  that used to inherit the warm stack — rebuild one from scratch.
 
 - **A Claude Code cloud environment for release-compatibility research and maintenance.**
   `scripts/cloud-setup.sh` is the environment's setup script: it installs `gh` and pre-pulls the

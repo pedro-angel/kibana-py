@@ -17,6 +17,16 @@
 # survives from one line into the next (the method the 9.4.5/9.5.2 battle test used:
 # docs/evidence/multi-version-9.4.5-9.5.2.md).
 #
+# Versions run OLDEST FIRST, and the last stack is left running. Both are about the
+# state this leaves the machine in, and neither is cosmetic:
+#   - ci-stack-up.sh writes ES_LOCAL_VERSION into elastic-start-local/.env on every
+#     bring-up, and local-stack.sh only re-seeds that file when it is MISSING. Ending
+#     on the newest pin therefore leaves .env agreeing with the template, instead of
+#     silently pinning every later `make stack-start` to the oldest supported line.
+#   - `make test-benchmark` (the DoD criterion that runs right after this one) depends
+#     on stack-start and used to inherit the warm stack `make test-integration` left
+#     up. Tearing down at the end would have made it rebuild a stack from scratch.
+#
 # Fails closed. A failing version does not abort the run -- the remaining versions
 # still tell you something -- but the exit status is non-zero and the summary names
 # it. An empty or unreadable supported set is a hard error, never a silent pass.
@@ -67,7 +77,14 @@ if [ -x "$probe_python" ] && ! "$probe_python" -c 'import pytest_timeout' >/dev/
   exit 2
 fi
 
-echo "Integration matrix over the supported set: $versions"
+# Oldest first (the declared set is newest-first) -- see the header for why the run
+# has to END on the newest pin.
+ordered=""
+for version in $versions; do
+  ordered="$version${ordered:+ }$ordered"
+done
+
+echo "Integration matrix over the supported set, oldest first: $ordered"
 echo "Logs: $logdir"
 
 # --- the loop ---------------------------------------------------------------
@@ -77,7 +94,7 @@ total_passed=0
 total_skipped=0
 total_failed=0
 
-for version in $versions; do
+for version in $ordered; do
   log="$logdir/$version.log"
   echo
   echo "======================================================================"
@@ -125,12 +142,14 @@ for version in $versions; do
   total_failed=$(( total_failed + failed ))
 done
 
-make stack-destroy >/dev/null 2>&1 || true
+# Deliberately NO teardown here: the newest pin's stack stays up, which is what
+# `make test-benchmark` and a follow-up `make test-integration` expect to find.
+# `make stack-destroy` when you want the disk back.
 
 # --- verdict ----------------------------------------------------------------
-version_count="$(printf '%s\n' $versions | wc -l | tr -d ' ')"
+version_count="$(printf '%s\n' $ordered | wc -l | tr -d ' ')"
 echo
-echo "Integration matrix ($version_count versions: $versions)"
+echo "Integration matrix ($version_count versions, oldest first: $ordered)"
 printf '%s\n' "$results" | sed '/^$/d'
 # One aggregate line, in pytest's own shape, so a caller that parses the tail of
 # this log (the DoD gate does) sees the totals across every version rather than
@@ -138,7 +157,7 @@ printf '%s\n' "$results" | sed '/^$/d'
 echo "matrix total: $total_passed passed, $total_skipped skipped, $total_failed failed across $version_count versions"
 
 if [ "$nogo" -eq 0 ]; then
-  echo "VERDICT: GO (every supported Kibana line is green)"
+  echo "VERDICT: GO (every supported Kibana line is green; the stack is left up on the newest pin)"
 else
   echo "VERDICT: NO-GO"
   exit 1
