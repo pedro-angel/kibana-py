@@ -347,10 +347,10 @@ its response envelope in 9.5" — a measured difference rather than a reading of
   wherever IPv6 loopback exists, including GitHub runners.
 - **`make dod` also reports `docs_strict` NO-GO here**, and only the external-link pass is at
   fault — the strict HTML build (`sphinx-build -W`) passes. Most of it is the allowlist and is
-  fixable by naming the hosts in ["If sessions build the docs"](#if-sessions-build-the-docs):
-  that took a measured run from six broken links to one. The one that remains is the GitHub
-  Discussions link, refused by the credential proxy rather than the egress policy, which no
-  network setting clears — see ["What the allowlist cannot fix"](#what-the-allowlist-cannot-fix).
+  fixable by naming the hosts under *Network access* → *If sessions build the docs*: that took
+  a measured run from six broken links to one. The one that remains is the GitHub Discussions
+  link, refused by the credential proxy rather than the egress policy, which no network setting
+  clears — see *What the allowlist cannot fix* in the same section.
   Read a `linkcheck` failure here as a question about the environment before assuming it is a
   question about the documentation.
 
