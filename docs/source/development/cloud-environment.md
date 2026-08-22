@@ -122,7 +122,6 @@ intend to run the docs build in a session:
 cli.github.com
 docs.pytest.org
 docs.pypi.org
-docs.readthedocs.io
 docs.readthedocs.com
 www.jaegertracing.io
 ```
@@ -132,14 +131,18 @@ www.jaegertracing.io
 | `cli.github.com` | The `gh` CLI link in the release process page. |
 | `docs.pytest.org` | The pytest link in the contributing page. |
 | `docs.pypi.org` | The trusted-publishing link in the release process page. |
-| `docs.readthedocs.io` | The import-guide link in the release process page — and **not sufficient on its own**, see below. |
-| `docs.readthedocs.com` | Where that `.io` link actually lands. |
+| `docs.readthedocs.com` | Where the release-process page's `docs.readthedocs.io` import-guide link actually lands. Allowing the `.io` host does **not** cover it — see below. |
 | `www.jaegertracing.io` | A tracing-backend link in the observability user guide. |
 
-**Both readthedocs hosts, and this is the `docker-auth.elastic.co` lesson a second time.**
-The documentation links `docs.readthedocs.io`; that answers `302` and the link resolves at
-`docs.readthedocs.com`. The allowlist is applied to the **redirect target**, so naming only
-the host that appears in the source leaves the link refused. Measured 2026-08-22:
+**The allowlist applies to the redirect target, and this is the `docker-auth.elastic.co`
+lesson a second time.** The documentation links `docs.readthedocs.io`; that answers `302`
+and the link resolves at `docs.readthedocs.com`. Allowing the host that appears in the
+source — whether named outright or covered by a `*.readthedocs.io` wildcard — leaves the
+link refused, because the host that gets refused is the one at the end of the redirect.
+
+The failure says so, and it is worth reading the *host* in the error rather than the URL
+in the message: `linkcheck` reported the `.io` URL as broken while naming
+`host='docs.readthedocs.com'` as what it could not reach. Measured 2026-08-22:
 
 ```
 $ curl -sSL -o /dev/null -w '%{url_effective}\n' \
