@@ -146,7 +146,7 @@ def main() -> int:
         for name in missing:
             print(f"  - {name}")
         print("\nThe environment predates the current pyproject.toml. Refresh it:")
-        print('  make setup            # or: .venv/bin/pip install -e ".[dev,all]"')
+        print("  make setup")
         return 1
 
     print(f"GO: {len(required)} declared dependencies present ({args.extras})")

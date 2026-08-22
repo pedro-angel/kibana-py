@@ -73,7 +73,7 @@ pytest_bin="${PYTEST:-$here/.venv/bin/pytest}"
 probe_python="$(dirname "$pytest_bin")/python"
 if [ -x "$probe_python" ] && ! "$probe_python" -c 'import pytest_timeout' >/dev/null 2>&1; then
   echo "FAIL: pytest-timeout is missing, so 'make test-integration-ci' cannot run." >&2
-  echo "      Re-run 'make setup' (dev now pulls the [probe] extra), or install it into $(dirname "$pytest_bin")." >&2
+  echo "      Re-run 'make setup' (dev pulls the [probe] extra that provides it)." >&2
   exit 2
 fi
 
