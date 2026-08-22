@@ -8,6 +8,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 (unreleased)=
 ## Unreleased
 
+(v0.6.0)=
+## [0.6.0] - 2026-08-22
+
+### Added
+
+- **One client contract across Kibana 9.5.x and 9.4.x.** The same caller code now runs on both supported lines. The client absorbs the differences **additively** — it never removes, renames, or overwrites a key the server actually sent. `dashboards.get_all()` carries both spellings of the search envelope (`dashboards`/`page`/`total` and `data`/`meta`) on both lines; `streams.get_significant_events()` carries both `significant_events` and `queries`. `streams.upsert()` is the one request that varies by server version, because the lines cannot be reconciled: 9.4 requires a `queries` field and 9.5 rejects it. An upsert that does not mention queries now succeeds on both; passing `queries` explicitly against 9.5 raises rather than silently dropping it. Everything version-specific lives in `kibana/_compat.py`, reached through one table lookup — no client method branches on a version.
+- **`client.server_version()`, `kibana.is_supported()` and `kibana.SUPPORTED_VERSIONS`.** The client can say what it is connected to and whether that is a version it claims. The version is read from `/api/status` lazily, once per client, and shared with every `options()` clone; a failed lookup is not cached.
+- **`KibanaVersionError` for capabilities a supported line does not have.** Kibana 9.5 removed `streams.generate_significant_events()` and `streams.preview_significant_events()` from the public API. Calling either against 9.5 now raises before any request is sent — naming the method, the server version and the lines that do route it — instead of returning a bare `404` indistinguishable from a missing stream. The gate fails **open**: an unknown version, an unreachable `/api/status`, or a server outside the supported set all proceed as before, because the client refuses only what it can prove.
+- **A version-support policy with a gate behind it.** The supported set is declared once, in `kibana/_compat.py`; every other statement of it is derived from that or checked against it by `make versions`, a required Definition-of-Done criterion. Adding a line forces a dated decision about the **oldest** supported line, so "should the version we have supported longest still be supported?" is a question the repository makes someone answer. See {doc}`Kibana version support <development/version-support>`.
+
+### Changed
+
+- **Supported and release-gated are now the same list by construction.** Both CI matrixes and the release gate build their version list from the declared set, so a line the gate does not run cannot be claimed. The nine integration tests that previously passed on 9.4 and failed on 9.5 pass on both; neither line regressed.
+- **Developer tooling:** `make test-integration-matrix` runs the release gate's own integration selection against every supported Kibana line (and the `integration_green` Definition-of-Done criterion now runs it, so the local gate certifies what the release gate certifies); `scripts/ci-stack-up.sh` and `local-stack.sh` both trust an intercepting proxy's CA from one source; `ES_LOCAL_VERSION` provisions the stack on any version without editing a tracked file; and a Claude Code cloud environment is documented for release-compatibility work.
+
+See the [root CHANGELOG](https://github.com/pedro-angel/kibana-py/blob/main/CHANGELOG.md) for full detail.
+
 (v0.5.0)=
 ## [0.5.0] - 2026-08-03
 
@@ -432,9 +449,13 @@ When version 1.0 is released, this section will contain upgrade instructions.
 
 ## Support
 
-- **Current stable**: 0.5.x
+- **Current stable**: 0.6.x
 - **Python support**: 3.11+
-- **Kibana support**: 9.x
+- **Kibana support**: the two most recent Kibana minor lines, at the latest patch of each — the
+  exact pins are declared in `kibana/_compat.py` and readable at runtime via
+  `kibana.SUPPORTED_VERSIONS`. See {doc}`Kibana version support <development/version-support>`.
+  (Stated as the policy rather than as version numbers on purpose: a number here would be one
+  more copy to drift, and this file is not one of the mirrors `make versions` checks.)
 
 ## Links
 
@@ -443,7 +464,8 @@ When version 1.0 is released, this section will contain upgrade instructions.
 - [PyPI Package](https://pypi.org/project/kibana-py/)
 - [Documentation](https://kibana-py.readthedocs.io/)
 
-[Unreleased]: https://github.com/pedro-angel/kibana-py/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/pedro-angel/kibana-py/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/pedro-angel/kibana-py/releases/tag/v0.6.0
 [0.5.0]: https://github.com/pedro-angel/kibana-py/releases/tag/v0.5.0
 [0.4.2]: https://github.com/pedro-angel/kibana-py/releases/tag/v0.4.2
 [0.4.1]: https://github.com/pedro-angel/kibana-py/releases/tag/v0.4.1
