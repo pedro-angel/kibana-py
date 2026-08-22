@@ -263,6 +263,26 @@ its response envelope in 9.5" — a measured difference rather than a reading of
   `gh api repos/{owner}/{repo}/...` where a GraphQL-only API would otherwise be needed.
 - **Architecture**: sessions are x86_64 Ubuntu 24.04 regardless of your own machine. Results
   from an aarch64 laptop are not a substitute for a run here, and vice versa.
+- **No IPv6, at all.** The Firecracker kernel is built without it: there is no
+  `/proc/sys/net/ipv6`, no `/proc/net/if_inet6`, and `socket(AF_INET6, …)` raises
+  `OSError: [Errno 97] Address family not supported by protocol`. It cannot be switched on.
+  One unit test needs a real IPv6 loopback listener
+  (`test_validate_apm_connectivity_reaches_ipv6_only_listener`, the regression test for #83)
+  and therefore skips here — which makes **`make dod` report `unit_green` NO-GO in this
+  environment**, because the gate rejects any skip in the unit suite. That is the gate
+  working: a unit test that skips has an environmental dependency. The test runs and passes
+  wherever IPv6 loopback exists, including GitHub runners.
+- **`make dod` also reports `docs_strict` NO-GO here**, for the network policy rather than the
+  docs. `make docs` runs Sphinx `linkcheck`, and hosts outside the allowlist fail `CONNECT`
+  with `403` at the proxy — `www.jaegertracing.io` today. The strict HTML build
+  (`sphinx-build -W`) passes; only the external-link pass fails, and only on links whose hosts
+  the allowlist does not name. Add a host to the allowlist if a link genuinely matters, and
+  read a `linkcheck` failure here as a question about the allowlist before assuming it is a
+  question about the documentation.
+
+  Both NO-GOs are properties of this sandbox, not of the repository, and both are visible in
+  the gate's own per-criterion logs under `/tmp/dod-kibana-py/`. Neither can be cleared from
+  inside a session; the corresponding CI jobs are where those two criteria actually certify.
 
 ## Verify the environment before trusting it
 

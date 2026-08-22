@@ -15,6 +15,21 @@ set -eu
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ELASTIC_DIR="${SCRIPT_DIR}/elastic-start-local"
 
+# Whether the stack containers must trust an intercepting proxy's CA. Shared with
+# scripts/ci-stack-up.sh so the two bring-up paths cannot disagree -- see
+# scripts/proxy-ca.sh for why that mattered.
+# shellcheck source=scripts/proxy-ca.sh
+. "${SCRIPT_DIR}/scripts/proxy-ca.sh"
+kibana_py_detect_proxy_ca
+
+# The compose file list every invocation below uses. The proxy-CA overlay is present
+# only when the CA is really on disk, so an ordinary machine sees the same two files
+# as before.
+COMPOSE_FILES="-f docker-compose.yml -f docker-compose.apm.yml"
+if [ -n "$kibana_py_proxy_ca_overlay" ]; then
+  COMPOSE_FILES="$COMPOSE_FILES -f $kibana_py_proxy_ca_overlay"
+fi
+
 # -----------------------------------------------------------------------
 # Help
 # -----------------------------------------------------------------------
@@ -106,8 +121,20 @@ do_start() {
   # source it instead of dying on a missing ./.env.
   seed_env
 
-  # Step 1: Upstream start.sh (disk check, trial-expiry, full stack up)
-  ./start.sh
+  # Step 1: Upstream start.sh (disk check, trial-expiry, full stack up).
+  #
+  # start.sh runs a BARE `docker compose up`, so it picks up docker-compose.yml and
+  # nothing else -- no -f flag of ours can reach it. Where egress is intercepted that
+  # brought Kibana up without the proxy CA, and every Fleet/EPM test then failed
+  # against a stack that looked healthy. COMPOSE_FILE is the documented way to tell
+  # Compose which files to use without editing the script that calls it; it is scoped
+  # to this one invocation so nothing else changes.
+  if [ -n "$kibana_py_proxy_ca_overlay" ]; then
+    echo "Trusting the intercepting proxy CA in Kibana: ${KIBANA_PY_PROXY_CA}"
+    COMPOSE_FILE="docker-compose.yml:${kibana_py_proxy_ca_overlay}" ./start.sh
+  else
+    ./start.sh
+  fi
 
   # Step 2: Reload .env + .env.local (start.sh may have updated .env)
   . ./.env
@@ -166,10 +193,8 @@ do_start() {
   echo "---------------------------------------------------------------------"
   echo "Starting APM server..."
   echo "---------------------------------------------------------------------"
-  docker compose \
-    -f docker-compose.yml \
-    -f docker-compose.apm.yml \
-    up --wait apm-server
+  # shellcheck disable=SC2086  # COMPOSE_FILES is a deliberate list of -f flags
+  docker compose $COMPOSE_FILES up --wait apm-server
   echo "✅ APM server started"
 }
 
@@ -181,10 +206,8 @@ do_stop() {
   echo "---------------------------------------------------------------------"
   echo "Stopping APM server..."
   echo "---------------------------------------------------------------------"
-  docker compose \
-    -f docker-compose.yml \
-    -f docker-compose.apm.yml \
-    stop apm-server
+  # shellcheck disable=SC2086
+  docker compose $COMPOSE_FILES stop apm-server
 
   echo
   echo "---------------------------------------------------------------------"
@@ -204,10 +227,8 @@ do_status() {
   echo "---------------------------------------------------------------------"
   echo "Local Elastic Stack — container status"
   echo "---------------------------------------------------------------------"
-  docker compose \
-    -f docker-compose.yml \
-    -f docker-compose.apm.yml \
-    ps
+  # shellcheck disable=SC2086
+  docker compose $COMPOSE_FILES ps
 }
 
 do_destroy() {
@@ -218,10 +239,8 @@ do_destroy() {
   echo "---------------------------------------------------------------------"
   echo "Destroying Elastic Stack (containers, networks, and volumes)..."
   echo "---------------------------------------------------------------------"
-  docker compose \
-    -f docker-compose.yml \
-    -f docker-compose.apm.yml \
-    down --volumes --remove-orphans
+  # shellcheck disable=SC2086
+  docker compose $COMPOSE_FILES down --volumes --remove-orphans
 
   # Remove generated local env so the next start creates fresh credentials
   rm -f .env.local
