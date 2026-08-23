@@ -55,6 +55,31 @@ see [CONTRIBUTING.md § Changelog Policy](CONTRIBUTING.md#changelog-policy).
   [Kibana version support](docs/source/development/version-support.md); the design chain behind it
   is under `docs/superpowers/`.
 
+- **The Definition-of-Done gate runs cheapest criteria first, and takes `FAIL_FAST=1`.** The
+  verdict is unchanged — every required criterion still runs — but the order decides how long you
+  wait to learn something is broken. A formatting slip used to surface after the integration
+  matrix had spent forty minutes on a tree that was never going to certify; it now surfaces in
+  seconds. The order is: the checks that need no subprocess, then static analysis, then the two
+  that reach the network, then the unit suite and the interpreter matrix, then the suites that
+  need a live stack. `make dod FAIL_FAST=1` stops at the first NO-GO — deliberately opt-in and
+  not the default, because a release claim wants the whole picture and "the first thing that
+  broke" hides the other four. `benchmark_green` now runs before `integration_green`, which also
+  removes the coupling where it depended on a stack the integration tier happened to leave behind.
+
+- **Cloud sessions build the dev environment at session start.** `.venv` lives inside the
+  repository and the repository is cloned fresh per session, so no environment snapshot can carry
+  it: every session used to start with no `black`, no `ruff`, no `pytest`, and every `make` leaf
+  failing on a missing `$(VENV_BIN)` tool. `scripts/cloud-session-start.sh` now runs `make setup`
+  after starting the daemon, re-running it only when there is no virtualenv or when the one
+  present predates `pyproject.toml` — judged by the same `environment-current.py` the gate
+  preflights with, so "current" means one thing in both places. Measured on the session VM: 23.6s
+  warm, 66s cold. Synchronous on purpose: it costs that at session start and guarantees nothing
+  runs before its tools exist. Like the daemon step, a failure is reported with its log path and
+  never fails the session. This also retires the two workarounds
+  [Cloud Development Environment](docs/source/development/cloud-environment.md) used to prescribe
+  — `pip install --ignore-installed` and `python3 -m pytest` — both of which were symptoms of
+  working in the system interpreter rather than a virtualenv.
+
 - **The Definition-of-Done gate preflights its own environment.** A virtualenv created
   before a dependency entered `pyproject.toml` is not an environment this repository has
   ever tested, but the drift used to surface several criteria in, as some leaf failing on

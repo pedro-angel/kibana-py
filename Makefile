@@ -152,8 +152,11 @@ fix: ## Apply auto-fixes via pinned pre-commit hooks (isort, black, ruff-check -
 # ---------------------------------------------------------------------------
 
 .PHONY: dod
-dod: ## Run the Definition-of-Done gate (GO/NO-GO over dod.config)
-	scripts/checks/definition-of-done.sh
+dod: ## Run the Definition-of-Done gate (GO/NO-GO over dod.config); FAIL_FAST=1 stops at the first NO-GO
+	@# Criteria run cheapest first, so a formatting slip or an unreachable pin surfaces
+	@# in seconds rather than after the suites. FAIL_FAST=1 is for the loop before a
+	@# release claim; the claim itself wants the full picture, so it is opt-in.
+	scripts/checks/definition-of-done.sh $(if $(FAIL_FAST),--fail-fast)
 
 # ---------------------------------------------------------------------------
 # Build & docs

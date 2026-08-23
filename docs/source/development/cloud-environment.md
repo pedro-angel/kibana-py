@@ -420,17 +420,28 @@ live validation in this repository.
 6. `curl -s localhost:5601/api/status | jq -r '.status.overall.level'` — prints `available`.
 7. `free -h && df -h /` — headroom under a running stack, against the ~15 GiB RAM and ~21 GiB
    writable-disk figures above. Sample it while the suite runs; idle numbers prove nothing.
-8. `python3 -m pytest tests/integration/ -q` — the suite runs against the live server. Failures
-   here are findings about the *client*, not about the environment; read them, do not fix them in
-   the same pass.
+8. `make test-integration-ci` — the suite runs against the live server. Failures here are
+   findings about the *client*, not about the environment; read them, do not fix them in the
+   same pass.
 
-Step 8 has two prerequisites this VM imposes, both of which fail the whole suite before a single
-test runs:
+Step 8 needs the dev environment, which `scripts/cloud-session-start.sh` now builds with
+`make setup` at the start of every session (see [The dev environment, and why every session rebuilds
+it](#the-dev-environment-and-why-every-session-rebuilds-it)). `.venv` lives inside the repository and the repository is
+cloned fresh per session, so no snapshot can carry it — measured, it costs about 24s when the
+pip and pre-commit caches are warm and about 66s cold.
 
-- Install with `pip install -e ".[dev,all]" --ignore-installed`. Without the flag pip aborts
-  trying to uninstall Debian's distribution-managed `packaging` 24.0.
-- Invoke pytest as `python3 -m pytest`, not `pytest`. The `pytest` on `PATH` is a uv-isolated
-  shim that cannot import the package under test.
+Working inside that virtualenv is also what makes the two workarounds this page used to
+prescribe unnecessary, and both were symptoms of not having one:
+
+- `pip install -e ".[dev,all]"` into the system interpreter aborts trying to uninstall Debian's
+  distribution-managed `packaging` 24.0, which is why `--ignore-installed` was needed. A
+  virtualenv does not touch the system site-packages, so the conflict cannot arise.
+- The `pytest` on `PATH` is a uv-isolated shim that cannot import the package under test, which
+  is why `python3 -m pytest` was needed. `make` targets invoke `.venv/bin/pytest`, which can.
+
+Note that `black` and `ruff` are **not** in `.venv` — they run inside pre-commit's own isolated
+environments. Format with `make fix` and check with `make hooks`; a `.venv/bin/black` does not
+exist and a hand-rolled substitute for it is not the gate.
 
 The API-key auth tests need a key that `ci-stack-up.sh` mints only under GitHub Actions. Mint one
 in the session before step 8, or record that those tests skipped and why:
@@ -443,6 +454,32 @@ export ES_LOCAL_API_KEY=$(curl -s -u elastic:kibana-py-es-dev \
 
 A step-2 failure naming `failed to fetch anonymous token` is a missing `docker-auth.elastic.co`
 entry, not a missing `docker.elastic.co` one.
+
+### The dev environment, and why every session rebuilds it
+
+The environment cache snapshots the filesystem, but the *repository* is cloned fresh for each
+session — so `.venv`, which lives inside it, can never be inherited. Nothing carries it forward
+and nothing warns you it is missing: every `make` leaf that runs a tool invokes
+`$(VENV_BIN)/...`, so without it the whole facade fails on "no such file".
+
+`scripts/cloud-session-start.sh` therefore runs `make setup` as part of session start, after
+starting the daemon. It is idempotent — it re-runs only when there is no virtualenv, or when the
+one present predates the current `pyproject.toml`, judged by the same
+`scripts/checks/environment-current.py` the Definition-of-Done gate preflights with. Measured on
+the session VM: **23.6s** with the pip and pre-commit caches warm, **66s** cold.
+
+It is synchronous, which costs that time at session start and buys the guarantee that nothing
+runs before its tools exist. The alternative — printing `{"async": true, "asyncTimeout": 300000}`
+first — starts the session sooner and races whatever runs first against the install. For an
+environment whose purpose is running gates, losing the race is worse than waiting.
+
+Like the daemon, it never fails the session: a failed `make setup` is reported with the path to
+its log and the session continues.
+
+One consequence worth knowing: **`black` and `ruff` are not in `.venv`.** They run inside
+pre-commit's own isolated hook environments, so the way to format is `make fix` and the way to
+check is `make hooks`. Reaching for `.venv/bin/black` finds nothing, and approximating it with
+something else — a line-length script, an editor's formatter — is not the gate `make dod` runs.
 
 ### The Docker daemon, and why nothing starts it
 

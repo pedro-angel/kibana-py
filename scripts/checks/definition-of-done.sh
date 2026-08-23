@@ -26,6 +26,20 @@ set -u
 # recipe errors and flip the gate to a false GO — demonstrated, so cleared.
 unset MAKEFLAGS MFLAGS
 cd "$(git rev-parse --show-toplevel)" || exit 2
+
+# --fail-fast stops at the first failing criterion. It is opt-in, and deliberately
+# NOT the default: a release claim wants the whole picture, and "the first thing that
+# broke" hides the other four. It is for the loop before that -- a formatting slip or
+# an unreachable pin should not cost an hour of suites to discover.
+fail_fast=no
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --fail-fast) fail_fast=yes; shift ;;
+    --) shift; break ;;
+    -*) echo "FAIL: unknown option: $1 (usage: definition-of-done.sh [--fail-fast] [config])"; exit 2 ;;
+    *) break ;;
+  esac
+done
 cfg="${1:-dod.config}"
 [ -f "$cfg" ] || { echo "FAIL: no DoD config found at: $cfg"; exit 2; }
 
@@ -61,6 +75,16 @@ fi
 
 req()    { grep -qE "^$1[[:space:]]*=[[:space:]]*required([[:space:]]|$)" "$cfg"; }
 nogo=0
+# One place records a failure, so --fail-fast cannot be honoured by some branches and
+# forgotten by others.
+fail() {
+  nogo=1
+  [ "$fail_fast" = yes ] || return 0
+  echo
+  echo "VERDICT: NO-GO (--fail-fast stopped at the first failing criterion --"
+  echo "  run without it for the full picture before claiming a release)"
+  exit 1
+}
 logdir="/tmp/dod-$(basename "$(pwd)")"   # per-repo: sibling gates share /tmp
 mkdir -p "$logdir"
 run() {
@@ -69,7 +93,7 @@ run() {
     echo "  GO    $name"
   else
     echo "  NO-GO $name  (log: $logdir/$name.log)"
-    nogo=1
+    fail
   fi
 }
 
@@ -87,7 +111,7 @@ run_suite() {
   name="$1"; allow_skips="$2"; shift 2
   if ! "$@" >"$logdir/$name.log" 2>&1; then
     echo "  NO-GO $name  (log: $logdir/$name.log)"
-    nogo=1
+    fail
     return
   fi
   summary=$(grep -E '[0-9]+ (passed|skipped|failed|error|deselected)|no tests ran' "$logdir/$name.log" | tail -1)
@@ -96,10 +120,10 @@ run_suite() {
   passed=${passed:-0}; skipped=${skipped:-0}
   if [ "$passed" -lt 1 ]; then
     echo "  NO-GO $name  (exit 0 but 0 tests passed -- empty/all-skipped run; log: $logdir/$name.log)"
-    nogo=1
+    fail
   elif [ "$allow_skips" = no ] && [ "$skipped" -gt 0 ]; then
     echo "  NO-GO $name  (exit 0, $passed passed, but $skipped skipped in a no-skip suite; log: $logdir/$name.log)"
-    nogo=1
+    fail
   else
     echo "  GO    $name  ($passed passed, $skipped skipped)"
   fi
@@ -107,26 +131,43 @@ run_suite() {
 
 echo "Definition-of-Done gate ($cfg)"
 
-if req unit_green;             then run_suite unit_green        no  make test; fi
-if req types_clean;            then run types_clean            make lint; fi
-if req hygiene_hooks;          then run hygiene_hooks          make hooks; fi
-if req audit_clean;            then run audit_clean            make audit; fi
-if req sast_clean;             then run sast_clean             make sast; fi
-if req docs_strict;            then run docs_strict            make docs; fi
-if req vocabulary_conformant;  then run vocabulary_conformant  make vocabulary; fi
-if req versions_consistent;    then run versions_consistent    make versions; fi
-if req integration_green;      then run_suite integration_green yes make test-integration-matrix; fi
-if req benchmark_green;        then run_suite benchmark_green   yes make test-benchmark; fi
-if req matrix_green;           then run_suite matrix_green      yes make test-python-matrix; fi
+# Criteria run cheapest first. The verdict is the same either way -- every required
+# criterion runs unless --fail-fast cuts the run short -- but the ORDER decides how
+# long you wait to learn something is broken. A formatting slip used to surface after
+# the integration matrix had spent forty minutes; now it surfaces in seconds. Suites
+# that need Docker come last, so a machine with no daemon still gets a full static
+# report before it hits them.
 
+# --- seconds: no subprocess, or one short local one -------------------------
 if req changelog_entry; then
   if [ -f CHANGELOG.md ] && grep -qiE '^## (\[?unreleased|\[?[0-9]+\.[0-9]+\.[0-9]+)' CHANGELOG.md; then
     echo "  GO    changelog_entry"
   else
     echo "  NO-GO changelog_entry  (CHANGELOG.md missing or has no release section)"
-    nogo=1
+    fail
   fi
 fi
+if req versions_consistent;    then run versions_consistent    make versions; fi
+if req vocabulary_conformant;  then run vocabulary_conformant  make vocabulary; fi
+
+# --- tens of seconds: static analysis over the tree -------------------------
+if req sast_clean;             then run sast_clean             make sast; fi
+if req types_clean;            then run types_clean            make lint; fi
+if req hygiene_hooks;          then run hygiene_hooks          make hooks; fi
+
+# --- a minute or more, and these reach the network --------------------------
+if req audit_clean;            then run audit_clean            make audit; fi
+if req docs_strict;            then run docs_strict            make docs; fi
+
+# --- minutes: the unit suite, then the same suite across every interpreter --
+if req unit_green;             then run_suite unit_green        no  make test; fi
+if req matrix_green;           then run_suite matrix_green      yes make test-python-matrix; fi
+
+# --- tens of minutes, and these need a live stack (docker) ------------------
+# benchmark before integration: it is the shorter of the two, and it provisions its
+# own stack through stack-start rather than depending on one the matrix left behind.
+if req benchmark_green;        then run_suite benchmark_green   yes make test-benchmark; fi
+if req integration_green;      then run_suite integration_green yes make test-integration-matrix; fi
 
 if [ "$nogo" -eq 0 ]; then
   echo "VERDICT: GO"
