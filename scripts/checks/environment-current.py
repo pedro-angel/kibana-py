@@ -52,9 +52,7 @@ def _self_extras(req: str, project: str) -> list[str] | None:
     return None
 
 
-def _resolve(
-    extras: dict[str, list[str]], wanted: list[str], project: str
-) -> set[str]:
+def _resolve(extras: dict[str, list[str]], wanted: list[str], project: str) -> set[str]:
     """Flatten the named extras into distribution names, following self-references."""
     seen: set[str] = set()
     names: set[str] = set()
