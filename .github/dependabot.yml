@@ -19,3 +19,18 @@ updates:
       github-actions:
         patterns:
           - "*"
+
+  # Keep the pinned pre-commit hook `rev`s fresh. Replaces pre-commit-autoupdate.yml,
+  # which never succeeded here (0 of 7 runs): a workflow cannot open a PR while
+  # "Allow GitHub Actions to create and approve pull requests" is off, whereas
+  # Dependabot is a separate system with its own permissions and is unaffected.
+  - package-ecosystem: "pre-commit"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "ci"
+    groups:
+      pre-commit:
+        patterns:
+          - "*"
