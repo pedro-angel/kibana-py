@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans. Steps use checkbox (`- [ ]`) syntax. This plan is executed inline by the authoring session (secret-handling stays in one context).
 
-**Goal:** Make private-identifier leaks un-committable (derived + registry pre-commit check), scrub the existing leak forward, and encode "pin the run, not the runner" + a new evidence-over-deference skill in agent-methodology.
+**Goal:** Make private-identifier leaks un-committable (derived + registry pre-commit check), scrub the existing leak forward, and encode "pin the run, not the runner" + a new evidence-over-deference skill in claude-agent-methodology.
 
 **Spec:** `docs/superpowers/specs/2026-07-10-identity-hygiene-and-evidence-over-deference-design.md` (approved).
 
@@ -131,7 +131,7 @@ exit $status
 - [ ] Battle-test all modes on a scratch branch: clean tree → pass; staged file w/ own hostname → FAIL; registry entry staged → FAIL; allowlisted pair → pass; `PRIVATE_IDENTIFIERS_FILE=/nonexistent` → FAIL; nothing staged → tree mode runs.
 - [ ] `pre-commit run --all-files` green; commit `feat: add check-no-private-identifiers invariant (derived + registry deny, allowlist escape)`; push; PR.
 
-### Task 2: agent-methodology — amendments + new skill
+### Task 2: claude-agent-methodology — amendments + new skill
 
 **Files:** `skills/battle-testing-on-real-infra/SKILL.md`, `skills/secrets-and-teardown-discipline/SKILL.md`, `skills/evidence-over-deference/SKILL.md` (new), `AGENTS.md`, `README.md`, `adapters/*` (4).
 

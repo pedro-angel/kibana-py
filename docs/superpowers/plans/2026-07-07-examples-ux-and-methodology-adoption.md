@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make every example human-runnable (watch → keep-or-clean, non-colliding resources, safe re-runs), fix a blocking `utils.py` SyntaxError, adopt the `agent-methodology` pack, and harden git-controls (SHA-pin the PyPI publisher) — then release `0.3.1`.
+**Goal:** Make every example human-runnable (watch → keep-or-clean, non-colliding resources, safe re-runs), fix a blocking `utils.py` SyntaxError, adopt the `claude-agent-methodology` pack, and harden git-controls (SHA-pin the PyPI publisher) — then release `0.3.1`.
 
 **Architecture:** Three sequenced workstreams landing as separate commits — **A** git-controls (first, so its commit discipline gates the rest), **B** vendored methodology install, **C** the examples rework (the `0.3.1` release content) — followed by a live verification pass captured as an evidence artifact. A and B are repo-only (excluded from wheel/sdist), so only C affects the shipped package; the version is a patch regardless.
 
@@ -394,7 +394,7 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 
 ## Phase B — methodology pack (vendored copy)
 
-> Single source: copy from a local checkout of `pedro-angel/agent-methodology`. Do **not** copy its `templates/git-controls/` (Phase A is the git-controls source).
+> Single source: copy from a local checkout of `pedro-angel/claude-agent-methodology`. Do **not** copy its `templates/git-controls/` (Phase A is the git-controls source).
 
 ### Task B1: Vendor `AGENTS.md`, `skills/`, `CLAUDE.md`, and `.claude/skills/`
 
@@ -403,21 +403,21 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 
 - [ ] **Step 1: Clone the pack to a temp location** (skip if already available)
 
-Run: `git clone --depth 1 https://github.com/pedro-angel/agent-methodology /tmp/agent-methodology`
+Run: `git clone --depth 1 https://github.com/pedro-angel/claude-agent-methodology /tmp/claude-agent-methodology`
 Expected: clone succeeds.
 
 - [ ] **Step 2: Copy the source of truth, the Claude adapter, and the skills into the repo root**
 
 Run:
 ```bash
-cp /tmp/agent-methodology/AGENTS.md ./AGENTS.md
-cp /tmp/agent-methodology/adapters/claude/CLAUDE.md ./CLAUDE.md
-cp -R /tmp/agent-methodology/skills ./skills
+cp /tmp/claude-agent-methodology/AGENTS.md ./AGENTS.md
+cp /tmp/claude-agent-methodology/adapters/claude/CLAUDE.md ./CLAUDE.md
+cp -R /tmp/claude-agent-methodology/skills ./skills
 ```
 
 - [ ] **Step 3: Copy the skills into `.claude/skills/` for native slash-skill discovery**
 
-Run: `mkdir -p .claude/skills && cp -R /tmp/agent-methodology/skills/. .claude/skills/`
+Run: `mkdir -p .claude/skills && cp -R /tmp/claude-agent-methodology/skills/. .claude/skills/`
 
 - [ ] **Step 4: Verify the expected files landed (all 15 skills, both locations)**
 
@@ -428,9 +428,9 @@ Expected: `15`, `15`, `roots ok`.
 
 ```bash
 git add AGENTS.md CLAUDE.md skills .claude/skills
-git commit -m "docs: adopt agent-methodology (AGENTS.md + skills + Claude adapter)
+git commit -m "docs: adopt claude-agent-methodology (AGENTS.md + skills + Claude adapter)
 
-Vendored from pedro-angel/agent-methodology; git-controls installed separately
+Vendored from pedro-angel/claude-agent-methodology; git-controls installed separately
 in Phase A (its templates/git-controls is intentionally not copied).
 
 Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
