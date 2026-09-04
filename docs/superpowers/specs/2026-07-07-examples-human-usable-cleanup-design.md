@@ -1,7 +1,7 @@
 # Human-usable examples with keep/clean and non-colliding resources
 
 - **Date:** 2026-07-07
-- **Version:** v0.3 (v0.1 → v0.2: aligned to `pedro-angel/agent-methodology` skills; v0.2 → v0.3:
+- **Version:** v0.3 (v0.1 → v0.2: aligned to `pedro-angel/claude-agent-methodology` skills; v0.2 → v0.3:
   reconciled onto shipped code — see *Reconciliation (v0.3)*)
 - **Target release:** `0.3.1` (patch)
 - **Status:** Shipped. Reconciled to the delivered examples.
@@ -252,7 +252,7 @@ say which, rather than implying full coverage.
 
 ## Methodology alignment
 
-This spec adopts `pedro-angel/agent-methodology` — fittingly, since that pack was distilled
+This spec adopts `pedro-angel/claude-agent-methodology` — fittingly, since that pack was distilled
 partly from *this* build (a REST client covering an external system's full API against a live
 server). Mapping of skill → where it lands:
 

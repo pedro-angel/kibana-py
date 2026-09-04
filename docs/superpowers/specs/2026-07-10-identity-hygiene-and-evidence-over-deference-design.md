@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-10
 **Status:** Approved design, pending spec review
-**Scope:** kibana-py (remediation + adoption), git-controls-starter (the check), agent-methodology (two skill amendments + one new skill)
+**Scope:** kibana-py (remediation + adoption), git-controls-starter (the check), claude-agent-methodology (two skill amendments + one new skill)
 
 ## Context
 
@@ -80,7 +80,7 @@ New worked invariant `scripts/checks/check-no-private-identifiers.sh`, registere
   upstream main — the vendored copies pre-date this week's five sharpenings — and
   include the two amendments and the new skill from D4.
 
-### D4 — Methodology (agent-methodology)
+### D4 — Methodology (claude-agent-methodology)
 
 1. **`battle-testing-on-real-infra` rule 4 amendment — "pin the run, not the runner":**
    evidence records the machine's properties (arch, OS, kernel, versions, commands,
@@ -111,13 +111,13 @@ New worked invariant `scripts/checks/check-no-private-identifiers.sh`, registere
    Satisfies all repo gates: AGENTS.md index paragraph + link, README index row, all
    four adapters' enumerations updated.
 4. **Issue #4 comment:** enforcement entry for the new check + note that mirroring it
-   into agent-methodology root/`templates/git-controls` rides the Issue-4 rollout
+   into claude-agent-methodology root/`templates/git-controls` rides the Issue-4 rollout
    (not this change).
 
 ## Non-goals
 
 - No git-history rewrite; no GitHub support purge (residual accepted and recorded).
-- No mirroring of the new hook into agent-methodology's own root/template controls in
+- No mirroring of the new hook into claude-agent-methodology's own root/template controls in
   this change (Issue #4 rollout).
 - No LLM-based leak scanner: a deterministic hook plus a judgment rule matches
   `grounded-verifiable-gates`' preference for deterministic gates; an advisory
@@ -137,6 +137,6 @@ New worked invariant `scripts/checks/check-no-private-identifiers.sh`, registere
 
 ## Delivery
 
-Three PRs, dependency order: **starter** (the check) → **agent-methodology** (skill
+Three PRs, dependency order: **starter** (the check) → **claude-agent-methodology** (skill
 texts + new skill) → **kibana-py** (scrub + adopt hook + vendor re-sync). Plus the
 Issue #4 comment and the local registry seeding (not in any PR — it is the secret).

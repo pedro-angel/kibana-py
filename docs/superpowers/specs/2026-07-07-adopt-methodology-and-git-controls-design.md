@@ -1,4 +1,4 @@
-# Adopt agent-methodology pack + git-controls into kibana-py
+# Adopt claude-agent-methodology pack + git-controls into kibana-py
 
 - **Date:** 2026-07-07
 - **Version:** v0.1
@@ -10,7 +10,7 @@
 
 ## Motivation
 
-The maintainer adopts their own portable methodology (`pedro-angel/agent-methodology`) — a
+The maintainer adopts their own portable methodology (`pedro-angel/claude-agent-methodology`) — a
 coherent move, since that pack was distilled partly from *this* build. Two decisions are
 already made:
 
@@ -80,7 +80,7 @@ Gaps to close:
 
 ## Workstream B — methodology pack (vendored copy)
 
-Place, copied from `pedro-angel/agent-methodology`:
+Place, copied from `pedro-angel/claude-agent-methodology`:
 
 - `AGENTS.md` at repo root — the single source of truth.
 - `CLAUDE.md` at repo root — the thin Claude adapter that points at `AGENTS.md` (no existing

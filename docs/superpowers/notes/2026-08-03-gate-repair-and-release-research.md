@@ -40,7 +40,7 @@ describe `HEAD`.**
 
 ### Where the checker lives now
 
-`~/projs/agent-methodology/skills/dev-environment-facade/{vocabulary-conformance.sh,vocabulary.txt}`
+`~/projs/claude-agent-methodology/skills/dev-environment-facade/{vocabulary-conformance.sh,vocabulary.txt}`
 — a developer-machine path. Not present on a GitHub runner, not present in a fresh
 clone.
 
@@ -57,7 +57,7 @@ So invoking it by absolute path **without** an argument fails — it still looks
 repo-relative manifest:
 
 ```
-$ ~/projs/agent-methodology/skills/dev-environment-facade/vocabulary-conformance.sh
+$ ~/projs/claude-agent-methodology/skills/dev-environment-facade/vocabulary-conformance.sh
 FAIL: no vocabulary manifest at: skills/dev-environment-facade/vocabulary.txt
 exit=2
 ```
@@ -65,7 +65,7 @@ exit=2
 Passing both paths works, and the Makefile itself is conformant:
 
 ```
-$ M=~/projs/agent-methodology/skills/dev-environment-facade
+$ M=~/projs/claude-agent-methodology/skills/dev-environment-facade
 $ "$M/vocabulary-conformance.sh" "$M/vocabulary.txt"
 Vocabulary conformance (…/vocabulary.txt)
   GO    universal: help / setup / test / check / clean / dod
