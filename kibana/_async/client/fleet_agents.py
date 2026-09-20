@@ -976,6 +976,10 @@ class AsyncFleetAgentsClient(AsyncNamespaceClient):
         Lists the files (for example, diagnostics bundles) uploaded by the
         agent. Requires the ``fleet-agents-read`` privilege.
 
+        Note: both supported lines answer an unknown agent id with a 404
+        (measured on 9.4.7 and 9.5.4). Kibana 9.4.5 and 9.5.2 answered 200
+        with an empty ``items`` list.
+
         Args:
             agent_id: The agent ID.
             space_id: Optional space ID to scope the operation to.
@@ -988,6 +992,7 @@ class AsyncFleetAgentsClient(AsyncNamespaceClient):
                   ``filePath``, ``createTime``, ``status``, ``actionId``).
 
         Raises:
+            NotFoundError: If the agent does not exist.
             AuthenticationException: If authentication fails.
             AuthorizationException: If insufficient privileges.
 

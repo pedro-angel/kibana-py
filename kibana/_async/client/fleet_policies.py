@@ -1163,8 +1163,11 @@ class AsyncFleetPoliciesClient(AsyncNamespaceClient):
         ``DELETE /api/fleet/agentless_policies/{policyId}``
 
         Tears down the agentless deployment and deletes the backing package
-        policy. On the live 9.4.3 server this endpoint responds 200 with
-        ``{"id": ...}`` even for unknown policy IDs (idempotent delete).
+        policy.
+
+        Note: both supported lines answer an unknown policy id with a 404
+        (measured on 9.4.7 and 9.5.4), wording it differently on each. Kibana
+        9.4.5 and 9.5.2 answered 200 with the echoed id, an idempotent delete.
 
         Args:
             policy_id: ID of the agentless policy to delete.
@@ -1178,6 +1181,7 @@ class AsyncFleetPoliciesClient(AsyncNamespaceClient):
 
         Raises:
             BadRequestError: If the request is invalid.
+            NotFoundError: If no agentless policy has that id.
             ConflictError: If the policy cannot be deleted right now.
             AuthenticationException: If authentication fails.
             AuthorizationException: If insufficient privileges.

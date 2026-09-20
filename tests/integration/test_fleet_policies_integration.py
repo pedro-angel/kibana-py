@@ -374,14 +374,20 @@ class TestAgentlessPoliciesIntegration:
         assert "agentless" in str(excinfo.value)
         assert "serverless and cloud environments" in str(excinfo.value)
 
-    def test_delete_agentless_policy_unknown_id_is_idempotent(self, kibana_client):
-        """Live 9.4.3 responds 200 with the echoed id for unknown policies."""
+    def test_delete_agentless_policy_unknown_id_raises_not_found(self, kibana_client):
+        """Test the server's semantic 404 for an unknown agentless policy.
+
+        Measured on all four patches: 9.4.7 and 9.5.4 answer 404, while 9.4.5
+        and 9.5.2 answered 200 with the echoed id (an idempotent delete). The
+        two lines word the 404 differently -- "Agentless policy <id> not found"
+        on 9.5, "No agentless package policies found for policy <id>" on 9.4 --
+        so only the status is asserted. See
+        ``docs/evidence/multi-version-9.4.7-9.5.4.md``.
+        """
         policy_id = _unique_name("agentless-del")
-        response = kibana_client.fleet_policies.delete_agentless_policy(
-            policy_id=policy_id
-        )
-        assert response.meta.status == 200
-        assert response.body["id"] == policy_id
+        with pytest.raises(NotFoundError) as exc_info:
+            kibana_client.fleet_policies.delete_agentless_policy(policy_id=policy_id)
+        assert exc_info.value.meta.status == 404
 
 
 class TestAsyncFleetPoliciesIntegration:

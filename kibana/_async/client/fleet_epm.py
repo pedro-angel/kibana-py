@@ -732,6 +732,13 @@ class AsyncFleetEpmClient(AsyncNamespaceClient):
         instead of the Elastic Package Registry. The archive bytes are sent
         as the raw request body.
 
+        Note: both supported lines refuse an archive whose package name exists
+        in the registry or as a bundled package, with a 400 naming the clash
+        (measured on 9.4.7 and 9.5.4) -- an upload install must carry a name
+        neither of those provides. Kibana 9.4.5 and 9.5.2 installed such an
+        upload. The route is also rate-limited, answering 429 when uploads
+        arrive less than ten seconds apart.
+
         Args:
             content: Raw bytes of the package archive.
             content_type: Content type of the archive:
@@ -749,7 +756,9 @@ class AsyncFleetEpmClient(AsyncNamespaceClient):
             ``_meta`` object with ``install_source: "upload"`` and ``name``.
 
         Raises:
-            BadRequestError: If the archive is invalid.
+            BadRequestError: If the archive is invalid, or its package name
+                exists in the registry or as a bundled package.
+            ApiError: If the route's rate limit is hit (429).
             ConflictError: If a concurrent installation is in progress.
             AuthenticationException: If authentication fails.
             AuthorizationException: If insufficient privileges.
