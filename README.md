@@ -270,8 +270,8 @@ to work but are not tested.
 
 | Kibana line | Tested patch | Status |
 | :--- | :--- | :--- |
-| 9.5.x | 9.5.2 | Supported; the release gate blocks on it |
-| 9.4.x | 9.4.5 | Supported; the release gate blocks on it |
+| 9.5.x | 9.5.4 | Supported; the release gate blocks on it |
+| 9.4.x | 9.4.7 | Supported; the release gate blocks on it |
 
 Supported and release-gated are the same list, by construction: the set is declared once
 in `kibana/_compat.py`, and both the `integration-probe` workflow and the release gate

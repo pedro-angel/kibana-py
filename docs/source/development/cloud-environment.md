@@ -230,7 +230,7 @@ fails here and is not a valid smoke test. The Elastic stack pulls nothing from H
 ### Environment variables
 
 ```text
-KIBANA_PY_STACK_VERSIONS=9.5.2 9.4.5
+KIBANA_PY_STACK_VERSIONS=9.5.4 9.4.7
 KIBANA_PY_PULL_BUDGET=210
 ES_LOCAL_MEMLOCK=8388608
 ```

@@ -45,8 +45,8 @@ from typing import Any
 #: forward -- including the decision that must be recorded about the oldest line --
 #: is on that page.
 SUPPORTED_VERSIONS: tuple[tuple[str, str], ...] = (
-    ("9.5", "9.5.2"),
-    ("9.4", "9.4.5"),
+    ("9.5", "9.5.4"),
+    ("9.4", "9.4.7"),
 )
 
 #: Why each supported line is in the set, dated. A line may not enter

@@ -40,7 +40,7 @@ log_file=/var/log/kibana-py-cloud-setup.log
 touch "$log_file" 2>/dev/null || log_file=/tmp/kibana-py-cloud-setup.log
 exec > >(tee -a "$log_file") 2>&1
 
-versions="${KIBANA_PY_STACK_VERSIONS:-9.5.2 9.4.5}"
+versions="${KIBANA_PY_STACK_VERSIONS:-9.5.4 9.4.7}"
 budget="${KIBANA_PY_PULL_BUDGET:-210}"
 registry="docker.elastic.co"
 images="elasticsearch/elasticsearch kibana/kibana apm/apm-server"
