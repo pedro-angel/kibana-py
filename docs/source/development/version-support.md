@@ -26,8 +26,8 @@ One place: `SUPPORTED_VERSIONS` in `kibana/_compat.py`.
 
 ```python
 SUPPORTED_VERSIONS = (
-    ("9.5", "9.5.2"),
-    ("9.4", "9.4.5"),
+    ("9.5", "9.5.4"),
+    ("9.4", "9.4.7"),
 )
 ```
 
@@ -49,11 +49,11 @@ The set also ships in the wheel, because it answers a runtime question:
 >>> from kibana import Kibana, is_supported, SUPPORTED_VERSIONS
 >>> client = Kibana("http://localhost:5601", api_key="...")
 >>> client.server_version()
-'9.5.2'
+'9.5.4'
 >>> is_supported(client.server_version())
 True
 >>> SUPPORTED_VERSIONS
-(('9.5', '9.5.2'), ('9.4', '9.4.5'))
+(('9.5', '9.5.4'), ('9.4', '9.4.7'))
 ```
 
 (async: `await client.server_version()`.)
@@ -83,8 +83,8 @@ detected the day it is published:
 
 ```text
 Kibana support currency (source: kibana/_compat.py)
-  CURRENT  9.5: 9.5.2 is the latest patch
-  CURRENT  9.4: 9.4.5 is the latest patch
+  CURRENT  9.5: 9.5.4 is the latest patch
+  CURRENT  9.4: 9.4.7 is the latest patch
 ```
 
 When the registry cannot be reached it prints `UNKNOWN ... currency NOT checked` and
