@@ -512,9 +512,13 @@ class FleetEnrollmentClient(NamespaceClient):
         Agents. This operation is irreversible and requires all agents in
         the Fleet to be re-enrolled after rotation. You must explicitly
         acknowledge the risk by passing ``acknowledge=True``; the server
-        rejects the request with a 400 warning otherwise. Requires the
-        ``fleet-agents-all``, ``fleet-agent-policies-all`` and
-        ``fleet-settings-all`` privileges.
+        rejects the request with a 400 warning otherwise.
+
+        Both supported lines require **superuser** for this route and refuse an
+        API-key-authenticated request with 403 (measured on 9.4.7 and 9.5.4).
+        Kibana 9.4.5 and 9.5.2 accepted the ``fleet-agents-all``,
+        ``fleet-agent-policies-all`` and ``fleet-settings-all`` privileges an
+        API key can carry.
 
         Args:
             acknowledge: Set to True to confirm you understand the risks of

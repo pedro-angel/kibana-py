@@ -9,7 +9,7 @@
 
 > **Disclaimer:** This is an independent, community-driven project and is **not** officially affiliated with, endorsed by, or supported by Elastic N.V. or any of its subsidiaries. "Kibana" and "Elasticsearch" are trademarks of Elastic N.V. This project is provided "as is", without warranty of any kind. Use it at your own risk. See the [Disclaimer](#disclaimer) section and the [LICENSE](LICENSE) for full details.
 
-A Python client library for the Kibana REST API with **complete platform, Fleet, and Security Solution API coverage** — 39 namespaces, 610 endpoints, sync and async. Built following the design patterns of the [elasticsearch-py](https://github.com/elastic/elasticsearch-py) client, and verified live against **Kibana 9.5.2 and 9.4.5** — see [Version support](#version-support).
+A Python client library for the Kibana REST API with **complete platform, Fleet, and Security Solution API coverage** — 39 namespaces, 610 endpoints, sync and async. Built following the design patterns of the [elasticsearch-py](https://github.com/elastic/elasticsearch-py) client, and verified live against **Kibana 9.5.4 and 9.4.7** — see [Version support](#version-support).
 
 Headline feature: first-class support for the **new Kibana Dashboards HTTP API** (`client.dashboards`, technical preview in 9.4) and its sibling **Visualizations HTTP API** (`client.visualizations`) — manage dashboards and Lens visualizations through a real, documented data model instead of opaque saved objects.
 
@@ -270,8 +270,15 @@ to work but are not tested.
 
 | Kibana line | Tested patch | Status |
 | :--- | :--- | :--- |
-| 9.5.x | 9.5.2 | Supported; the release gate blocks on it |
-| 9.4.x | 9.4.5 | Supported; the release gate blocks on it |
+| 9.5.x | 9.5.4 | Supported; the release gate blocks on it |
+| 9.4.x | 9.4.7 | Supported; the release gate blocks on it |
+
+The 9.4.7 and 9.5.4 patches changed four Fleet routes in lockstep — an unknown agent's
+uploads and an unknown agentless policy delete are now 404s, message-signing rotation
+requires superuser, and an upload install refuses a package name the registry already
+carries. Both lines agree, so no caller code needs a version branch; callers relying on the
+old answers need to know. Details in the [CHANGELOG](CHANGELOG.md) and the evidence file
+linked below.
 
 Supported and release-gated are the same list, by construction: the set is declared once
 in `kibana/_compat.py`, and both the `integration-probe` workflow and the release gate
@@ -319,9 +326,9 @@ from kibana import Kibana, is_supported, SUPPORTED_VERSIONS
 
 client = Kibana("http://localhost:5601", api_key="...")
 
-client.server_version()              # '9.5.2' — one lazy request, cached
+client.server_version()              # '9.5.4' — one lazy request, cached
 is_supported(client.server_version())  # True
-SUPPORTED_VERSIONS                   # (('9.5', '9.5.2'), ('9.4', '9.4.5'))
+SUPPORTED_VERSIONS                   # (('9.5', '9.5.4'), ('9.4', '9.4.7'))
 ```
 
 `await client.server_version()` on the async client. Nothing queries `/api/status` until
@@ -341,6 +348,8 @@ statement in the repository agrees with the one source, and
 the pins are still the newest patches.
 
 Measurements, method, and the full per-version diff:
+[`docs/evidence/multi-version-9.4.7-9.5.4.md`](docs/evidence/multi-version-9.4.7-9.5.4.md),
+and the move that introduced the two-line contract in
 [`docs/evidence/multi-version-9.4.5-9.5.2.md`](docs/evidence/multi-version-9.4.5-9.5.2.md).
 
 ## Resources

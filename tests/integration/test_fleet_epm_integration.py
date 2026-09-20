@@ -12,16 +12,19 @@ chosen because nothing else on the shared dev stack uses them. Custom
 integrations created here use the ``kbnpy_fleet_epm_`` prefix.
 """
 
+import io
+import re
 import ssl
 import time
 import urllib.error
 import urllib.request
 import uuid
+import zipfile
 
 import certifi
 import pytest
 
-from kibana.exceptions import BadRequestError, NotFoundError
+from kibana.exceptions import ApiError, BadRequestError, NotFoundError
 
 from .utils import (
     create_test_async_kibana_client,
@@ -78,6 +81,63 @@ def basic_kibana_client():
         pytest.skip("Basic auth credentials not available")
     yield client
     client.close()
+
+
+def _download_registry_archive(pkg_name: str, version: str) -> bytes:
+    """Fetch a package archive from the registry, skipping if it is unreachable."""
+    url = f"https://epr.elastic.co/epr/{pkg_name}/{pkg_name}-{version}.zip"
+    try:
+        context = ssl.create_default_context(cafile=certifi.where())
+        with urllib.request.urlopen(url, timeout=60, context=context) as response:
+            return response.read()
+    except (urllib.error.URLError, TimeoutError) as exc:
+        pytest.skip(f"Could not download {url} from the package registry: {exc}")
+
+
+def _rename_package_archive(
+    archive: bytes, pkg_name: str, version: str, new_name: str
+) -> bytes:
+    """Rewrite a registry archive under a name the registry does not carry.
+
+    From 9.4.7 and 9.5.4 on, the upload-install route refuses any archive whose
+    package name exists in the registry or as a bundled package, so reaching the
+    success path at all requires a name that does neither. Both the top-level
+    directory and the ``name:`` field of the root manifest carry the name.
+    """
+    source = zipfile.ZipFile(io.BytesIO(archive))
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as target:
+        for item in source.infolist():
+            data = source.read(item.filename)
+            path = item.filename.replace(
+                f"{pkg_name}-{version}", f"{new_name}-{version}", 1
+            )
+            if item.filename.count("/") == 1 and item.filename.endswith("manifest.yml"):
+                data = re.sub(
+                    rf"^name:\s*{re.escape(pkg_name)}\s*$",
+                    f"name: {new_name}",
+                    data.decode(),
+                    flags=re.M,
+                ).encode()
+            target.writestr(path, data)
+    return buffer.getvalue()
+
+
+def _upload_package(fleet_epm, archive: bytes, attempts: int = 4, delay: float = 12.0):
+    """Upload an archive, retrying the route's rate limit (429) but nothing else."""
+    last: ApiError | None = None
+    for attempt in range(attempts):
+        try:
+            return fleet_epm.install_package_by_upload(
+                content=archive, content_type="application/zip"
+            )
+        except ApiError as exc:
+            if exc.meta.status != 429:
+                raise
+            last = exc
+            if attempt < attempts - 1:
+                time.sleep(delay)
+    raise last  # type: ignore[misc]
 
 
 def _force_uninstall(client, pkg_name: str) -> None:
@@ -319,29 +379,41 @@ class TestFleetEpmPackageLifecycle:
             _force_uninstall(kibana_client, PKG)
 
     def test_install_package_by_upload(self, kibana_client):
-        """Upload a real registry archive to the upload-install endpoint."""
+        """Upload an archive whose package name the registry does not carry."""
         fleet_epm = kibana_client.fleet_epm
         latest = fleet_epm.get_package(pkg_name=PKG).body["item"]["latestVersion"]
-        url = f"https://epr.elastic.co/epr/{PKG}/{PKG}-{latest}.zip"
-        try:
-            context = ssl.create_default_context(cafile=certifi.where())
-            with urllib.request.urlopen(url, timeout=60, context=context) as response:
-                archive = response.read()
-        except (urllib.error.URLError, TimeoutError) as exc:
-            pytest.skip(f"Could not download {url} from the package registry: {exc}")
+        archive = _download_registry_archive(PKG, latest)
+        uploaded_name = f"kbnpy{uuid.uuid4().hex[:8]}"
+        renamed = _rename_package_archive(archive, PKG, latest, uploaded_name)
 
         try:
-            result = fleet_epm.install_package_by_upload(
-                content=archive, content_type="application/zip"
-            )
+            result = _upload_package(fleet_epm, renamed)
             assert result.body["_meta"]["install_source"] == "upload"
-            assert result.body["_meta"]["name"] == PKG
+            assert result.body["_meta"]["name"] == uploaded_name
 
-            pkg = fleet_epm.get_package(pkg_name=PKG)
+            pkg = fleet_epm.get_package(pkg_name=uploaded_name)
             assert pkg.body["item"]["status"] == "installed"
 
-            uninstalled = fleet_epm.uninstall_package(pkg_name=PKG)
+            uninstalled = fleet_epm.uninstall_package(pkg_name=uploaded_name)
             assert isinstance(uninstalled.body["items"], list)
+        finally:
+            _force_uninstall(kibana_client, uploaded_name)
+
+    def test_install_package_by_upload_rejects_a_registry_name(self, kibana_client):
+        """Test that an archive named like a registry package is refused.
+
+        Measured on all four patches: 9.4.7 and 9.5.4 answer 400, while 9.4.5
+        and 9.5.2 installed the upload. See
+        ``docs/evidence/multi-version-9.4.7-9.5.4.md``.
+        """
+        fleet_epm = kibana_client.fleet_epm
+        latest = fleet_epm.get_package(pkg_name=PKG).body["item"]["latestVersion"]
+        archive = _download_registry_archive(PKG, latest)
+
+        try:
+            with pytest.raises(BadRequestError) as exc_info:
+                _upload_package(fleet_epm, archive)
+            assert "already exists" in str(exc_info.value)
         finally:
             _force_uninstall(kibana_client, PKG)
 

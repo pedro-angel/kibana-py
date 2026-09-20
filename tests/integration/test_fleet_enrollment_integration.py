@@ -4,7 +4,11 @@ import uuid
 
 import pytest
 
-from kibana.exceptions import BadRequestError, NotFoundError
+from kibana.exceptions import (
+    AuthorizationException,
+    BadRequestError,
+    NotFoundError,
+)
 
 from .utils import (
     create_test_async_kibana_client,
@@ -17,6 +21,33 @@ pytestmark = pytest.mark.skipif(
     not is_kibana_available(),
     reason="Kibana not available. Set KIBANA_URL or start elastic-start-local stack.",
 )
+
+
+@pytest.fixture
+def superuser_client():
+    """A client authenticated as the stack superuser via basic auth.
+
+    From 9.4.7 and 9.5.4 on, the message-signing rotation route requires
+    superuser, and an API key -- which ``auth_method="auto"`` prefers whenever
+    one is configured -- does not satisfy that check.
+    """
+    try:
+        client = create_test_kibana_client(auth_method="basic")
+    except ValueError as exc:  # no basic-auth credentials in this environment
+        pytest.skip(f"basic auth not configured: {exc}")
+    yield client
+    client.close()
+
+
+@pytest.fixture
+def api_key_client():
+    """A client authenticated with an API key, skipped when none is configured."""
+    try:
+        client = create_test_kibana_client(auth_method="api_key")
+    except ValueError as exc:  # no API key in this environment
+        pytest.skip(f"no API key configured: {exc}")
+    yield client
+    client.close()
 
 
 @pytest.fixture
@@ -210,13 +241,38 @@ class TestMessageSigningService:
             kibana_client.fleet_enrollment.rotate_message_signing_key_pair()
         assert "acknowledge=true" in str(exc_info.value)
 
-    def test_rotate_key_pair_acknowledged(self, kibana_client):
-        """Test rotating the message signing key pair (no agents enrolled)."""
-        result = kibana_client.fleet_enrollment.rotate_message_signing_key_pair(
+    def test_rotate_key_pair_acknowledged(self, superuser_client, agent_policy):
+        """Test rotating the message signing key pair (no agents enrolled).
+
+        Authenticated as the superuser on purpose: 9.4.7 and 9.5.4 refuse an
+        API-key-authenticated rotation with 403, which the next test records.
+        9.4.5 and 9.5.2 accepted either credential. See
+        ``docs/evidence/multi-version-9.4.7-9.5.4.md``.
+
+        ``agent_policy`` is requested for its side effect, not its value: on a
+        stack where Fleet has never been set up the route answers 500 ("Failed
+        to rotate key pair!"), and creating an agent policy is what triggers
+        that setup. Without it the test passes only when something earlier in
+        the file happens to have run first.
+        """
+        result = superuser_client.fleet_enrollment.rotate_message_signing_key_pair(
             acknowledge=True
         )
         assert result.meta.status == 200
         assert result.body["message"] == "Key pair rotated successfully."
+
+    def test_rotate_key_pair_refuses_api_key_authentication(self, api_key_client):
+        """Test that an API-key-authenticated rotation is refused with 403.
+
+        The privilege set an API key carries is not superuser, and both
+        supported lines now require superuser for this route.
+        """
+        with pytest.raises(AuthorizationException) as exc_info:
+            api_key_client.fleet_enrollment.rotate_message_signing_key_pair(
+                acknowledge=True
+            )
+        assert exc_info.value.meta.status == 403
+        assert "superuser" in str(exc_info.value).lower()
 
 
 class TestKubernetesManifests:

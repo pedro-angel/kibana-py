@@ -100,14 +100,29 @@ see [CONTRIBUTING.md § Changelog Policy](CONTRIBUTING.md#changelog-policy).
   because a rule that held in one of two places is what produced this. With no CA on disk — a
   GitHub runner — the compose invocation is unchanged.
 
-- **The client now supports two Kibana minor lines at the latest patch of each — 9.5.2 and
-  9.4.5 — and the release gate blocks on both.** Supported and release-gated are the same list
+- **The client now supports two Kibana minor lines at the latest patch of each — 9.5.4 and
+  9.4.7 — and the release gate blocks on both.** Supported and release-gated are the same list
   by construction: the set is declared once in `kibana/_compat.py`, and both `integration-probe`
   and the release gate build their matrix from it, so a line the gate does not run cannot be
   claimed in the README. The nine integration tests that previously passed on 9.4 and failed on
   9.5 now pass on both; the client absorbs the differences additively (see *Added* below). Both
   pins were run live end to end and the result captured in
-  `docs/evidence/multi-version-9.4.5-9.5.2.md`.
+  `docs/evidence/multi-version-9.4.5-9.5.2.md`. The pins moved forward once more before
+  release, from 9.5.2/9.4.5 to 9.5.4/9.4.7; what that move measured is in
+  `docs/evidence/multi-version-9.4.7-9.5.4.md` and in the entry below.
+
+- **Four Fleet routes answer differently on 9.4.7 and 9.5.4 than they did on 9.4.5 and 9.5.2,
+  and the client now documents what each one does.** The changes arrived on both supported
+  lines at once, so they are not a divergence the compatibility layer absorbs — no caller code
+  needs a version branch, but caller code that relied on the old answers does need to know:
+  `fleet_agents.get_uploads()` raises `NotFoundError` for an unknown agent id instead of
+  returning an empty list; `fleet_policies.delete_agentless_policy()` raises `NotFoundError`
+  for an unknown id instead of echoing it back with 200;
+  `fleet_enrollment.rotate_message_signing_key_pair()` requires superuser and refuses an
+  API-key-authenticated request with 403; and `fleet_epm.install_package_by_upload()` refuses an archive whose
+  package name exists in the registry or as a bundled package (400) and rate-limits repeated
+  uploads (429). All four were measured against all four patches on one machine on one day —
+  the old pins still show the old behaviour, so these are properties of the new patches.
 
 - **`scripts/ci-stack-up.sh` overlays `elastic-start-local/docker-compose.proxy-ca.yml` when a
   proxy CA is present**, giving Kibana `NODE_EXTRA_CA_CERTS` so it trusts an egress gateway that

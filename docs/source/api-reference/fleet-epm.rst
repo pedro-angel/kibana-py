@@ -59,7 +59,10 @@ All Fleet EPM operations are space-aware: every method accepts an optional
           pkg_name="nginx", pkg_version="2.3.0", force=True
       )
 
-      # Install from an uploaded archive
+      # Install from an uploaded archive. The package name inside the archive
+      # must not exist in the registry or as a bundled package -- both
+      # supported lines refuse such an upload with 400 -- and repeated uploads
+      # less than ten seconds apart are rate-limited with 429.
       with open("my-package-1.0.0.zip", "rb") as f:
           client.fleet_epm.install_package_by_upload(content=f.read())
 

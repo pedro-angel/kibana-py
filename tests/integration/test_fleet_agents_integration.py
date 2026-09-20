@@ -153,9 +153,15 @@ class TestFleetAgentsReadEndpoints:
         assert isinstance(result.body["items"], list)
 
     def test_get_uploads_for_unknown_agent(self, kibana_client, fake_agent_id):
-        """Test that uploads for an unknown agent are an empty list (live 200)."""
-        result = kibana_client.fleet_agents.get_uploads(agent_id=fake_agent_id)
-        assert result.body["items"] == []
+        """Test the server's semantic 404 for an unknown agent's uploads.
+
+        Measured on all four patches: 9.4.7 and 9.5.4 answer 404, while 9.4.5
+        and 9.5.2 answered 200 with an empty ``items`` list. See
+        ``docs/evidence/multi-version-9.4.7-9.5.4.md``.
+        """
+        with pytest.raises(NotFoundError) as exc_info:
+            kibana_client.fleet_agents.get_uploads(agent_id=fake_agent_id)
+        assert exc_info.value.meta.status == 404
 
 
 class TestFleetAgentsActionLifecycle:

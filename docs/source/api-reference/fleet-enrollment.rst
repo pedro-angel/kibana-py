@@ -84,7 +84,9 @@ to target a specific space.
    .. code-block:: python
 
       # Rotate the Fleet message signing key pair (irreversible; all agents
-      # must be re-enrolled afterwards, hence the explicit acknowledge)
+      # must be re-enrolled afterwards, hence the explicit acknowledge).
+      # Both supported lines require superuser for this route: a client
+      # authenticated with an API key is refused with 403.
       client.fleet_enrollment.rotate_message_signing_key_pair(acknowledge=True)
 
       # Kubernetes manifest as JSON ({"item": "<yaml>"}) with the Fleet URL

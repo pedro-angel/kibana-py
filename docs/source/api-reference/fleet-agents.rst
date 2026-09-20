@@ -96,7 +96,8 @@ the agent policy they are assigned to. Every method accepts an optional
       # Cancel an in-progress action
       client.fleet_agents.cancel_action(action_id=created.body["actionId"])
 
-      # Download and clean up uploaded files
+      # Download and clean up uploaded files. An unknown agent id raises
+      # NotFoundError on both supported lines.
       uploads = client.fleet_agents.get_uploads(agent_id="agent-id-1")
       for item in uploads.body["items"]:
           content = client.fleet_agents.get_file(
