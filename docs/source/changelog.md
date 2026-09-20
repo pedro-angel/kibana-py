@@ -8,6 +8,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 (unreleased)=
 ## Unreleased
 
+(v0.6.0)=
+## [0.6.0] - 2026-09-21
+
+### Added
+
+- **One client contract across two Kibana minor lines.** The same caller code runs on 9.5.x and 9.4.x. Where the server renamed or rewrapped a response between lines, the client carries both spellings **additively** — it never removes, renames or overwrites a key the server actually sent; where a request field is required on one line and rejected on the other (`streams.upsert()`'s `queries`), it is sent only where it is accepted; where an endpoint was removed, the call raises `KibanaVersionError` before any request instead of returning a bare `404`. No method in the client branches on a version: everything version-specific resolves through one table in `kibana/_compat.py`.
+- **`client.server_version()`, `kibana.is_supported()` and `kibana.SUPPORTED_VERSIONS`.** The client can say what it is connected to and whether that is a version it claims. The version is read from `/api/status` lazily, once per client, and shared with every `options()` clone.
+- **A version-support maintenance framework.** The supported set is declared once, in `kibana/_compat.py`; the CI matrixes, the release gate, the stack template and the documentation are all checked against it by `make versions`, so no statement of the supported versions can drift from the one source.
+
+### Changed
+
+- **Supported and release-gated: Kibana 9.5.4 and 9.4.7** — the latest patch of each of the two most recent minor lines. Both pins are run live end to end, and the release gate blocks on both.
+- **Four Fleet routes answer differently on 9.4.7 and 9.5.4 than they did on 9.4.5 and 9.5.2**, on both lines at once. `fleet_agents.get_uploads()` and `fleet_policies.delete_agentless_policy()` raise `NotFoundError` for an unknown id instead of answering 200; `fleet_enrollment.rotate_message_signing_key_pair()` requires superuser and refuses an API-key-authenticated request with 403; `fleet_epm.install_package_by_upload()` refuses an archive whose package name exists in the registry or as a bundled package (400) and rate-limits repeated uploads (429). No caller code needs a version branch, but caller code that relied on the old answers needs updating.
+
+See the [root CHANGELOG](https://github.com/pedro-angel/kibana-py/blob/main/CHANGELOG.md) for full detail.
+
 (v0.5.0)=
 ## [0.5.0] - 2026-08-03
 
@@ -443,7 +459,8 @@ When version 1.0 is released, this section will contain upgrade instructions.
 - [PyPI Package](https://pypi.org/project/kibana-py/)
 - [Documentation](https://kibana-py.readthedocs.io/)
 
-[Unreleased]: https://github.com/pedro-angel/kibana-py/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/pedro-angel/kibana-py/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/pedro-angel/kibana-py/releases/tag/v0.6.0
 [0.5.0]: https://github.com/pedro-angel/kibana-py/releases/tag/v0.5.0
 [0.4.2]: https://github.com/pedro-angel/kibana-py/releases/tag/v0.4.2
 [0.4.1]: https://github.com/pedro-angel/kibana-py/releases/tag/v0.4.1
