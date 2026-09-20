@@ -136,6 +136,11 @@ Steps 1, 5, 6, 7, 8 only — a patch bump needs no support decision, but it does
 live run. A patch is not "obviously safe": 9.5.1 → 9.5.2 is exactly the kind of hop
 where a preview API changes shape.
 
+The 2026-09-20 move to 9.4.7 / 9.5.4 is the worked example: it found four Fleet routes
+that changed their answers on both lines at once, and the whole cost of absorbing them
+fell on the suite and the docstrings rather than on the client. The measurements are in
+`docs/evidence/multi-version-9.4.7-9.5.4.md`.
+
 ## The decision: should the oldest line still be supported?
 
 Adding a line is the moment to ask whether the oldest one still earns its place. The
