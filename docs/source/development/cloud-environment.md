@@ -39,7 +39,7 @@ flowchart TB
     end
     subgraph session["Every session — rebuilt from scratch"]
         clone["Fresh clone of kibana-py"]
-        hook["SessionStart hook<br/>starts dockerd"]
+        hook["SessionStart hook<br/>starts dockerd, builds .venv"]
         up["./scripts/ci-stack-up.sh<br/>Elasticsearch + Kibana + APM"]
         work["Research, edits, pytest, PR"]
         clone --> hook --> up --> work
@@ -48,8 +48,8 @@ flowchart TB
 ```
 
 The practical consequence: image pulls are paid once, stack bring-up is paid every session — and
-so is starting the Docker daemon itself, which is why `.claude/settings.json` carries a
-`SessionStart` hook that runs `scripts/cloud-session-start.sh`.
+so are starting the Docker daemon itself and building `.venv`, which is why
+`.claude/settings.json` carries a `SessionStart` hook that runs `scripts/cloud-session-start.sh`.
 
 ## Prerequisites
 
@@ -420,17 +420,20 @@ live validation in this repository.
 6. `curl -s localhost:5601/api/status | jq -r '.status.overall.level'` — prints `available`.
 7. `free -h && df -h /` — headroom under a running stack, against the ~15 GiB RAM and ~21 GiB
    writable-disk figures above. Sample it while the suite runs; idle numbers prove nothing.
-8. `python3 -m pytest tests/integration/ -q` — the suite runs against the live server. Failures
-   here are findings about the *client*, not about the environment; read them, do not fix them in
-   the same pass.
+8. `make test-integration-ci` — the suite runs against the live server. Failures here are
+   findings about the *client*, not about the environment; read them, do not fix them in the
+   same pass.
 
-Step 8 has two prerequisites this VM imposes, both of which fail the whole suite before a single
-test runs:
+Step 8 needs the dev environment, which `scripts/cloud-session-start.sh` builds with
+`make setup` at the start of every session (see [The dev environment, and why every session
+rebuilds it](#the-dev-environment-and-why-every-session-rebuilds-it)). Working inside that
+virtualenv is what makes the two workarounds this page used to prescribe unnecessary:
 
-- Install with `pip install -e ".[dev,all]" --ignore-installed`. Without the flag pip aborts
-  trying to uninstall Debian's distribution-managed `packaging` 24.0.
-- Invoke pytest as `python3 -m pytest`, not `pytest`. The `pytest` on `PATH` is a uv-isolated
-  shim that cannot import the package under test.
+- `pip install -e ".[dev,all]"` into the system interpreter aborts trying to uninstall Debian's
+  distribution-managed `packaging` 24.0, which is why `--ignore-installed` was needed. A
+  virtualenv does not touch the system site-packages, so the conflict cannot arise.
+- The `pytest` on `PATH` is a uv-isolated shim that cannot import the package under test, which
+  is why `python3 -m pytest` was needed. `make` targets invoke `.venv/bin/pytest`, which can.
 
 The API-key auth tests need a key that `ci-stack-up.sh` mints only under GitHub Actions. Mint one
 in the session before step 8, or record that those tests skipped and why:
@@ -443,6 +446,25 @@ export ES_LOCAL_API_KEY=$(curl -s -u elastic:kibana-py-es-dev \
 
 A step-2 failure naming `failed to fetch anonymous token` is a missing `docker-auth.elastic.co`
 entry, not a missing `docker.elastic.co` one.
+
+### The dev environment, and why every session rebuilds it
+
+The environment cache snapshots the filesystem, but the *repository* is cloned fresh for each
+session — so `.venv`, which lives inside it, can never be inherited. Every `make` leaf that runs
+a tool invokes `$(VENV_BIN)/...`, so without it the whole facade fails on "no such file".
+
+`scripts/cloud-session-start.sh` therefore runs `make setup` after starting the daemon, whenever
+`.venv` is absent — which, in a fresh clone, is every session. Measured on the session VM on
+2026-08-23: about **24s** with the pip and pre-commit caches warm, **66s** cold.
+
+It is synchronous, which costs that time at session start and guarantees that nothing runs
+before its tools exist. The alternative — printing `{"async": true, "asyncTimeout": 300000}`
+first — starts the session sooner and races whatever runs first against the install. Like the
+daemon, it never fails the session: a failed `make setup` is reported with the path to its log
+and the session continues.
+
+`black` and `ruff` are not in `.venv`: they run inside pre-commit's own isolated hook
+environments. Format with `make fix` and check with `make hooks`.
 
 ### The Docker daemon, and why nothing starts it
 
@@ -481,7 +503,7 @@ other:
 
   The hook is a *project* hook: it fires only when the session's working directory is this
   repository. A session started one level up (several repositories cloned side by side) does not
-  load it, and `dockerd` has to be started by running the script by hand —
+  load it, and `dockerd` and `.venv` have to be brought up by running the script by hand —
   `CLAUDE_CODE_REMOTE=true bash scripts/cloud-session-start.sh`.
 
 If a daemon still refuses to start, both scripts leave its own error in
