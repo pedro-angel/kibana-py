@@ -9,7 +9,33 @@ see [CONTRIBUTING.md § Changelog Policy](CONTRIBUTING.md#changelog-policy).
 
 ## [Unreleased]
 
+### Added
+
+- **Cloud sessions build the dev environment at session start.** `.venv` lives inside the
+  repository and the repository is cloned fresh per session, so no environment snapshot can carry
+  it: every session started with no `pytest` in a virtualenv, and every `make` leaf failed on a
+  missing `$(VENV_BIN)` tool. `scripts/cloud-session-start.sh` now runs `make setup` after starting
+  the daemon whenever `.venv` is absent, synchronously so nothing runs before its tools exist.
+  Measured on the session VM: about 24s with warm caches, 66s cold. A failure is reported with its
+  log path and never fails the session. This retires the two workarounds the
+  [Cloud Development Environment](docs/source/development/cloud-environment.md) page prescribed,
+  `pip install --ignore-installed` and `python3 -m pytest`.
+
+### Changed
+
+- **The Definition-of-Done gate runs its cheapest criteria first, and takes `FAIL_FAST=1`.** The
+  verdict is unchanged, since every required criterion still runs, but a formatting slip now
+  surfaces in seconds instead of after the suites. The order is: the checks that need no
+  subprocess, static analysis, the two that reach the network, the unit suite and the interpreter
+  matrix, then the suites that need a live stack, benchmark (14 tests) before integration (772).
+  `make dod FAIL_FAST=1` stops at the first NO-GO. It is opt-in because a release claim wants the
+  whole picture, and only the value `1` enables it.
+
 ### Fixed
+
+- **`make setup` installs `pytest-timeout`.** The `dev` extra now pulls the `probe` extra, so
+  `make test-integration-ci`, the release gate's own integration leaf, runs locally instead of
+  failing on an unrecognized `--timeout` argument.
 
 - **Cloud sessions no longer lose Docker to a stale pidfile.** The environment snapshot carries
   the setup run's `/var/run/docker.pid` along with its images. On a freshly booted session VM
