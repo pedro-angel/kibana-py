@@ -474,8 +474,15 @@ other:
 - `scripts/cloud-session-start.sh`, wired as a `SessionStart` hook in `.claude/settings.json`, on
   every session. The snapshot carries the images the setup script pulled but not the daemon that
   pulled them, so without this hook every session after the cache is built starts with no daemon
-  and `ci-stack-up.sh` fails. The script exits immediately outside a cloud session, so local
-  sessions are untouched.
+  and `ci-stack-up.sh` fails. The snapshot *does* carry the setup run's `/var/run/docker.pid`,
+  and on a fresh VM that PID can belong to an unrelated process, which makes `dockerd` refuse to
+  start; the hook removes the pidfile first when no `dockerd` is running. The script exits
+  immediately outside a cloud session, so local sessions are untouched.
+
+  The hook is a *project* hook: it fires only when the session's working directory is this
+  repository. A session started one level up (several repositories cloned side by side) does not
+  load it, and `dockerd` has to be started by running the script by hand —
+  `CLAUDE_CODE_REMOTE=true bash scripts/cloud-session-start.sh`.
 
 If a daemon still refuses to start, both scripts leave its own error in
 `/var/log/kibana-py-dockerd.log` rather than swallowing it. A permissions or cgroup error there
