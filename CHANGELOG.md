@@ -9,6 +9,15 @@ see [CONTRIBUTING.md § Changelog Policy](CONTRIBUTING.md#changelog-policy).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Cloud sessions no longer lose Docker to a stale pidfile.** The environment snapshot carries
+  the setup run's `/var/run/docker.pid` along with its images. On a freshly booted session VM
+  that PID can be reused by an unrelated process early in boot, and `dockerd` then refuses to
+  start (`process with PID 567 is still running`), so `cloud-session-start.sh` reported
+  "dockerd did not come up" and every stack command failed. The hook now removes the pidfile
+  when no `dockerd` is running before it launches one.
+
 ## [0.6.0] - 2026-09-21
 
 ### Added

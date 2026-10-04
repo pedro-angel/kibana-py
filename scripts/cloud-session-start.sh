@@ -23,6 +23,15 @@ if docker info >/dev/null 2>&1; then
   exit 0
 fi
 
+# The snapshot also carries the setup run's /var/run/docker.pid. Its PID is
+# meaningless on a freshly booted VM, but low PIDs are reused early in boot, so
+# dockerd can find an unrelated live process behind it and refuse to start
+# ("process with PID 567 is still running"). No dockerd is running here -- docker
+# info just failed -- so a pidfile is stale by definition.
+if ! pgrep -x dockerd >/dev/null 2>&1; then
+  rm -f /var/run/docker.pid
+fi
+
 log=/var/log/kibana-py-dockerd.log
 touch "$log" 2>/dev/null || log=/tmp/kibana-py-dockerd.log
 nohup dockerd >>"$log" 2>&1 &
