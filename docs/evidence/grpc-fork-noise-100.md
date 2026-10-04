@@ -519,3 +519,103 @@ shipped filter (`_GRPC_FORK_DIAGNOSTIC_RE` and
 `_without_known_benign_fork_noise` are byte-for-byte the same regex and
 function as before this round) — only the surrounding claims and one test's
 fixture were corrected.
+
+## Linux seed-loop gate — executed 2026-10-04
+
+This section records the run of the gate issue #100 was filed for, which
+"Updated expectations" above left open: a seed-loop hunt on Linux across
+3.11–3.14, ending in either a captured failing seed or a bounded clean result
+of at least 100 seeds per version.
+
+**Result: bounded clean.** 400 of 400 full `tests/unit/` runs passed, 100 seeds
+on each of the four supported interpreters, with 0 failures. No Linux-specific
+gRPC diagnostic surfaced in any `TestImportGuardMatrix` subprocess, so
+`_GRPC_FORK_DIAGNOSTIC_RE` needs no second pattern.
+
+### Method
+
+The whole unit suite runs per seed, not `TestImportGuardMatrix` alone: §2
+established that the sighting needs the full suite's ordering and churn, and
+that running the two related tests in isolation never triggered it. The filter
+from this fix stays in place, so any diagnostic worded differently from the
+`ev_poll_posix.cc` line fails the run that produces it.
+
+Each interpreter got its own venv (`uv pip install ".[dev,all]"`, matching the
+nox `test` session). The four interpreters ran concurrently, one per core:
+
+```bash
+#!/usr/bin/env bash
+# Issue #100 seed hunt: full tests/unit/ suite, seeds 1..100, one Python version per core.
+cd ~/projs/kibana-py || exit 1
+out=~/hunt-100
+run_version() {
+  v=$1
+  for seed in $(seq 1 100); do
+    log=$out/run-$v-$seed.log
+    .venv-$v/bin/python -m pytest tests/unit/ --no-cov -q -p no:cacheprovider \
+      --basetemp=$out/tmp-$v --randomly-seed=$seed > "$log" 2>&1
+    rc=$?
+    echo "$v seed=$seed rc=$rc $(tail -1 "$log")" >> $out/summary-$v.txt
+    [ $rc -eq 0 ] && rm -f "$log"
+  done
+  touch $out/done-$v
+}
+for v in 3.11 3.12 3.13 3.14; do run_version $v & done
+wait
+touch $out/done-all
+```
+
+### Results
+
+| Interpreter | Seeds | Runs passed | Runs failed | Tests per run |
+|---|---|---|---|---|
+| 3.11.17 | 1–100 | 100 | 0 | 3532 passed |
+| 3.12.15 | 1–100 | 100 | 0 | 3532 passed |
+| 3.13.16 | 1–100 | 100 | 0 | 3532 passed |
+| 3.14.8 | 1–100 | 100 | 0 | 3532 passed |
+
+Per-run duration ranged from 27.36 s to 45.58 s. The hunt ran from 10:40 to
+11:44 UTC.
+
+### Run (properties, not runner)
+
+| Property | Value |
+|---|---|
+| Base commit | `dac8075` (`main`) |
+| Arch / OS | aarch64 / Debian GNU/Linux 13 (trixie), kernel 6.18.50+rpt-rpi-2712 |
+| Hardware | Raspberry Pi 5 Model B Rev 1.1, 4 cores, 15 GiB RAM |
+| libc | glibc 2.41 |
+| Python | 3.11.17 / 3.12.15 / 3.13.16 / 3.14.8 (uv 0.12.23-managed standalone builds) |
+| `os.POSIX_SPAWN_CLOSEFROM` | absent on all four interpreters |
+| grpcio | 1.84.0 |
+| opentelemetry-sdk / -exporter-otlp-proto-grpc | 1.45.0 |
+| pytest / pytest-randomly | 9.1.1 / 5.0.0 |
+| gRPC environment | no `GRPC_*` variables set (gRPC defaults) |
+
+### What the run covers, and its limits
+
+- **The fork path ran on every interpreter.** None of the four interpreters
+  exposes `os.POSIX_SPAWN_CLOSEFROM`, so §1's `posix_spawn` fast path was
+  disqualified by `close_fds=True` on 3.13 and 3.14 as well as on 3.11 and
+  3.12. Every matrix subprocess started through `fork()`+`exec()`, the path on
+  which gRPC's `pthread_atfork` handler runs. Whether the interpreters CI
+  installs expose the flag was not checked. If they do, CI's 3.13 and 3.14
+  jobs take `posix_spawn`, run no atfork handler, and are less exposed than
+  this run.
+- **Architecture differs from CI.** This host is aarch64; `ubuntu-latest` is
+  x86_64. The operating system, glibc ≥ 2.34 and gRPC's Linux code paths are
+  shared; the CPU architecture is not.
+- **The string search still matches §3.** In grpcio 1.84.0's
+  `cygrpc.cpython-312-aarch64-linux-gnu.so`, `strings` places the one
+  occurrence of "FD from fork parent still in poll list" immediately after
+  `posix_engine/ev_poll_posix.cc`, not after either `ev_epoll1_linux.cc` path.
+- **A clean bound is not proof of absence.** 400 clean runs bound the failure
+  rate on this platform; they do not prove the diagnostic cannot occur. The
+  macOS sighting also appeared once in a run of a single seed, after #91's
+  210 configurations found nothing.
+
+### Disposition
+
+The gate as filed is met with a bounded clean result: at least 100 seeds per
+interpreter on Linux, 0 failures. Issue #100 closes as not reproducible on
+Linux. The macOS fix above stays as it is.
