@@ -61,4 +61,13 @@ after the change; its failing message was the same one observed on 9.4.8.
 
 ## Gates
 
-See the pull request for `make versions` and `make dod`.
+`make versions`: GO. `make dod`: **NO-GO**, two criteria, both environmental:
+
+| Criterion | Result | Cause |
+| :--- | :--- | :--- |
+| `unit_green` | NO-GO | 3531 passed, 1 skipped in a no-skip suite: `test_observability.py:1471`, IPv6 unavailable on the session VM |
+| `matrix_green` | NO-GO | nox sessions 3.11, 3.12, 3.13 passed; 3.14 failed, interpreter not installed on the VM |
+| `integration_green` | GO | 749 passed, 19 skipped (9.4.8 stack, after the test fix) |
+| every other criterion | GO | |
+
+Neither failure touches the version move; both need a host with IPv6 and Python 3.14.
