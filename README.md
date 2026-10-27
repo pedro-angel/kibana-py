@@ -9,7 +9,7 @@
 
 > **Disclaimer:** This is an independent, community-driven project and is **not** officially affiliated with, endorsed by, or supported by Elastic N.V. or any of its subsidiaries. "Kibana" and "Elasticsearch" are trademarks of Elastic N.V. This project is provided "as is", without warranty of any kind. Use it at your own risk. See the [Disclaimer](#disclaimer) section and the [LICENSE](LICENSE) for full details.
 
-A Python client library for the Kibana REST API with **complete platform, Fleet, and Security Solution API coverage** — 39 namespaces, 610 endpoints, sync and async. Built following the design patterns of the [elasticsearch-py](https://github.com/elastic/elasticsearch-py) client, and verified live against **Kibana 9.5.4 and 9.4.7** — see [Version support](#version-support).
+A Python client library for the Kibana REST API with **complete platform, Fleet, and Security Solution API coverage** — 39 namespaces, 610 endpoints, sync and async. Built following the design patterns of the [elasticsearch-py](https://github.com/elastic/elasticsearch-py) client, and verified live against **Kibana 9.5.5 and 9.4.8** — see [Version support](#version-support).
 
 Headline feature: first-class support for the **new Kibana Dashboards HTTP API** (`client.dashboards`, technical preview in 9.4) and its sibling **Visualizations HTTP API** (`client.visualizations`) — manage dashboards and Lens visualizations through a real, documented data model instead of opaque saved objects.
 
@@ -270,8 +270,8 @@ to work but are not tested.
 
 | Kibana line | Tested patch | Status |
 | :--- | :--- | :--- |
-| 9.5.x | 9.5.4 | Supported; the release gate blocks on it |
-| 9.4.x | 9.4.7 | Supported; the release gate blocks on it |
+| 9.5.x | 9.5.5 | Supported; the release gate blocks on it |
+| 9.4.x | 9.4.8 | Supported; the release gate blocks on it |
 
 The 9.4.7 and 9.5.4 patches changed four Fleet routes in lockstep — an unknown agent's
 uploads and an unknown agentless policy delete are now 404s, message-signing rotation
@@ -326,9 +326,9 @@ from kibana import Kibana, is_supported, SUPPORTED_VERSIONS
 
 client = Kibana("http://localhost:5601", api_key="...")
 
-client.server_version()              # '9.5.4' — one lazy request, cached
+client.server_version()              # '9.5.5' — one lazy request, cached
 is_supported(client.server_version())  # True
-SUPPORTED_VERSIONS                   # (('9.5', '9.5.4'), ('9.4', '9.4.7'))
+SUPPORTED_VERSIONS                   # (('9.5', '9.5.5'), ('9.4', '9.4.8'))
 ```
 
 `await client.server_version()` on the async client. Nothing queries `/api/status` until
