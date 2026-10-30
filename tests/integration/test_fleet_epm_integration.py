@@ -513,9 +513,17 @@ class TestFleetEpmSemanticErrors:
             kibana_client.fleet_epm.rollback_package(pkg_name=BULK_PKG)
 
     def test_delete_datastream_assets_unknown_policy(self, kibana_client):
-        """datastream_assets 404s naming the unknown package policy."""
+        """datastream_assets 404s naming the unknown package policy.
+
+        The wording changed in 9.4.8 / 9.5.5 (the status did not): earlier
+        patches said "Package policy with id <id> not found".
+        """
         with pytest.raises(
-            NotFoundError, match="Package policy with id kbnpy-bogus not found"
+            NotFoundError,
+            match=(
+                r"Package policy with id kbnpy-bogus not found"
+                r"|Saved object \[fleet-agent-policies/kbnpy-bogus\] not found"
+            ),
         ):
             kibana_client.fleet_epm.delete_datastream_assets(
                 pkg_name=PKG,

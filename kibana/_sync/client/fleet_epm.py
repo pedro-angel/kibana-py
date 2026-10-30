@@ -1674,8 +1674,10 @@ class FleetEpmClient(NamespaceClient):
             ObjectApiResponse with ``success: true`` on success.
 
         Raises:
-            NotFoundError: If the package policy does not exist (message:
-                ``"Package policy with id <id> not found"``).
+            NotFoundError: If the package policy does not exist (message
+                before 9.4.8 / 9.5.5: ``"Package policy with id <id> not
+                found"``; from those patches: ``"Saved object
+                [fleet-agent-policies/<id>] not found"``).
             BadRequestError: If the package is not an installed input
                 package.
             AuthenticationException: If authentication fails.
