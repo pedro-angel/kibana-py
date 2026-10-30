@@ -23,6 +23,14 @@ see [CONTRIBUTING.md § Changelog Policy](CONTRIBUTING.md#changelog-policy).
 
 ### Changed
 
+- **The supported Kibana pins move to 9.5.5 and 9.4.8, the latest patch on each line.** The set
+  of lines is unchanged. Both pins were run live end to end; the result is in
+  `docs/evidence/multi-version-9.4.8-9.5.5.md`. One answer changed on both lines at once:
+  `fleet_epm.delete_datastream_assets()` still raises `NotFoundError` for an unknown package
+  policy, but the message now reads `Saved object [fleet-agent-policies/<id>] not found` instead
+  of `Package policy with id <id> not found`. Caller code that matched on the old text needs to
+  accept both; the docstring names both.
+
 - **The Definition-of-Done gate runs its cheapest criteria first, and takes `FAIL_FAST=1`.** The
   verdict is unchanged, since every required criterion still runs, but a formatting slip now
   surfaces in seconds instead of after the suites. The order is: the checks that need no
