@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 (unreleased)=
 ## Unreleased
 
+(v0.6.1)=
+## [0.6.1] - 2026-10-31
+
+### Changed
+
+- **Supported and release-gated: Kibana 9.5.5 and 9.4.8**, the latest patch of each supported line. The set of lines is unchanged, and the client's API is unchanged. `kibana.SUPPORTED_VERSIONS` now names the new pins, so a project that takes its supported set from the installed `kibana-py` can move to them by requiring `kibana-py>=0.6.1`.
+- **`fleet_epm.delete_datastream_assets()` reports an unknown package policy with a different message on 9.5.5 and 9.4.8.** It still raises `NotFoundError`, but the text now reads `Saved object [fleet-agent-policies/<id>] not found` instead of `Package policy with id <id> not found`. Caller code that matched on the old text needs to accept both.
+
+See the [root CHANGELOG](https://github.com/pedro-angel/kibana-py/blob/main/CHANGELOG.md) for full detail, including the contributor tooling changes in this release.
+
 (v0.6.0)=
 ## [0.6.0] - 2026-09-21
 
@@ -459,7 +469,8 @@ When version 1.0 is released, this section will contain upgrade instructions.
 - [PyPI Package](https://pypi.org/project/kibana-py/)
 - [Documentation](https://kibana-py.readthedocs.io/)
 
-[Unreleased]: https://github.com/pedro-angel/kibana-py/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/pedro-angel/kibana-py/compare/v0.6.1...HEAD
+[0.6.1]: https://github.com/pedro-angel/kibana-py/releases/tag/v0.6.1
 [0.6.0]: https://github.com/pedro-angel/kibana-py/releases/tag/v0.6.0
 [0.5.0]: https://github.com/pedro-angel/kibana-py/releases/tag/v0.5.0
 [0.4.2]: https://github.com/pedro-angel/kibana-py/releases/tag/v0.4.2

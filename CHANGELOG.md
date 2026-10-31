@@ -9,6 +9,8 @@ see [CONTRIBUTING.md § Changelog Policy](CONTRIBUTING.md#changelog-policy).
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-10-31
+
 ### Added
 
 - **Cloud sessions build the dev environment at session start.** `.venv` lives inside the
@@ -1121,7 +1123,8 @@ Initial release of kibana-py, a Python client library for the Kibana REST API.
 
 ---
 
-[Unreleased]: https://github.com/pedro-angel/kibana-py/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/pedro-angel/kibana-py/compare/v0.6.1...HEAD
+[0.6.1]: https://github.com/pedro-angel/kibana-py/releases/tag/v0.6.1
 [0.6.0]: https://github.com/pedro-angel/kibana-py/releases/tag/v0.6.0
 [0.5.0]: https://github.com/pedro-angel/kibana-py/releases/tag/v0.5.0
 [0.4.2]: https://github.com/pedro-angel/kibana-py/releases/tag/v0.4.2
