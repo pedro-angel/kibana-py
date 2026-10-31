@@ -898,7 +898,14 @@ class AsyncFleetEpmClient(AsyncNamespaceClient):
                 set.
             NotFoundError: If the package is not installed.
             AuthenticationException: If authentication fails.
-            AuthorizationException: If insufficient privileges.
+            AuthorizationException: If insufficient privileges. From 9.4.8 /
+                9.5.5 this includes a caller that lacks Fleet and Integrations
+                ``all`` privileges in any space where the package has package
+                policies, including spaces the caller cannot see (message:
+                ``"Insufficient privileges to uninstall package <name>: it is
+                used in spaces you are not authorized to access"``). Nothing
+                is deleted. Earlier patches uninstalled the package and
+                deleted those policies.
             SpaceNotFoundError: If the space doesn't exist and validation is
                 enabled.
 

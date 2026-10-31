@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Supported and release-gated: Kibana 9.5.5 and 9.4.8**, the latest patch of each supported line. The set of lines is unchanged, and the client's API is unchanged. `kibana.SUPPORTED_VERSIONS` now names the new pins, so a project that takes its supported set from the installed `kibana-py` can move to them by requiring `kibana-py>=0.6.1`.
 - **`fleet_epm.delete_datastream_assets()` reports an unknown package policy with a different message on 9.5.5 and 9.4.8.** It still raises `NotFoundError`, but the text now reads `Saved object [fleet-agent-policies/<id>] not found` instead of `Package policy with id <id> not found`. Caller code that matched on the old text needs to accept both.
+- **`fleet_epm.uninstall_package()` is refused on 9.5.5 and 9.4.8 when the package is used in a space the caller cannot manage.** Kibana now checks Fleet and Integrations `all` privileges in every space holding one of the package's policies, including spaces the caller cannot see. Without them the call raises `AuthorizationException` (403) and nothing is deleted; on 9.5.4 and 9.4.7 it succeeded and deleted those policies.
 
 See the [root CHANGELOG](https://github.com/pedro-angel/kibana-py/blob/main/CHANGELOG.md) for full detail, including the contributor tooling changes in this release.
 
