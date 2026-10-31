@@ -42,8 +42,9 @@ see [CONTRIBUTING.md § Changelog Policy](CONTRIBUTING.md#changelog-policy).
   succeeded and deleted those policies. The client passes the 403 through unchanged; the
   docstring names it. The check is in Kibana's Fleet plugin
   (`server/services/epm/packages/uninstall_authz.ts`), which exists at the `v9.5.5` and
-  `v9.4.8` tags and not at `v9.5.4` or `v9.4.7`. The 403 was measured live on 9.5.5 by the
-  mcp-for-kibana contract suite, which exercises an API key restricted to one space.
+  `v9.4.8` tags and not at `v9.5.4` or `v9.4.7`. The 403, with the policy left in place, was
+  measured live on both 9.5.5 and 9.4.8 by the mcp-for-kibana contract suite running on
+  kibana-py 0.6.0 with an API key restricted to one space.
 
 - **The Definition-of-Done gate runs its cheapest criteria first, and takes `FAIL_FAST=1`.** The
   verdict is unchanged, since every required criterion still runs, but a formatting slip now
