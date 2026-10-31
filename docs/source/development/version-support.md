@@ -136,6 +136,13 @@ Steps 1, 5, 6, 7, 8 only — a patch bump needs no support decision, but it does
 live run. A patch is not "obviously safe": 9.5.1 → 9.5.2 is exactly the kind of hop
 where a preview API changes shape.
 
+Then **cut a patch release** of `kibana-py` with the new pins (see
+`PUBLISHING_GUIDE.md`). The pins are data the package ships: `kibana.SUPPORTED_VERSIONS`
+is what an installed client reports, and downstream projects read their own supported
+set from it — `mcp-for-kibana` does, by design. Until a release carries the new pins,
+those projects cannot move to them, however green `main` is. The 9.4.8 / 9.5.5 move sat
+on `main` unreleased, which is why 0.6.1 exists.
+
 The 2026-09-20 move to 9.4.7 / 9.5.4 is the worked example: it found four Fleet routes
 that changed their answers on both lines at once, and the whole cost of absorbing them
 fell on the suite and the docstrings rather than on the client. The measurements are in
