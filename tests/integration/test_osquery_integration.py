@@ -245,14 +245,17 @@ class TestOsqueryLiveQueries:
     def test_get_live_query_unknown_id_server_behavior(self, kibana_client):
         """Test details for an unknown live query ID.
 
-        The live 9.4.3 server responds 500 "no elements in sequence" (not a
-        404) for unknown live query IDs; asserting the message proves the
-        request reached the osquery live-query route.
+        The live 9.4.3 server responds 500 "no elements in sequence" for
+        unknown live query IDs; 9.5.6 answers 404 "Action not found". Asserting
+        the message proves the request reached the osquery live-query route.
         """
         with pytest.raises(ApiError) as exc_info:
             kibana_client.osquery.get_live_query(id=str(uuid.uuid4()))
-        assert exc_info.value.status_code == 500
-        assert "no elements in sequence" in str(exc_info.value)
+        if exc_info.value.status_code == 404:
+            assert "Action not found" in str(exc_info.value)
+        else:
+            assert exc_info.value.status_code == 500
+            assert "no elements in sequence" in str(exc_info.value)
 
     def test_get_live_query_results_unknown_action_raises_not_found(
         self, kibana_client

@@ -24,7 +24,12 @@ import zipfile
 import certifi
 import pytest
 
-from kibana.exceptions import ApiError, BadRequestError, NotFoundError
+from kibana.exceptions import (
+    ApiError,
+    AuthorizationException,
+    BadRequestError,
+    NotFoundError,
+)
 
 from .utils import (
     create_test_async_kibana_client,
@@ -532,11 +537,20 @@ class TestFleetEpmSemanticErrors:
             )
 
     def test_authorize_transforms_package_not_installed(self, basic_kibana_client):
-        """transforms/authorize 404s when the package is not installed."""
-        with pytest.raises(NotFoundError, match="not found"):
+        """transforms/authorize refuses a package that is not installed.
+
+        Before 9.5.6 the server answered 404 "not found"; from 9.5.6 it answers
+        403 "Cannot reauthorize transforms from a non-registry package". Either
+        way the client raises the semantic exception for the status.
+        """
+        with pytest.raises((NotFoundError, AuthorizationException)) as exc_info:
             basic_kibana_client.fleet_epm.authorize_transforms(
                 pkg_name=PKG, pkg_version=PKG_OLD_VERSION, transforms=[]
             )
+        if isinstance(exc_info.value, NotFoundError):
+            assert "not found" in str(exc_info.value)
+        else:
+            assert "non-registry package" in str(exc_info.value)
 
 
 class TestAsyncFleetEpm:
