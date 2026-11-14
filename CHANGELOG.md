@@ -9,6 +9,26 @@ see [CONTRIBUTING.md § Changelog Policy](CONTRIBUTING.md#changelog-policy).
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-11-14
+
+### Changed
+
+- **The supported Kibana pins move to 9.5.6 and 9.4.9, the latest patch on each line.** The set
+  of lines and the client's API are unchanged. Both pins were run live end to end; the result is
+  in `docs/evidence/multi-version-9.4.9-9.5.6.md`. `kibana.SUPPORTED_VERSIONS` now names the new
+  pins, so a project that takes its supported set from the installed `kibana-py` can move to them
+  by requiring `kibana-py>=0.6.2`.
+
+- **Two server answers changed on 9.5.6; 9.4.9 keeps the earlier ones.** The client passes both
+  through unchanged, and the docstrings (sync and async) name both answers:
+  - `fleet_epm.authorize_transforms()` for a package that is not installed now raises
+    `AuthorizationException` (403, `Cannot reauthorize transforms from a non-registry package`)
+    instead of `NotFoundError` (404, `Saved object [epm-packages/<name>] not found`).
+  - `osquery.get_live_query()` for an unknown ID now raises `NotFoundError` (404,
+    `Action not found`) instead of `ApiError` with status 500 (`no elements in sequence`).
+
+  Caller code that caught only the old exception needs to accept both.
+
 ## [0.6.1] - 2026-10-31
 
 ### Added
@@ -1136,7 +1156,8 @@ Initial release of kibana-py, a Python client library for the Kibana REST API.
 
 ---
 
-[Unreleased]: https://github.com/pedro-angel/kibana-py/compare/v0.6.1...HEAD
+[Unreleased]: https://github.com/pedro-angel/kibana-py/compare/v0.6.2...HEAD
+[0.6.2]: https://github.com/pedro-angel/kibana-py/releases/tag/v0.6.2
 [0.6.1]: https://github.com/pedro-angel/kibana-py/releases/tag/v0.6.1
 [0.6.0]: https://github.com/pedro-angel/kibana-py/releases/tag/v0.6.0
 [0.5.0]: https://github.com/pedro-angel/kibana-py/releases/tag/v0.5.0

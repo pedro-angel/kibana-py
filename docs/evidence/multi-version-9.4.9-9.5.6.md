@@ -55,3 +55,27 @@ mechanism applies; the tests now accept the old and new answer.
 
 Which answer 9.4.9 gives for these two was not separately recorded; the broadened assertions
 passed there in the full run.
+
+## Follow-up, 2026-11-14: the two gaps above, closed
+
+Run before releasing 0.6.2, on `main` at `32c445c`, same machine class and method.
+
+| Pin | Stack up | Passed | Failed | Skipped | Wall |
+| :--- | ---: | ---: | ---: | ---: | ---: |
+| 9.5.6 (full suite, with the test change) | 114s | 750 | 0 | 18 | 22m41s |
+
+The skips are the expected set listed above.
+
+The two changed calls, measured directly against each pin:
+
+| Call | 9.5.6 | 9.4.9 |
+| :--- | :--- | :--- |
+| `fleet_epm.authorize_transforms("tcp", "2.3.0")`, not installed | 403 `Cannot reauthorize transforms from a non-registry package ...` | 404 `Saved object [epm-packages/tcp] not found` |
+| `osquery.get_live_query(<unknown id>)` | 404 `Action not found` | 500 `no elements in sequence` |
+
+So both changes are on 9.5.6 only; 9.4.9 keeps the earlier answers. The
+`authorize_transforms` and `get_live_query` docstrings (sync and async) now name both.
+
+Moving one stack from 9.5.6 to 9.4.9 needs the `elastic-start-local_dev-*` volumes removed
+first: Elasticsearch refuses to boot on data written by a newer version
+(`cannot downgrade a node from version [9.5.6] to version [9.4.9]`).

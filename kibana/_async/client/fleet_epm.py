@@ -1737,9 +1737,14 @@ class AsyncFleetEpmClient(AsyncNamespaceClient):
 
         Raises:
             BadRequestError: If the body is invalid.
-            NotFoundError: If the package does not exist.
+            NotFoundError: If the package does not exist. On 9.4.9 this also
+                covers a package that is not installed (``Saved object
+                [epm-packages/<name>] not found``).
             AuthenticationException: If authentication fails.
-            AuthorizationException: If insufficient privileges.
+            AuthorizationException: If insufficient privileges. On 9.5.6 this
+                also covers a package that is not installed: 403 ``Cannot
+                reauthorize transforms from a non-registry package``, where
+                9.4.9 answers 404.
             SpaceNotFoundError: If the space doesn't exist and validation is
                 enabled.
 
