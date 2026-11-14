@@ -920,7 +920,7 @@ class AsyncOsqueryClient(AsyncNamespaceClient):
 
         Note: on the live Kibana 9.4.3 server, requesting an unknown live
         query ID returns a 500 error ("no elements in sequence") rather than
-        a 404.
+        a 404; Kibana 9.5.6 returns 404 ("Action not found").
 
         Args:
             id: The ID of the live query result you want to retrieve (the
