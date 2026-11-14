@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 (unreleased)=
 ## Unreleased
 
+(v0.6.2)=
+## [0.6.2] - 2026-11-14
+
+### Changed
+
+- **Supported and release-gated: Kibana 9.5.6 and 9.4.9**, the latest patch of each supported line. The set of lines is unchanged, and the client's API is unchanged. `kibana.SUPPORTED_VERSIONS` now names the new pins, so a project that takes its supported set from the installed `kibana-py` can move to them by requiring `kibana-py>=0.6.2`.
+- **`fleet_epm.authorize_transforms()` refuses a package that is not installed with a 403 on 9.5.6.** It raises `AuthorizationException` (`Cannot reauthorize transforms from a non-registry package`) where 9.4.9 raises `NotFoundError`. Caller code that caught only `NotFoundError` needs to accept both.
+- **`osquery.get_live_query()` reports an unknown ID with a 404 on 9.5.6.** It raises `NotFoundError` (`Action not found`) where 9.4.9 raises `ApiError` with status 500 (`no elements in sequence`).
+
+See the [root CHANGELOG](https://github.com/pedro-angel/kibana-py/blob/main/CHANGELOG.md) for full detail.
+
 (v0.6.1)=
 ## [0.6.1] - 2026-10-31
 
