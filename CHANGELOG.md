@@ -9,6 +9,16 @@ see [CONTRIBUTING.md § Changelog Policy](CONTRIBUTING.md#changelog-policy).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Cloud sessions no longer lose Docker to a stale containerd pidfile.** The same snapshot
+  that carries `/var/run/docker.pid` also carries `/var/run/docker/containerd/containerd.pid`,
+  the pidfile of the containerd that `dockerd` manages. When a process early in boot reuses
+  that PID, `dockerd` logs `containerd is still running`, waits for a socket nothing opens, and
+  exits with `timeout waiting for containerd to start`, so the hook reported "dockerd did not
+  come up". Seen on a resumed session on 2026-11-14. The hook now also removes that pidfile
+  when neither `dockerd` nor `containerd` is running.
+
 ## [0.6.2] - 2026-11-14
 
 ### Changed

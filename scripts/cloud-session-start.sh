@@ -42,8 +42,16 @@ start_docker() {
   # dockerd can find an unrelated live process behind it and refuse to start
   # ("process with PID 567 is still running"). No dockerd is running here -- docker
   # info just failed -- so a pidfile is stale by definition.
+  #
+  # dockerd's managed containerd has its own pidfile, carried the same way. When an
+  # unrelated live process holds that PID, dockerd logs "containerd is still running",
+  # waits for a socket nothing will open, and gives up ("timeout waiting for containerd
+  # to start"). Stale under the same condition, plus no containerd running either.
   if ! pgrep -x dockerd >/dev/null 2>&1; then
     rm -f /var/run/docker.pid
+    if ! pgrep -x containerd >/dev/null 2>&1; then
+      rm -f /var/run/docker/containerd/containerd.pid
+    fi
   fi
 
   local log=/var/log/kibana-py-dockerd.log
