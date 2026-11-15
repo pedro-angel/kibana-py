@@ -498,7 +498,11 @@ other:
   pulled them, so without this hook every session after the cache is built starts with no daemon
   and `ci-stack-up.sh` fails. The snapshot *does* carry the setup run's `/var/run/docker.pid`,
   and on a fresh VM that PID can belong to an unrelated process, which makes `dockerd` refuse to
-  start; the hook removes the pidfile first when no `dockerd` is running. The script exits
+  start; the hook removes the pidfile first when no `dockerd` is running. The same goes for
+  dockerd's managed containerd and its `/var/run/docker/containerd/containerd.pid`: behind a
+  reused PID, `dockerd` waits for a containerd that never starts and gives up with `timeout
+  waiting for containerd to start`, so the hook also removes that pidfile when neither daemon
+  is running. The script exits
   immediately outside a cloud session, so local sessions are untouched.
 
   The hook is a *project* hook: it fires only when the session's working directory is this
